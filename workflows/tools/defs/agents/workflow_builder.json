@@ -1,0 +1,15 @@
+{
+  "type": "function",
+  "workflowName": "tools-Agent",
+  "function": {
+    "name": "codebase-workflows-WorkflowBuilder",
+    "description": "Resident expert in building Scala workflows; preloads its own source, AGENT.md, and scripts/PLAN.md for context and can be queried for workflow construction tasks.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string" }
+      },
+      "required": ["query"]
+    }
+  }
+}

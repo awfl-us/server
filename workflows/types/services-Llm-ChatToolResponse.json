@@ -1,0 +1,80 @@
+{
+  "name" : "services-Llm-ChatToolResponse",
+  "description" : "Schema inferred from deriver sample JSON for services.Llm.ChatToolResponse.",
+  "schema" : {
+    "type" : "object",
+    "properties" : {
+      "message" : {
+        "type" : "object",
+        "properties" : {
+          "role" : {
+            "type" : "string"
+          },
+          "tool_calls" : {
+            "type" : "object",
+            "properties" : {
+              "id" : {
+                "type" : "string"
+              },
+              "type" : {
+                "type" : "string"
+              },
+              "function" : {
+                "type" : "object",
+                "properties" : {
+                  "name" : {
+                    "type" : "string"
+                  },
+                  "arguments" : {
+                    "type" : "string"
+                  }
+                },
+                "required" : [
+                  "name",
+                  "arguments"
+                ],
+                "additionalProperties" : true
+              }
+            },
+            "required" : [
+              "id",
+              "type",
+              "function"
+            ],
+            "additionalProperties" : true
+          },
+          "tool_call_id" : {
+            "type" : "string"
+          },
+          "create_time" : {
+            "type" : "integer"
+          },
+          "content" : {
+            "type" : "string"
+          },
+          "docId" : {
+            "type" : "string"
+          }
+        },
+        "required" : [
+          "role",
+          "content",
+          "tool_calls",
+          "tool_call_id",
+          "create_time",
+          "docId"
+        ],
+        "additionalProperties" : true
+      },
+      "total_cost" : {
+        "type" : "integer"
+      }
+    },
+    "required" : [
+      "message",
+      "total_cost"
+    ],
+    "additionalProperties" : true,
+    "$id" : "https://topaigents.dev/workflows/types/services-Llm-ChatToolResponse.json"
+  }
+}

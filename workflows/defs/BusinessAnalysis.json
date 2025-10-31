@@ -1,0 +1,10 @@
+{
+  "$schema" : "https://json-schema.org/draft/2020-12/schema",
+  "$id" : "https://topaigents.dev/workflows/defs/BusinessAnalysis.json",
+  "name" : "BusinessAnalysis",
+  "description" : "Auto-generated workflow definition.",
+  "inputSchema" : "BusinessAnalysis-Input",
+  "outputSchema" : "services-Llm-ChatToolResponse",
+  "inputType" : "workflows.BusinessAnalysis.Input",
+  "outputType" : "services.Llm.ChatToolResponse"
+}

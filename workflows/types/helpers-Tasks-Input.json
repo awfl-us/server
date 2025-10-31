@@ -1,0 +1,50 @@
+{
+  "name" : "helpers-Tasks-Input",
+  "description" : "Schema inferred from deriver sample JSON for workflows.helpers.Tasks.Input.",
+  "schema" : {
+    "type" : "object",
+    "properties" : {
+      "env" : {
+        "type" : "object",
+        "properties" : {
+          "callingWorkflowExec" : {
+            "type" : "string"
+          },
+          "model" : {
+            "type" : "string"
+          },
+          "background" : {
+            "type" : "boolean"
+          },
+          "projectId" : {
+            "type" : "string"
+          },
+          "sessionId" : {
+            "type" : "string"
+          },
+          "userId" : {
+            "type" : "string"
+          },
+          "BASE_URL" : {
+            "type" : "string"
+          }
+        },
+        "required" : [
+          "userId",
+          "model",
+          "callingWorkflowExec",
+          "BASE_URL",
+          "background",
+          "projectId",
+          "sessionId"
+        ],
+        "additionalProperties" : true
+      }
+    },
+    "required" : [
+      "env"
+    ],
+    "additionalProperties" : true,
+    "$id" : "https://topaigents.dev/workflows/types/helpers-Tasks-Input.json"
+  }
+}

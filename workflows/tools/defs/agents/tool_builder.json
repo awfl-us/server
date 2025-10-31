@@ -1,0 +1,15 @@
+{
+  "type": "function",
+  "workflowName": "tools-Agent",
+  "function": {
+    "name": "codebase-workflows-ToolBuilder",
+    "description": "Agent for designing and scaffolding awfl tool/workflow utilities; preloads awfl_web/workflow/tools docs and self source.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string" }
+      },
+      "required": ["query"]
+    }
+  }
+}

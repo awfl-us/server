@@ -1,0 +1,24 @@
+{
+  "type": "function",
+  "workflowName": "tools-Agent",
+  "function": {
+    "name": "codebase-workflows-BuildManager",
+    "description": "BuildManager: manages Scala sbt builds, dependencies, resolvers, and diagnostics; preloads AGENT.md, its own source, workflows/build.sbt, and cornerstone/build.sbt.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string" },
+        "task": {
+          "type": "object",
+          "properties": {
+            "title": { "type": "string" },
+            "description": { "type": "string" },
+            "status": { "type": "string", "enum": ["Queued", "In Progress", "Done", "Stuck"] }
+          },
+          "required": []
+        }
+      },
+      "required": ["query"]
+    }
+  }
+}

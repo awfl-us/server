@@ -1,0 +1,60 @@
+{
+  "name": "agent_input",
+  "description": "Standard input schema for Agent workflows. Mirrors the Input case class: sessionId, query, model, toolNames?, background?, task?, callingWorkflowExec?, env?",
+  "schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://topaigents.dev/workflows/types/agent_input.json",
+    "title": "Agent Input",
+    "description": "Standard input schema for Agent workflows. Mirrors the Input case class: sessionId, query, model, toolNames?, background?, task?, callingWorkflowExec?, env?",
+    "type": "object",
+    "additionalProperties": true,
+    "properties": {
+      "sessionId": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Conversation/session identifier."
+      },
+      "query": {
+        "type": "string",
+        "description": "User query or prompt text."
+      },
+      "model": {
+        "type": ["object", "string", "null"],
+        "description": "Model field or config blob. Accepts object; string/null for forwards compatibility."
+      },
+      "toolNames": {
+        "description": "Optional: restrict tools available to the model (CSV or JSON array supported by service).",
+        "anyOf": [
+          { "type": "array", "items": { "type": "string" } },
+          { "type": "string" }
+        ],
+        "default": []
+      },
+      "background": {
+        "type": "boolean",
+        "default": false,
+        "description": "Run in background without streaming."
+      },
+      "task": {
+        "description": "Optional task payload (title/description/status) to seed a task for this session.",
+        "anyOf": [
+          { "type": "object", "additionalProperties": true },
+          { "type": "null" }
+        ],
+        "default": null
+      },
+      "callingWorkflowExec": {
+        "type": "string",
+        "description": "Caller exec id if triggered by another workflow.",
+        "default": "${WORKFLOW_EXECUTION_ID}"
+      },
+      "env": {
+        "type": ["object", "null"],
+        "additionalProperties": true,
+        "description": "Execution environment variables or config blob.",
+        "default": null
+      }
+    },
+    "required": ["sessionId", "query", "model"]
+  }
+}

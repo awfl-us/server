@@ -1,0 +1,24 @@
+{
+  "type": "function",
+  "workflowName": "tools-Agent",
+  "function": {
+    "name": "codebase-awfl_web-Sessions",
+    "description": "Manges the front end ui that connects to the backend under functions/",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string" },
+        "task": {
+          "type": "object",
+          "properties": {
+            "title": { "type": "string" },
+            "description": { "type": "string" },
+            "status": { "type": "string", "enum": ["Queued", "In Progress", "Done", "Stuck"] }
+          },
+          "required": []
+        }
+      },
+      "required": ["query"]
+    }
+  }
+}

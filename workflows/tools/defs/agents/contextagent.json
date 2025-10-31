@@ -1,0 +1,24 @@
+{
+  "type": "function",
+  "workflowName": "tools-Agent",
+  "function": {
+    "name": "codebase-jobs-ContextAgent",
+    "description": "SME for functions/jobs/context (TopicContextYoj endpoint, filters, and model). Mainly a SME on the JS service side (the endpoint that provides the Yoj messages).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string" },
+        "task": {
+          "type": "object",
+          "properties": {
+            "title": { "type": "string" },
+            "description": { "type": "string" },
+            "status": { "type": "string", "enum": ["Queued", "In Progress", "Done", "Stuck"] }
+          },
+          "required": []
+        }
+      },
+      "required": ["query"]
+    }
+  }
+}

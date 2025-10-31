@@ -1,0 +1,10 @@
+{
+  "$schema" : "https://json-schema.org/draft/2020-12/schema",
+  "$id" : "https://topaigents.dev/workflows/defs/codebase-workflows-PlainifyWriteHook.json",
+  "name" : "codebase-workflows-PlainifyWriteHook",
+  "description" : "Auto-generated workflow definition.",
+  "inputSchema" : "codebase-workflows-PlainifyWriteHook-Input",
+  "outputSchema" : "services-Llm-ChatToolResponse",
+  "inputType" : "workflows.codebase.workflows.PlainifyWriteHook.Input",
+  "outputType" : "services.Llm.ChatToolResponse"
+}

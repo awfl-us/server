@@ -1,0 +1,10 @@
+{
+  "$schema" : "https://json-schema.org/draft/2020-12/schema",
+  "$id" : "https://topaigents.dev/workflows/defs/codebase-workflows-ToolBuilder.json",
+  "name" : "codebase-workflows-ToolBuilder",
+  "description" : "Auto-generated workflow definition.",
+  "inputSchema" : "codebase-workflows-ToolBuilder-Input",
+  "outputSchema" : "services-Llm-ChatToolResponse",
+  "inputType" : "workflows.codebase.workflows.ToolBuilder.Input",
+  "outputType" : "services.Llm.ChatToolResponse"
+}

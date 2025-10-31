@@ -1,0 +1,10 @@
+{
+  "$schema" : "https://json-schema.org/draft/2020-12/schema",
+  "$id" : "https://topaigents.dev/workflows/defs/codebase-workflows-PlainToCodeHook.json",
+  "name" : "codebase-workflows-PlainToCodeHook",
+  "description" : "Auto-generated workflow definition.",
+  "inputSchema" : "codebase-workflows-PlainToCodeHook-Input",
+  "outputSchema" : "services-Llm-ChatToolResponse",
+  "inputType" : "workflows.codebase.workflows.PlainToCodeHook.Input",
+  "outputType" : "services.Llm.ChatToolResponse"
+}

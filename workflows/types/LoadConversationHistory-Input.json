@@ -1,0 +1,21 @@
+{
+  "name" : "LoadConversationHistory-Input",
+  "description" : "Schema inferred from deriver sample JSON for workflows.LoadConversationHistory.Input.",
+  "schema" : {
+    "type" : "object",
+    "properties" : {
+      "arg1" : {
+        "type" : "string"
+      },
+      "arg2" : {
+        "type" : "string"
+      }
+    },
+    "required" : [
+      "arg1",
+      "arg2"
+    ],
+    "additionalProperties" : true,
+    "$id" : "https://topaigents.dev/workflows/types/LoadConversationHistory-Input.json"
+  }
+}

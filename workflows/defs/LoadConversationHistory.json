@@ -1,0 +1,10 @@
+{
+  "$schema" : "https://json-schema.org/draft/2020-12/schema",
+  "$id" : "https://topaigents.dev/workflows/defs/LoadConversationHistory.json",
+  "name" : "LoadConversationHistory",
+  "description" : "Auto-generated workflow definition.",
+  "inputSchema" : "LoadConversationHistory-Input",
+  "outputSchema" : "services-Llm-ChatToolResponse",
+  "inputType" : "workflows.LoadConversationHistory.Input",
+  "outputType" : "services.Llm.ChatToolResponse"
+}

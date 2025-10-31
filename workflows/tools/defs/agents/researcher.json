@@ -1,0 +1,15 @@
+{
+  "type": "function",
+  "workflowName": "tools-Agent",
+  "function": {
+    "name": "dreamteam-Researcher",
+    "description": "A world class researcher who can help you by deep diving on complex and technical topics to help with problem solving.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string" }
+      },
+      "required": ["query"]
+    }
+  }
+}

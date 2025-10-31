@@ -1,0 +1,17 @@
+{
+  "name" : "BusinessAnalysis-Input",
+  "description" : "Schema inferred from deriver sample JSON for workflows.BusinessAnalysis.Input.",
+  "schema" : {
+    "type" : "object",
+    "properties" : {
+      "placeId" : {
+        "type" : "string"
+      }
+    },
+    "required" : [
+      "placeId"
+    ],
+    "additionalProperties" : true,
+    "$id" : "https://topaigents.dev/workflows/types/BusinessAnalysis-Input.json"
+  }
+}

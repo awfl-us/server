@@ -1,0 +1,10 @@
+{
+  "$schema" : "https://json-schema.org/draft/2020-12/schema",
+  "$id" : "https://topaigents.dev/workflows/defs/dreamteam-Researcher.json",
+  "name" : "dreamteam-Researcher",
+  "description" : "Auto-generated workflow definition.",
+  "inputSchema" : "dreamteam-Researcher-Input",
+  "outputSchema" : "services-Llm-ChatToolResponse",
+  "inputType" : "workflows.dreamteam.Researcher.Input",
+  "outputType" : "services.Llm.ChatToolResponse"
+}

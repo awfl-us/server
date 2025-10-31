@@ -1,0 +1,149 @@
+{
+  "name" : "helpers-ToolDispatcher-Input",
+  "description" : "Schema inferred from deriver sample JSON for workflows.helpers.ToolDispatcher.Input.",
+  "schema" : {
+    "type" : "object",
+    "properties" : {
+      "totalCost" : {
+        "type" : "integer"
+      },
+      "toolCalls" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string"
+          },
+          "type" : {
+            "type" : "string"
+          },
+          "function" : {
+            "type" : "object",
+            "properties" : {
+              "name" : {
+                "type" : "string"
+              },
+              "arguments" : {
+                "type" : "string"
+              }
+            },
+            "required" : [
+              "name",
+              "arguments"
+            ],
+            "additionalProperties" : true
+          }
+        },
+        "required" : [
+          "id",
+          "type",
+          "function"
+        ],
+        "additionalProperties" : true
+      },
+      "toolDefs" : {
+        "type" : "object",
+        "properties" : {
+          "type" : {
+            "type" : "string"
+          },
+          "function" : {
+            "type" : "object",
+            "properties" : {
+              "name" : {
+                "type" : "string"
+              },
+              "description" : {
+                "type" : "string"
+              },
+              "parameters" : {
+                "type" : "object",
+                "properties" : {
+                  "type" : {
+                    "type" : "string"
+                  },
+                  "properties" : {
+                    "type" : "object",
+                    "properties" : {
+                      
+                    },
+                    "required" : [
+                    ],
+                    "additionalProperties" : true
+                  },
+                  "required" : {
+                    "type" : "string"
+                  }
+                },
+                "required" : [
+                  "type",
+                  "properties",
+                  "required"
+                ],
+                "additionalProperties" : true
+              }
+            },
+            "required" : [
+              "name",
+              "description",
+              "parameters"
+            ],
+            "additionalProperties" : true
+          },
+          "workflowName" : {
+            "type" : "string"
+          }
+        },
+        "required" : [
+          "type",
+          "function",
+          "workflowName"
+        ],
+        "additionalProperties" : true
+      },
+      "env" : {
+        "type" : "object",
+        "properties" : {
+          "callingWorkflowExec" : {
+            "type" : "string"
+          },
+          "model" : {
+            "type" : "string"
+          },
+          "background" : {
+            "type" : "boolean"
+          },
+          "projectId" : {
+            "type" : "string"
+          },
+          "sessionId" : {
+            "type" : "string"
+          },
+          "userId" : {
+            "type" : "string"
+          },
+          "BASE_URL" : {
+            "type" : "string"
+          }
+        },
+        "required" : [
+          "userId",
+          "model",
+          "callingWorkflowExec",
+          "BASE_URL",
+          "background",
+          "projectId",
+          "sessionId"
+        ],
+        "additionalProperties" : true
+      }
+    },
+    "required" : [
+      "totalCost",
+      "toolCalls",
+      "toolDefs",
+      "env"
+    ],
+    "additionalProperties" : true,
+    "$id" : "https://topaigents.dev/workflows/types/helpers-ToolDispatcher-Input.json"
+  }
+}

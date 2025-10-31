@@ -1,0 +1,15 @@
+{
+  "type": "function",
+  "workflowName": "tools-Agent",
+  "function": {
+    "name": "codebase-workflows-Executor",
+    "description": "Executor workflow agent managing utils/Exec.scala; preloads Executor.AGENT.md and Exec.scala and can be queried for safe edits and improvements.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string" }
+      },
+      "required": ["query"]
+    }
+  }
+}

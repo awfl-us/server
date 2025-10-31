@@ -1,0 +1,10 @@
+{
+  "$schema" : "https://json-schema.org/draft/2020-12/schema",
+  "$id" : "https://topaigents.dev/workflows/defs/codebase-workflows-CodePlainifier.json",
+  "name" : "codebase-workflows-CodePlainifier",
+  "description" : "Auto-generated workflow definition.",
+  "inputSchema" : "codebase-workflows-CodePlainifier-Input",
+  "outputSchema" : "services-Llm-ChatToolResponse",
+  "inputType" : "workflows.codebase.workflows.CodePlainifier.Input",
+  "outputType" : "services.Llm.ChatToolResponse"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "function",
+  "workflowName": "tools-CliTools",
+  "function": {
+    "name": "UPDATE_FILE",
+    "description": "Update a file on disk with provided content.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "filepath": { "type": "string" },
+        "content": { "type": "string" }
+      },
+      "required": ["filepath", "content"]
+    }
+  }
+}

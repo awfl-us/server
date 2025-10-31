@@ -1,0 +1,18 @@
+{
+  "type": "function",
+  "workflowName": "tools-Tasks",
+  "function": {
+    "name": "UPDATE_TASK",
+    "description": "Update a task by id in the current user's scope (session inferred).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "status": { "type": "string", "enum": ["Queued", "In Progress", "Done", "Stuck"] }
+      },
+      "required": ["id"]
+    }
+  }
+}

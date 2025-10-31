@@ -1,0 +1,54 @@
+{
+  "name" : "helpers-ToolDefs-Input",
+  "description" : "Schema inferred from deriver sample JSON for workflows.helpers.ToolDefs.Input.",
+  "schema" : {
+    "type" : "object",
+    "properties" : {
+      "toolNames" : {
+        "type" : "string"
+      },
+      "env" : {
+        "type" : "object",
+        "properties" : {
+          "callingWorkflowExec" : {
+            "type" : "string"
+          },
+          "model" : {
+            "type" : "string"
+          },
+          "background" : {
+            "type" : "boolean"
+          },
+          "projectId" : {
+            "type" : "string"
+          },
+          "sessionId" : {
+            "type" : "string"
+          },
+          "userId" : {
+            "type" : "string"
+          },
+          "BASE_URL" : {
+            "type" : "string"
+          }
+        },
+        "required" : [
+          "userId",
+          "model",
+          "callingWorkflowExec",
+          "BASE_URL",
+          "background",
+          "projectId",
+          "sessionId"
+        ],
+        "additionalProperties" : true
+      }
+    },
+    "required" : [
+      "toolNames",
+      "env"
+    ],
+    "additionalProperties" : true,
+    "$id" : "https://topaigents.dev/workflows/types/helpers-ToolDefs-Input.json"
+  }
+}

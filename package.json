@@ -1,0 +1,51 @@
+{
+  "name": "functions",
+  "description": "Cloud Functions for Firebase",
+  "type": "module",
+  "scripts": {
+    "serve": "/app/load-secrets.sh; nodemon serve.js",
+    "shell": "firebase functions:shell",
+    "start": "npm run shell",
+    "deploy": "firebase deploy --only functions",
+    "logs": "firebase functions:log",
+    "test": "mocha test.js"
+  },
+  "engines": {
+    "node": "22"
+  },
+  "main": "index.js",
+  "dependencies": {
+    "@google-cloud/pubsub": "^5.1.0",
+    "@google-cloud/tasks": "^6.1.0",
+    "@google-cloud/workflows": "^4.1.0",
+    "@langchain/openai": "^0.5.7",
+    "@sendgrid/mail": "^8.1.4",
+    "@sparticuz/chromium": "^137.0.1",
+    "axios": "^1.7.8",
+    "chai": "^5.1.2",
+    "cheerio": "^1.1.0",
+    "chrome-aws-lambda": "^10.1.0",
+    "cors": "^2.8.5",
+    "date-fns": "^4.1.0",
+    "date-fns-tz": "^3.2.0",
+    "express": "^4.21.1",
+    "firebase-admin": "^13.0.1",
+    "firebase-functions": "^6.3.2",
+    "google-auth-library": "^9.15.1",
+    "googleapis": "^148.0.0",
+    "langchain": "^0.3.24",
+    "libphonenumber-js": "^1.12.4",
+    "mocha": "^10.8.2",
+    "openai": "^4.73.1",
+    "puppeteer-core": "^10.4.0",
+    "rss-parser": "^3.13.0",
+    "sinon": "^19.0.2",
+    "supertest": "^7.0.0",
+    "twilio": "^5.4.4"
+  },
+  "devDependencies": {
+    "firebase-functions-test": "^0.2.0",
+    "nodemon": "^3.1.10"
+  },
+  "private": true
+}

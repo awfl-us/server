@@ -1,0 +1,10 @@
+{
+  "$schema" : "https://json-schema.org/draft/2020-12/schema",
+  "$id" : "https://topaigents.dev/workflows/defs/tools-CliTools.json",
+  "name" : "tools-CliTools",
+  "description" : "Auto-generated workflow definition.",
+  "inputSchema" : "tools-CliTools-Input",
+  "outputSchema" : "services-Llm-ChatToolResponse",
+  "inputType" : "workflows.tools.CliTools.Input",
+  "outputType" : "services.Llm.ChatToolResponse"
+}

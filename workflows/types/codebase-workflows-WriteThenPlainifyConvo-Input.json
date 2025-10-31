@@ -1,0 +1,21 @@
+{
+  "name" : "codebase-workflows-WriteThenPlainifyConvo-Input",
+  "description" : "Schema inferred from deriver sample JSON for workflows.codebase.workflows.WriteThenPlainifyConvo.Input.",
+  "schema" : {
+    "type" : "object",
+    "properties" : {
+      "filepath" : {
+        "type" : "string"
+      },
+      "content" : {
+        "type" : "string"
+      }
+    },
+    "required" : [
+      "filepath",
+      "content"
+    ],
+    "additionalProperties" : true,
+    "$id" : "https://topaigents.dev/workflows/types/codebase-workflows-WriteThenPlainifyConvo-Input.json"
+  }
+}

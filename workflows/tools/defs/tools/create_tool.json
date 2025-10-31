@@ -1,0 +1,48 @@
+{
+  "type": "function",
+  "workflowName": "tools-Tools",
+  "function": {
+    "name": "CREATE_TOOL",
+    "description": "Create or update a tool definition for discovery and dispatch. Accepts a full ToolDefs item (function tool) and optional upsert controls.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tool": {
+          "type": "object",
+          "properties": {
+            "workflowName": { "type": "string" },
+            "function": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "description": { "type": "string" },
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "type": { "type": "string", "enum": ["object"] },
+                    "properties": { "type": "object" },
+                    "required": { "type": "array", "items": { "type": "string" } }
+                  },
+                  "required": ["type", "properties"]
+                }
+              },
+              "required": ["name", "description", "parameters"]
+            }
+          },
+          "required": ["workflowName", "function"]
+        },
+        "scope": {
+          "type": "string",
+          "enum": ["user", "global"],
+          "description": "Where to store the definition; defaults to user scope (users/{userId}/tools/defs)."
+        },
+        "onConflict": {
+          "type": "string",
+          "enum": ["upsert", "skip", "error"],
+          "description": "Behavior when a tool with the same name exists; default is upsert."
+        }
+      },
+      "required": ["tool"]
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "$schema" : "https://json-schema.org/draft/2020-12/schema",
+  "$id" : "https://topaigents.dev/workflows/defs/tools-Tasks.json",
+  "name" : "tools-Tasks",
+  "description" : "Auto-generated workflow definition.",
+  "inputSchema" : "tools-Tasks-Input",
+  "outputSchema" : "services-Llm-ChatToolResponse",
+  "inputType" : "workflows.tools.Tasks.Input",
+  "outputType" : "services.Llm.ChatToolResponse"
+}

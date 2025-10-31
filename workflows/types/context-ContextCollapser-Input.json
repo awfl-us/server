@@ -1,0 +1,66 @@
+{
+  "name" : "context-ContextCollapser-Input",
+  "description" : "Schema inferred from deriver sample JSON for workflows.context.ContextCollapser.Input.",
+  "schema" : {
+    "type" : "object",
+    "properties" : {
+      "arg4" : {
+        "type" : "integer"
+      },
+      "arg1" : {
+        "type" : "string"
+      },
+      "arg2" : {
+        "type" : "integer"
+      },
+      "arg3" : {
+        "type" : "integer"
+      },
+      "env" : {
+        "type" : "object",
+        "properties" : {
+          "callingWorkflowExec" : {
+            "type" : "string"
+          },
+          "model" : {
+            "type" : "string"
+          },
+          "background" : {
+            "type" : "boolean"
+          },
+          "projectId" : {
+            "type" : "string"
+          },
+          "sessionId" : {
+            "type" : "string"
+          },
+          "userId" : {
+            "type" : "string"
+          },
+          "BASE_URL" : {
+            "type" : "string"
+          }
+        },
+        "required" : [
+          "userId",
+          "model",
+          "callingWorkflowExec",
+          "BASE_URL",
+          "background",
+          "projectId",
+          "sessionId"
+        ],
+        "additionalProperties" : true
+      }
+    },
+    "required" : [
+      "arg1",
+      "arg2",
+      "arg3",
+      "arg4",
+      "env"
+    ],
+    "additionalProperties" : true,
+    "$id" : "https://topaigents.dev/workflows/types/context-ContextCollapser-Input.json"
+  }
+}

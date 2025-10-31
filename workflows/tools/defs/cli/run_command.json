@@ -1,0 +1,15 @@
+{
+  "type": "function",
+  "workflowName": "tools-CliTools",
+  "function": {
+    "name": "RUN_COMMAND",
+    "description": "Execute a shell command.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "command": { "type": "string" }
+      },
+      "required": ["command"]
+    }
+  }
+}

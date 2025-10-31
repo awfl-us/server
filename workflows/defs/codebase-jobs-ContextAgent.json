@@ -1,0 +1,10 @@
+{
+  "$schema" : "https://json-schema.org/draft/2020-12/schema",
+  "$id" : "https://topaigents.dev/workflows/defs/codebase-jobs-ContextAgent.json",
+  "name" : "codebase-jobs-ContextAgent",
+  "description" : "Auto-generated workflow definition.",
+  "inputSchema" : "codebase-jobs-ContextAgent-Input",
+  "outputSchema" : "services-Llm-ChatToolResponse",
+  "inputType" : "workflows.codebase.jobs.ContextAgent.Input",
+  "outputType" : "services.Llm.ChatToolResponse"
+}

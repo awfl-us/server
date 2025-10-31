@@ -1,0 +1,62 @@
+{
+  "name" : "codebase-workflows-WorkflowBuilder-Input",
+  "description" : "Schema inferred from deriver sample JSON for workflows.codebase.workflows.WorkflowBuilder.Input.",
+  "schema" : {
+    "type" : "object",
+    "properties" : {
+      "query" : {
+        "type" : "string"
+      },
+      "fund" : {
+        "type" : "integer"
+      },
+      "task" : {
+        "type" : "string"
+      },
+      "env" : {
+        "type" : "object",
+        "properties" : {
+          "callingWorkflowExec" : {
+            "type" : "string"
+          },
+          "model" : {
+            "type" : "string"
+          },
+          "background" : {
+            "type" : "boolean"
+          },
+          "projectId" : {
+            "type" : "string"
+          },
+          "sessionId" : {
+            "type" : "string"
+          },
+          "userId" : {
+            "type" : "string"
+          },
+          "BASE_URL" : {
+            "type" : "string"
+          }
+        },
+        "required" : [
+          "userId",
+          "model",
+          "callingWorkflowExec",
+          "BASE_URL",
+          "background",
+          "projectId",
+          "sessionId"
+        ],
+        "additionalProperties" : true
+      }
+    },
+    "required" : [
+      "query",
+      "fund",
+      "task",
+      "env"
+    ],
+    "additionalProperties" : true,
+    "$id" : "https://topaigents.dev/workflows/types/codebase-workflows-WorkflowBuilder-Input.json"
+  }
+}

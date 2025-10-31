@@ -1,0 +1,10 @@
+{
+  "$schema" : "https://json-schema.org/draft/2020-12/schema",
+  "$id" : "https://topaigents.dev/workflows/defs/assistant-ExtractTopics.json",
+  "name" : "assistant-ExtractTopics",
+  "description" : "Auto-generated workflow definition.",
+  "inputSchema" : "assistant-ExtractTopics-Input",
+  "outputSchema" : "services-Llm-ChatToolResponse",
+  "inputType" : "workflows.assistant.ExtractTopics.Input",
+  "outputType" : "services.Llm.ChatToolResponse"
+}

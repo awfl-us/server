@@ -1,0 +1,10 @@
+{
+  "$schema" : "https://json-schema.org/draft/2020-12/schema",
+  "$id" : "https://topaigents.dev/workflows/defs/cli-CliEventHandler.json",
+  "name" : "cli-CliEventHandler",
+  "description" : "Auto-generated workflow definition.",
+  "inputSchema" : "cli-CliEventHandler-Input",
+  "outputSchema" : "services-Llm-ChatToolResponse",
+  "inputType" : "workflows.cli.CliEventHandler.Input",
+  "outputType" : "services.Llm.ChatToolResponse"
+}

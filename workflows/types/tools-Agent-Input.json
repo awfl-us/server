@@ -1,0 +1,88 @@
+{
+  "name" : "tools-Agent-Input",
+  "description" : "Schema inferred from deriver sample JSON for workflows.tools.Agent.Input.",
+  "schema" : {
+    "type" : "object",
+    "properties" : {
+      "tool_call" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string"
+          },
+          "type" : {
+            "type" : "string"
+          },
+          "function" : {
+            "type" : "object",
+            "properties" : {
+              "name" : {
+                "type" : "string"
+              },
+              "arguments" : {
+                "type" : "string"
+              }
+            },
+            "required" : [
+              "name",
+              "arguments"
+            ],
+            "additionalProperties" : true
+          }
+        },
+        "required" : [
+          "id",
+          "type",
+          "function"
+        ],
+        "additionalProperties" : true
+      },
+      "cost" : {
+        "type" : "integer"
+      },
+      "env" : {
+        "type" : "object",
+        "properties" : {
+          "callingWorkflowExec" : {
+            "type" : "string"
+          },
+          "model" : {
+            "type" : "string"
+          },
+          "background" : {
+            "type" : "boolean"
+          },
+          "projectId" : {
+            "type" : "string"
+          },
+          "sessionId" : {
+            "type" : "string"
+          },
+          "userId" : {
+            "type" : "string"
+          },
+          "BASE_URL" : {
+            "type" : "string"
+          }
+        },
+        "required" : [
+          "userId",
+          "model",
+          "callingWorkflowExec",
+          "BASE_URL",
+          "background",
+          "projectId",
+          "sessionId"
+        ],
+        "additionalProperties" : true
+      }
+    },
+    "required" : [
+      "tool_call",
+      "cost",
+      "env"
+    ],
+    "additionalProperties" : true,
+    "$id" : "https://topaigents.dev/workflows/types/tools-Agent-Input.json"
+  }
+}

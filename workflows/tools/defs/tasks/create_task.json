@@ -1,0 +1,17 @@
+{
+  "type": "function",
+  "workflowName": "tools-Tasks",
+  "function": {
+    "name": "CREATE_TASK",
+    "description": "Create a task in the current user's scope. Session is inferred by the current CLI workflow session.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "status": { "type": "string", "enum": ["Queued", "In Progress", "Done", "Stuck"] }
+      },
+      "required": []
+    }
+  }
+}

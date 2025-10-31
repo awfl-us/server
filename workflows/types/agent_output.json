@@ -1,0 +1,196 @@
+{
+  "name" : "agent_output",
+  "description" : "Standard output schema for Agent workflows. Mirrors ChatToolResponse result shape.",
+  "schema" : {
+    "$schema" : "https://json-schema.org/draft/2020-12/schema",
+    "$id" : "https://topaigents.dev/workflows/defs/agent.json",
+    "name" : "cli-QuerySubmitted",
+    "description" : "Workflow definition bundle for Agent, including input and output schemas.",
+    "inputSchema" : {
+      "$schema" : "https://json-schema.org/draft/2020-12/schema",
+      "$id" : "https://topaigents.dev/workflows/types/agent_input.json",
+      "title" : "Agent Input",
+      "description" : "Standard input schema for Agent workflows. Mirrors the Input case class: sessionId, query, model, toolNames?, background?, task?, callingWorkflowExec?, env?",
+      "type" : "object",
+      "additionalProperties" : true,
+      "properties" : {
+        "sessionId" : {
+          "type" : "string",
+          "minLength" : 1,
+          "description" : "Conversation/session identifier."
+        },
+        "query" : {
+          "type" : "string",
+          "description" : "User query or prompt text."
+        },
+        "model" : {
+          "type" : [
+            "object",
+            "string",
+            "null"
+          ],
+          "description" : "Model field or config blob. Accepts object; string/null for forwards compatibility."
+        },
+        "toolNames" : {
+          "description" : "Optional: restrict tools available to the model (CSV or JSON array supported by service).",
+          "anyOf" : [
+            {
+              "type" : "array",
+              "items" : {
+                "type" : "string"
+              }
+            },
+            {
+              "type" : "string"
+            }
+          ],
+          "default" : [
+          ]
+        },
+        "background" : {
+          "type" : "boolean",
+          "default" : false,
+          "description" : "Run in background without streaming."
+        },
+        "task" : {
+          "description" : "Optional task payload (title/description/status) to seed a task for this session.",
+          "anyOf" : [
+            {
+              "type" : "object",
+              "additionalProperties" : true
+            },
+            {
+              "type" : "null"
+            }
+          ],
+          "default" : null
+        },
+        "callingWorkflowExec" : {
+          "type" : "string",
+          "description" : "Caller exec id if triggered by another workflow.",
+          "default" : "${WORKFLOW_EXECUTION_ID}"
+        },
+        "env" : {
+          "type" : [
+            "object",
+            "null"
+          ],
+          "additionalProperties" : true,
+          "description" : "Execution environment variables or config blob.",
+          "default" : null
+        }
+      },
+      "required" : [
+        "sessionId",
+        "query",
+        "model"
+      ]
+    },
+    "outputSchema" : {
+      "$schema" : "https://json-schema.org/draft/2020-12/schema",
+      "$id" : "https://topaigents.dev/workflows/types/agent_output.json",
+      "title" : "ChatToolResponse",
+      "description" : "Response shape: message + total_cost. ChatMessage includes tool call metadata and optional docId.",
+      "type" : "object",
+      "additionalProperties" : false,
+      "properties" : {
+        "message" : {
+          "$ref" : "#/$defs/ChatMessage"
+        },
+        "total_cost" : {
+          "type" : "number",
+          "minimum" : 0
+        }
+      },
+      "required" : [
+        "message",
+        "total_cost"
+      ],
+      "$defs" : {
+        "ChatMessage" : {
+          "type" : "object",
+          "additionalProperties" : true,
+          "properties" : {
+            "role" : {
+              "type" : "string",
+              "enum" : [
+                "system",
+                "user",
+                "assistant",
+                "tool"
+              ]
+            },
+            "content" : {
+              "type" : "string"
+            },
+            "tool_calls" : {
+              "type" : "array",
+              "items" : {
+                "$ref" : "#/$defs/ToolCall"
+              },
+              "default" : [
+              ]
+            },
+            "tool_call_id" : {
+              "type" : [
+                "string",
+                "null"
+              ],
+              "default" : "null",
+              "description" : "Use string \"null\" when no tool_call_id is present."
+            },
+            "create_time" : {
+              "type" : "number",
+              "default" : 0,
+              "description" : "Creation time in epoch milliseconds. Service may set to current time when omitted (sys.now())."
+            },
+            "docId" : {
+              "type" : [
+                "string",
+                "null"
+              ],
+              "default" : "null",
+              "description" : "When includeDocId=true on TopicContextYoj, messages may include docId; otherwise use string \"null\"."
+            }
+          },
+          "required" : [
+            "role",
+            "content"
+          ]
+        },
+        "ToolCall" : {
+          "type" : "object",
+          "additionalProperties" : true,
+          "properties" : {
+            "id" : {
+              "type" : "string"
+            },
+            "type" : {
+              "type" : "string",
+              "default" : "function"
+            },
+            "name" : {
+              "type" : "string"
+            },
+            "function" : {
+              "type" : "object",
+              "additionalProperties" : true,
+              "properties" : {
+                "name" : {
+                  "type" : "string"
+                },
+                "arguments" : {
+                  "type" : "string"
+                }
+              },
+              "required" : [
+                "name",
+                "arguments"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  js-server:
+    build:
+      context: ./
+      dockerfile: Dockerfile
+    ports:
+      - "5050:5050"  # Unified port for API + static
+    environment:
+      - GCP_PROJECT=awfl-us
+      - NODE_ENV=development
+      - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/serviceAccountKey.json
+      - PYTHON_API=http://python-server:8080
+      - FIRESTORE_EMULATOR_HOST=firestore-emulator:8085
+      - WORKFLOW_BASE_URL=http://127.0.0.1:5050/jobs
+      - WORKFLOW_ENV=Dev
+      - CHROMIUM_PATH=/usr/bin/headless-chromium
+      - BASE_URL=${BASE_URL}
+    volumes:
+      - ./serviceAccountKey.json:/app/serviceAccountKey.json
+      - ./:/app
+      - ./web:/app/web
+      - /app/node_modules
+      - ./web/js/config/local.js:/app/web/js/config.js
+    depends_on:
+      # - python-server
+      - firestore-emulator
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:5050/api/healthz"]
+      interval: 5s
+      timeout: 2s
+      retries: 20
+
+  firestore-emulator:
+    build:
+      context: .
+      dockerfile: Dockerfile.firebase-emulator
+    command: >
+      firebase emulators:start --only firestore --import=/app/.emulator_data/firestore --export-on-exit
+    ports:
+      - "8085:8085"
+      - "4000:4000"
+    volumes:
+      - ./.firebaserc:/app/.firebaserc
+      - ./firebase.json:/app/firebase.json
+      - ./.emulator_data:/app/.emulator_data
+    restart: unless-stopped
+
+  nginx-router:
+    image: nginx:stable-alpine
+    ports:
+      - "8081:8081" # Nginx router accessible from outside
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      js-server:
+        condition: service_healthy
+    restart: unless-stopped

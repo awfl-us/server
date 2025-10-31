@@ -1,0 +1,24 @@
+{
+  "type": "function",
+  "workflowName": "tools-Agent",
+  "function": {
+    "name": "codebase-workflows-Sutradhara",
+    "description": "The subject matter expert on Prakriya.scala which defines Yoj/Iṣṭa/Kālavibhāga time segments and their associate Firebase structure.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string" },
+        "task": {
+          "type": "object",
+          "properties": {
+            "title": { "type": "string" },
+            "description": { "type": "string" },
+            "status": { "type": "string", "enum": ["Queued", "In Progress", "Done", "Stuck"] }
+          },
+          "required": []
+        }
+      },
+      "required": ["query"]
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "$schema" : "https://json-schema.org/draft/2020-12/schema",
+  "$id" : "https://topaigents.dev/workflows/defs/codebase-awfl_cli-CliDevManager.json",
+  "name" : "codebase-awfl_cli-CliDevManager",
+  "description" : "Auto-generated workflow definition.",
+  "inputSchema" : "codebase-awfl_cli-CliDevManager-Input",
+  "outputSchema" : "services-Llm-ChatToolResponse",
+  "inputType" : "workflows.codebase.awfl_cli.CliDevManager.Input",
+  "outputType" : "services.Llm.ChatToolResponse"
+}
