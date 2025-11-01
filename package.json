@@ -3,7 +3,7 @@
   "description": "Cloud Functions for Firebase",
   "type": "module",
   "scripts": {
-    "serve": "/app/load-secrets.sh; nodemon serve.js",
+    "serve": "/app/load-secrets.sh secrets.txt; nodemon serve.js",
     "shell": "firebase functions:shell",
     "start": "npm run shell",
     "deploy": "firebase deploy --only functions",

@@ -21,12 +21,10 @@ services:
       - BASE_URL=${BASE_URL}
     volumes:
       - ./serviceAccountKey.json:/app/serviceAccountKey.json
-      - ./:/app
-      - ./web:/app/web
+      - ./jobs:/app/jobs
+      - ./workflows:/app/workflows
       - /app/node_modules
-      - ./web/js/config/local.js:/app/web/js/config.js
     depends_on:
-      # - python-server
       - firestore-emulator
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:5050/api/healthz"]

@@ -1,0 +1,11 @@
+{
+  "firestore": {
+    "indexes": "firestore.indexes.json"
+  },
+  "emulators": {
+    "firestore": {
+      "host": "0.0.0.0",
+      "port": 8085
+    }
+  }
+}

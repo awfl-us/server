@@ -1,16 +1,23 @@
 import express from 'express';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import jobRoutes from './jobs/index.js';
 import workflowsRoutes from './workflows/index.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
 const app = express();
+// app.use(cors({ origin: true }));
 
-// Serve static files from "web" directory
-app.use(express.static(path.join(__dirname, '../web')));
+app.use(express.json({ limit: '1mb' }));
+
+const logging = (req, res, next) => {
+  const { method, url, headers, body } = req;
+  if (url != "/healthz") {
+    console.log(`[Request] Method: ${method}, URL: ${url}, Headers: ${JSON.stringify(headers)}, Body: ${JSON.stringify(body)}`);
+  }
+  next();
+};
+
+app.use(logging);
+
+app.get('/api/healthz', (req, res) => res.status(200).send('OK'));
 
 // API and Jobs routes
 app.use('/api/workflows', workflowsRoutes);
