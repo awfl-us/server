@@ -1,2 +1,11 @@
 .env
 .emulator_data
+
+# Local GCP service account key (DO NOT COMMIT)
+serviceAccountKey.json
+
+# Terraform artifacts
+infra/.terraform/
+infra/.terraform.lock.hcl
+infra/terraform.tfstate
+infra/terraform.tfstate.backup

@@ -1,0 +1,87 @@
+terraform {
+  required_version = ">= 1.5.0"
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = "~> 5.0"
+    }
+    local = {
+      source  = "hashicorp/local"
+      version = "~> 2.4"
+    }
+  }
+}
+
+variable "project_id" {
+  description = "GCP project ID to create resources in"
+  type        = string
+}
+
+# Optional: supply project-level roles to grant the service account
+# Example:
+# project_roles = [
+#   "roles/viewer",
+#   "roles/storage.objectViewer"
+# ]
+variable "project_roles" {
+  description = "Project-level IAM roles to bind to the service account"
+  type        = list(string)
+  default     = []
+}
+
+provider "google" {
+  project = var.project_id
+}
+
+# Ensure necessary APIs are enabled for SA and token issuance
+resource "google_project_service" "iam" {
+  project            = var.project_id
+  service            = "iam.googleapis.com"
+  disable_on_destroy = false
+}
+
+resource "google_project_service" "iamcredentials" {
+  project            = var.project_id
+  service            = "iamcredentials.googleapis.com"
+  disable_on_destroy = false
+}
+
+# Service account used by local dev server
+resource "google_service_account" "dev_server" {
+  account_id   = "local-dev-server"
+  display_name = "Local Dev Server Service Account"
+  depends_on   = [google_project_service.iam]
+}
+
+# Optional: grant project-level roles to the service account
+resource "google_project_iam_member" "dev_server_bindings" {
+  for_each = toset(var.project_roles)
+  project  = var.project_id
+  role     = each.value
+  member   = "serviceAccount:${google_service_account.dev_server.email}"
+}
+
+# Create a key for the service account (JSON credentials)
+# NOTE: The private key is stored in Terraform state; keep state secure.
+resource "google_service_account_key" "dev_server" {
+  service_account_id = google_service_account.dev_server.name
+  depends_on         = [google_service_account.dev_server, google_project_service.iamcredentials]
+}
+
+# Write the decoded JSON key to the repo root so docker-compose can mount it
+resource "local_file" "service_account_key_json" {
+  content  = base64decode(google_service_account_key.dev_server.private_key)
+  filename = "${path.module}/../serviceAccountKey.json"
+}
+
+output "service_account_email" {
+  description = "Email of the created service account"
+  value       = google_service_account.dev_server.email
+}
+
+# Yes, we can output the JSON key from Terraform. Marked sensitive.
+output "service_account_key_json" {
+  description = "Service account key JSON (sensitive)"
+  value       = base64decode(google_service_account_key.dev_server.private_key)
+  sensitive   = true
+}
