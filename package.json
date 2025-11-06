@@ -33,7 +33,6 @@
     "firebase-functions": "^6.3.2",
     "google-auth-library": "^9.15.1",
     "googleapis": "^148.0.0",
-    "langchain": "^0.3.24",
     "libphonenumber-js": "^1.12.4",
     "mocha": "^10.8.2",
     "openai": "^4.73.1",
