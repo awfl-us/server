@@ -73,11 +73,25 @@ jobs:
             echo "SECRET_FLAGS=" >> $GITHUB_OUTPUT
           fi
 
+      # Switch to image-based deploys (no GCS staging bucket required)
+      - name: Configure Docker auth for Artifact Registry
+        run: |
+          gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+
+      - name: Build and push image to Artifact Registry
+        id: image
+        run: |
+          set -euo pipefail
+          IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/app/api:${GITHUB_SHA}"
+          echo "IMAGE_URI=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
+          docker build -t "${IMAGE_URI}" .
+          docker push "${IMAGE_URI}"
+
       - name: Deploy API service (public)
         run: |
           gcloud run deploy "${CLOUD_RUN_API_SERVICE}" \
             --region="${GCP_REGION}" \
-            --source=. \
+            --image="${{ steps.image.outputs.IMAGE_URI }}" \
             --service-account="${CLOUD_RUN_RUNTIME_SA}" \
             --allow-unauthenticated \
             --set-env-vars="NODE_ENV=production,SERVICE_TARGET=api.server.js,GCP_PROJECT=${GCP_PROJECT_ID}" \
@@ -87,14 +101,14 @@ jobs:
         run: |
           gcloud run deploy "${CLOUD_RUN_JOBS_SERVICE}" \
             --region="${GCP_REGION}" \
-            --source=. \
+            --image="${{ steps.image.outputs.IMAGE_URI }}" \
             --service-account="${CLOUD_RUN_RUNTIME_SA}" \
             --no-allow-unauthenticated \
             --set-env-vars="NODE_ENV=production,SERVICE_TARGET=jobs.server.js,GCP_PROJECT=${GCP_PROJECT_ID}" \
             ${{ steps.secrets.outputs.SECRET_FLAGS }}
 
-# Note:
-# - This workflow now loads deployment variables from .github/actions-variables.json when present,
-#   removing ordering dependency on the Set Actions Variables workflow.
-# - Ensure Terraform generates the JSON file (infra/github_variables.tf) and commit it.
-# - IAM bindings and API enablement remain managed via Terraform.
+# Notes:
+# - This workflow now uses image-based Cloud Run deploys (no Cloud Build staging bucket),
+#   which avoids the storage.buckets.create permission requirement.
+# - Ensure `infra` is applied so the Artifact Registry repo `app` exists and IAM bindings are in place.
+# - The same image is deployed to both services; SERVICE_TARGET selects the entrypoint at runtime.
