@@ -1,13 +1,13 @@
 // Split auth helpers for jobs/workflows execution (LB/OIDC-protected paths)
 // Re-export from utils/userAuth.js to preserve behavior and avoid duplication.
 // ESM module; project package.json is type: module.
-export { getUserIdFromReq, projectScopedCollectionPath } from '../workflows/utils.js';
+export { getUserIdFromReq, projectScopedCollectionPath, allowSkipAuth } from '../workflows/utils.js';
 
 // Workflows/LB-facing injector: trusts LB OIDC and accepts a plain userId
 // from body/query/headers. Use ONLY under the /workflows (or internal) mounts.
 export async function workflowsUserInject(req, res, next) {
   try {
-    if (process.env.SKIP_AUTH === '1' || req?.headers?.['x-skip-auth'] === '1') {
+    if (allowSkipAuth(req)) {
       req.userId = req.userId || 'dev-user';
       return next();
     }

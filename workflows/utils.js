@@ -1,10 +1,29 @@
+import { initializeApp, getApps } from 'firebase-admin/app';
+import admin from 'firebase-admin';
+
+// Ensure Firebase Admin is initialized once (safe in multi-import scenarios)
+if (!getApps().length) {
+  initializeApp();
+}
+
+// Clean, minimal skip-auth gate:
+// - Requires server env ALLOW_SKIP_AUTH=1
+// - Requires request header x-skip-auth=1
+// - Disabled when NODE_ENV=production (belt-and-suspenders)
+export function allowSkipAuth(req) {
+  const enabled = process.env.ALLOW_SKIP_AUTH === '1';
+  const inProd = (process.env.NODE_ENV || '').toLowerCase() === 'production';
+  const header = req?.headers?.['x-skip-auth'] === '1';
+  return enabled && !inProd && header;
+}
+
 // Simplified helper: returns req.userId when already set, or verifies token if present.
 // Does NOT accept plain userId. Intended for transitional use only.
 export async function getUserIdFromReq(req) {
   try {
     if (req?.userId) return String(req.userId);
 
-    if (process.env.SKIP_AUTH === '1' || req?.headers?.['x-skip-auth'] === '1') {
+    if (allowSkipAuth(req)) {
       return 'dev-user';
     }
 

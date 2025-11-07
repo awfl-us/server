@@ -94,7 +94,7 @@ jobs:
             --image="${{ steps.image.outputs.IMAGE_URI }}" \
             --service-account="${CLOUD_RUN_RUNTIME_SA}" \
             --allow-unauthenticated \
-            --set-env-vars="NODE_ENV=production,SERVICE_TARGET=api.server.js,GCP_PROJECT=${GCP_PROJECT_ID}" \
+            --set-env-vars="NODE_ENV=production,SERVICE_TARGET=api.server.js,GCP_PROJECT=${GCP_PROJECT_ID},ALLOW_SKIP_AUTH=0" \
             ${{ steps.secrets.outputs.SECRET_FLAGS }}
 
       - name: Deploy Jobs service (auth-required)
@@ -104,7 +104,7 @@ jobs:
             --image="${{ steps.image.outputs.IMAGE_URI }}" \
             --service-account="${CLOUD_RUN_RUNTIME_SA}" \
             --no-allow-unauthenticated \
-            --set-env-vars="NODE_ENV=production,SERVICE_TARGET=jobs.server.js,GCP_PROJECT=${GCP_PROJECT_ID}" \
+            --set-env-vars="NODE_ENV=production,SERVICE_TARGET=jobs.server.js,GCP_PROJECT=${GCP_PROJECT_ID},ALLOW_SKIP_AUTH=0" \
             ${{ steps.secrets.outputs.SECRET_FLAGS }}
 
 # Notes:

@@ -1,5 +1,6 @@
 import { initializeApp, getApps } from 'firebase-admin/app';
 import admin from 'firebase-admin';
+import { allowSkipAuth } from './utils.js';
 
 // Ensure Firebase Admin is initialized once
 if (!getApps().length) {
@@ -10,8 +11,8 @@ if (!getApps().length) {
 // Ignores any userId hints in body/query/headers to avoid security leaks.
 export async function clientAuth(req, res, next) {
   try {
-    // Dev/test bypass
-    if (process.env.SKIP_AUTH === '1' || req?.headers?.['x-skip-auth'] === '1') {
+    // Dev/test bypass guarded by local dev detection
+    if (allowSkipAuth(req)) {
       req.userId = req.headers['x-user-id'] || 'dev-user';
       // Strip any userId hints so downstream code cannot accidentally read them
       if (req?.body && 'userId' in req.body) delete req.body.userId;
