@@ -7,6 +7,6 @@ if [[ -f /app/secrets.txt ]] && command -v gcloud >/dev/null 2>&1; then
   /app/load-secrets.sh /app/secrets.txt || true
 fi
 
-TARGET="${SERVICE_TARGET:-serve.js}"
+TARGET="${SERVICE_TARGET}"
 echo "Starting service with target: ${TARGET}"
-exec node "${TARGET}"
+npm run "${TARGET}"

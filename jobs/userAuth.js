@@ -1,3 +1,4 @@
+import { allowSkipAuth } from '../workflows/utils.js';
 // Split auth helpers for jobs/workflows execution (LB/OIDC-protected paths)
 // Re-export from utils/userAuth.js to preserve behavior and avoid duplication.
 // ESM module; project package.json is type: module.

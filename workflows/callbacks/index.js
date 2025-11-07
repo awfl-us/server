@@ -2,6 +2,7 @@ import express from 'express';
 import axios from 'axios';
 import { getFirestore } from 'firebase-admin/firestore';
 import { projectScopedCollectionPath } from '../utils.js';
+import { GoogleAuth } from 'google-auth-library';
 
 const router = express.Router();
 const db = getFirestore();
@@ -16,16 +17,25 @@ function isHttpUrl(u) {
   }
 }
 
-function buildForwardHeaders(req) {
+async function buildForwardHeaders(req) {
   const h = {};
-  // Only forward a safe subset
   const allow = ['content-type'];
   for (const k of allow) {
     const v = req.headers[k];
     if (v) h[k] = v;
   }
+
   h['x-callback-id'] = req.params.id;
   h['x-callback-project-id'] = req.projectId || '';
+
+  // Add Authorization token for Google Workflows
+  const auth = new GoogleAuth({
+    scopes: ['https://www.googleapis.com/auth/cloud-platform']
+  });
+  const client = await auth.getClient();
+  const token = await client.getAccessToken();
+  h['authorization'] = `Bearer ${token.token || token}`; // .token in newer versions
+
   return h;
 }
 
@@ -57,10 +67,12 @@ router.post('/:id', async (req, res) => {
     let lastError = null;
 
     try {
+      const headers = await buildForwardHeaders(req);
+
       const resp = await axios.post(url, req.body, {
-        headers: buildForwardHeaders(req),
+        headers,
         timeout: timeoutMs,
-        validateStatus: () => true, // capture non-2xx as well
+        validateStatus: () => true,
       });
       status = resp.status;
       respBody = resp.data;

@@ -18,6 +18,8 @@ services:
       - WORKFLOW_ENV=Dev
       - CHROMIUM_PATH=/usr/bin/headless-chromium
       - BASE_URL=${BASE_URL}
+      - ALLOW_SKIP_AUTH=${ALLOW_SKIP_AUTH}
+      - SERVICE_TARGET=dev
     volumes:
       - ./serviceAccountKey.json:/app/serviceAccountKey.json
       - ./jobs:/app/jobs
