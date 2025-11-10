@@ -71,6 +71,13 @@ resource "google_service_account_iam_member" "deployer_on_default_compute_sa" {
   member             = "serviceAccount:${google_service_account.github_deployer.email}"
 }
 
+# Grant permission to create/manage Firestore composite indexes
+resource "google_project_iam_member" "deployer_datastore_index_admin" {
+  project = var.project_id
+  role    = "roles/datastore.indexAdmin"
+  member  = "serviceAccount:${google_service_account.github_deployer.email}"
+}
+
 # Helpful outputs
 output "github_deployer_service_account_email" {
   description = "Service account email used by GitHub Actions for deployments"
