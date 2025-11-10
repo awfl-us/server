@@ -76,7 +76,7 @@ router.post('/execute', async (req, res) => {
     // Resolve BASE_URL from environment
     const baseUrl = process.env.BASE_URL || process.env.WORKFLOWS_BASE_URL || process.env.PUBLIC_BASE_URL;
     if (!baseUrl) {
-      return res.status(500).json({ error: 'BASE_URL is not configured in environment' });
+      return res.status(500).json({ error: 'WORKFLOWS_BASE_URL is not configured in environment' });
     }
 
     const { model, background, sessionId } = params;

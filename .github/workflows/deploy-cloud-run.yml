@@ -94,7 +94,7 @@ jobs:
             --image="${{ steps.image.outputs.IMAGE_URI }}" \
             --service-account="${CLOUD_RUN_RUNTIME_SA}" \
             --allow-unauthenticated \
-            --set-env-vars="NODE_ENV=production,SERVICE_TARGET=start:api,GCP_PROJECT=${GCP_PROJECT_ID},ALLOW_SKIP_AUTH=0,BASE_URL=https://jobs.awfl.us" \
+            --set-env-vars="NODE_ENV=production,SERVICE_TARGET=start:api,GCP_PROJECT=${GCP_PROJECT_ID},ALLOW_SKIP_AUTH=0,WORKFLOWS_BASE_URL=https://jobs-323709301334.us-central1.run.app" \
             ${{ steps.secrets.outputs.SECRET_FLAGS }}
 
       - name: Deploy Jobs service (auth-required)
@@ -104,7 +104,7 @@ jobs:
             --image="${{ steps.image.outputs.IMAGE_URI }}" \
             --service-account="${CLOUD_RUN_RUNTIME_SA}" \
             --no-allow-unauthenticated \
-            --set-env-vars="NODE_ENV=production,SERVICE_TARGET=start:jobs,GCP_PROJECT=${GCP_PROJECT_ID},ALLOW_SKIP_AUTH=0,BASE_URL=https://jobs.awfl.us" \
+            --set-env-vars="NODE_ENV=production,SERVICE_TARGET=start:jobs,GCP_PROJECT=${GCP_PROJECT_ID},ALLOW_SKIP_AUTH=0,WORKFLOWS_BASE_URL=https://jobs-323709301334.us-central1.run.app" \
             ${{ steps.secrets.outputs.SECRET_FLAGS }}
 
 # Notes:
