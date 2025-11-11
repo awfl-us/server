@@ -15,19 +15,6 @@ variable "project_roles" {
   default     = []
 }
 
-# Ensure necessary APIs are enabled for SA and token issuance
-resource "google_project_service" "iam" {
-  project            = var.project_id
-  service            = "iam.googleapis.com"
-  disable_on_destroy = false
-}
-
-resource "google_project_service" "iamcredentials" {
-  project            = var.project_id
-  service            = "iamcredentials.googleapis.com"
-  disable_on_destroy = false
-}
-
 # Service account used by local dev server
 resource "google_service_account" "dev_server" {
   account_id   = "local-dev-server"
