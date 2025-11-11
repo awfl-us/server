@@ -1,6 +1,6 @@
-project_id        = "awfl-us"
-root_domain       = "awfl.us"
-github_repository = "awfl-us/server"
+project_id        = "cornerstoneai-org"
+root_domain       = "cornerstoneai.org"
+github_repository = "cornerstone-ai/awfl-server"
 
 cloud_run_services_exist = false
 
