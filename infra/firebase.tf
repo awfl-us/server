@@ -9,12 +9,20 @@ resource "google_project_service" "firebase" {
   project            = var.project_id
   service            = "firebase.googleapis.com"
   disable_on_destroy = false
+  depends_on = [
+    google_project_service.cloudresourcemanager,
+    google_project_service.serviceusage,
+  ]
 }
 
 resource "google_project_service" "identitytoolkit" {
   project            = var.project_id
   service            = "identitytoolkit.googleapis.com"
   disable_on_destroy = false
+  depends_on = [
+    google_project_service.cloudresourcemanager,
+    google_project_service.serviceusage,
+  ]
 }
 
 # Add Firebase to existing GCP project
