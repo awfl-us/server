@@ -37,6 +37,17 @@ variable "cloud_run_services_exist" {
   default     = false
 }
 
+# Control whether to attempt Google Search Console site verification during apply.
+# When false (default), Terraform will create the Cloud DNS zone and the TXT verification record
+# but will NOT attempt to claim ownership (which can block while nameserver delegation propagates).
+# After you have set your registrar nameservers to the Cloud DNS zone values and propagation is complete,
+# re-run with -var enable_site_verification=true to claim the domain.
+variable "enable_site_verification" {
+  description = "Attempt to claim domain ownership via Site Verification API during apply (may block while DNS propagates)"
+  type        = bool
+  default     = false
+}
+
 # ------------------------------
 # Remote state settings for the web (frontend) stack
 # ------------------------------

@@ -22,6 +22,10 @@ resource "google_iam_workload_identity_pool" "github" {
   workload_identity_pool_id = "github-oidc"
   display_name              = "GitHub OIDC Pool"
   description               = "Trust GitHub Actions OIDC tokens for this project"
+
+  depends_on = [
+    google_project_service.iam,
+  ]
 }
 
 resource "google_iam_workload_identity_pool_provider" "github" {
@@ -40,6 +44,10 @@ resource "google_iam_workload_identity_pool_provider" "github" {
   }
   # Limit which repositories can use this provider
   attribute_condition = "assertion.repository == '${var.github_repository}'"
+
+  depends_on = [
+    google_project_service.iam,
+  ]
 }
 
 # ------------------------------
@@ -49,6 +57,10 @@ resource "google_service_account" "github_deployer" {
   project      = var.project_id
   account_id   = "github-deployer"
   display_name = "GitHub Actions Deployer"
+
+  depends_on = [
+    google_project_service.iam,
+  ]
 }
 
 # Allow identities from the GitHub OIDC provider (this repository) to impersonate the SA
@@ -56,6 +68,10 @@ resource "google_service_account_iam_member" "deployer_wif" {
   service_account_id = google_service_account.github_deployer.name
   role               = "roles/iam.workloadIdentityUser"
   member             = "principalSet://iam.googleapis.com/projects/${data.google_project.project.number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.github.workload_identity_pool_id}/attribute.repository/${var.github_repository}"
+
+  depends_on = [
+    google_project_service.iam,
+  ]
 }
 
 # Project-level roles to deploy Cloud Run and use Cloud Build from source
@@ -63,12 +79,20 @@ resource "google_project_iam_member" "deployer_run_admin" {
   project = var.project_id
   role    = "roles/run.admin"
   member  = "serviceAccount:${google_service_account.github_deployer.email}"
+
+  depends_on = [
+    google_project_service.iam,
+  ]
 }
 
 resource "google_project_iam_member" "deployer_cloudbuild_editor" {
   project = var.project_id
   role    = "roles/cloudbuild.builds.editor"
   member  = "serviceAccount:${google_service_account.github_deployer.email}"
+
+  depends_on = [
+    google_project_service.iam,
+  ]
 }
 
 # Allow the deployer to set the runtime service account on Cloud Run (default compute SA)
@@ -76,6 +100,10 @@ resource "google_service_account_iam_member" "deployer_on_default_compute_sa" {
   service_account_id = "projects/${var.project_id}/serviceAccounts/${data.google_project.project.number}-compute@developer.gserviceaccount.com"
   role               = "roles/iam.serviceAccountUser"
   member             = "serviceAccount:${google_service_account.github_deployer.email}"
+
+  depends_on = [
+    google_project_service.iam,
+  ]
 }
 
 # Grant permission to create/manage Firestore composite indexes
@@ -83,6 +111,10 @@ resource "google_project_iam_member" "deployer_datastore_index_admin" {
   project = var.project_id
   role    = "roles/datastore.indexAdmin"
   member  = "serviceAccount:${google_service_account.github_deployer.email}"
+
+  depends_on = [
+    google_project_service.iam,
+  ]
 }
 
 # Helpful outputs

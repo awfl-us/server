@@ -28,13 +28,20 @@ resource "google_dns_record_set" "root_verification_txt" {
 }
 
 # Claim ownership once the TXT record propagates
+# This is gated by a feature flag so first-time applies don't block on DNS propagation.
 resource "google_site_verification_web_resource" "domain" {
+  count = var.enable_site_verification ? 1 : 0
+
   site {
     type       = data.google_site_verification_token.domain.type
     identifier = data.google_site_verification_token.domain.identifier
   }
 
   verification_method = data.google_site_verification_token.domain.verification_method
+
+  timeouts {
+    create = "60m"
+  }
 
   depends_on = [
     google_dns_record_set.root_verification_txt,
