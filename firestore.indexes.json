@@ -59,6 +59,14 @@
         { "fieldPath": "sessionId", "order": "ASCENDING" },
         { "fieldPath": "live_at", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "workflowExecsBySession",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "sessionId", "order": "ASCENDING" },
+        { "fieldPath": "created", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []
