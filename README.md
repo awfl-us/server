@@ -114,7 +114,7 @@ Infrastructure (Terraform)
   - firestore_location (optional; default "nam5". Immutable after creation.)
   - firebase_web_app_display_name (optional; default "awfl-web")
   - root_domain (required for DNS)
-  - enable_site_verification (default false; see DNS bootstrap below)
+  - enable_site_verification (default false; see DNS verification flag flow below)
   - cloud_run_services_exist (default false; see domain mappings)
 - Provisioned services/resources:
   - IAM: local dev service account and optional project role bindings
@@ -149,64 +149,29 @@ Infrastructure (Terraform)
   - project_id is not sensitive; committing terraform.tfvars.example is safe. Keep dev.auto.tfvars local.
   - Do not commit terraform.tfstate; use remote state for teams/CI.
 
-First-time DNS bootstrap: get Cloud DNS nameservers before apply completes
-- Problem: The site verification resource may block while DNS propagates, but you need Cloud DNS nameservers to update your registrar first.
-- Solutions to obtain nameservers immediately after the managed zone is created (you can do this while apply is running):
-  - Cloud Console: Network services -> Cloud DNS -> Managed zones -> your zone -> copy the NS list
-  - gcloud CLI:
-    - gcloud dns managed-zones list
-    - gcloud dns managed-zones describe ZONE_NAME --format="value(nameServers[])"
-- Update the NS at your domain registrar to match the Cloud DNS zone’s nameservers.
-- Once delegation propagates globally (often 5–30 minutes), site verification can succeed.
-
-Non-blocking applies for DNS verification
-- Toggle: enable_site_verification (default false)
-  - When false: Terraform creates the Cloud DNS zone and the TXT record, but does NOT attempt to claim ownership. This avoids long blocking applies on first run.
-  - When true: Terraform also creates google_site_verification_web_resource to claim ownership. The resource has a create timeout of 60m to allow for propagation.
-  - Enable later:
-    - terraform apply -var enable_site_verification=true
-    - Or add to a local override file infra/dev.local.auto.tfvars (gitignored): enable_site_verification = true
-- Two-phase apply alternative (targeted):
-  - Phase 1: create just the DNS zone and TXT record
-    - terraform apply \
-      -target=google_dns_managed_zone.root \
-      -target=google_dns_record_set.root_verification_txt
-  - Update registrar nameservers using the Cloud DNS zone NS values (Console or gcloud as above). Wait for propagation.
-  - Phase 2: full apply (and optionally enable_site_verification=true)
-
-Using external DNS providers vs delegating to Cloud DNS
-- If you will NOT delegate your domain to Cloud DNS (i.e., you keep another provider authoritative):
-  - The TXT record inside Cloud DNS is not publicly visible until you change NS at the registrar. You must add the Google site verification TXT record at your authoritative DNS provider if you want to verify via DNS.
-  - You can still run Terraform here with enable_site_verification=false to avoid blocking. When you are ready to verify, either:
-    - Set enable_site_verification=true after you have created the TXT at your external provider, or
-    - Verify domain ownership via another method in Search Console (HTML file / meta tag), outside Terraform.
-  - Cloud Run domain mappings require domain ownership. Ensure verification is complete before enabling mappings.
-
-Domain verification and Cloud Run domain mappings (two-step)
-- ADC requirement for Site Verification API
-  - The google provider uses ADC. To call the Site Verification API during apply, authenticate with a user credential that has the siteverification scope.
-  - Run: gcloud auth application-default login --scopes=https://www.googleapis.com/auth/siteverification
-    - This opens a browser and redirects to http://localhost:8085 for the OAuth callback. If a browser can’t be launched, use --no-launch-browser to copy/paste the URL.
-    - To reset ADC later: gcloud auth application-default revoke (then login again as needed).
-- Step 1: Create DNS zone and TXT (verification) record
-  - In infra/dev.auto.tfvars, set root_domain = "yourdomain.tld".
-  - Keep enable_site_verification = false for the first apply to avoid blocking, or use the two-phase apply above.
-  - terraform apply will:
-    - Create a public Cloud DNS managed zone for the root domain and output dns_nameservers.
-    - Create the site verification TXT record in that zone.
-  - At your domain registrar, set the nameservers for your root domain to the dns_nameservers output by Terraform (or retrieved via Console/gcloud).
-  - Wait for DNS to propagate, then run terraform apply -var enable_site_verification=true to claim ownership.
-- Step 2: Ensure services exist (created by CI on merge)
-  - Merge to main so the GitHub Actions workflow deploys the Cloud Run services (api and jobs) in the configured region/project.
-  - Confirm the service names match what infra expects (defaults are api and jobs; the domain mappings refer to these names).
-- Step 3: Enable domain mappings and create CNAMEs
-  - Domain ownership must already be verified (either via enable_site_verification=true or manual verification in Search Console) before creating mappings.
-  - Do not commit this toggle; use a local override file that is gitignored:
-    - Create infra/dev.local.auto.tfvars with: cloud_run_services_exist = true
-  - terraform apply will then create:
-    - google_cloud_run_domain_mapping resources for api.yourdomain and jobs.yourdomain
-    - CNAME records pointing to ghs.googlehosted.com for those subdomains
-  - After certificate provisioning completes (managed by Cloud Run), your subdomains should serve the respective services.
+DNS verification (simple flag flow)
+- Goal: verify domain ownership via DNS without long blocking applies, using a single flag.
+- How it works
+  - enable_site_verification controls whether Terraform claims ownership using the Site Verification API.
+  - Default false: creates the Cloud DNS zone and TXT record only.
+  - Set true when DNS has propagated to claim ownership (resource has a 60m create timeout).
+- Steps
+  1) First apply with enable_site_verification = false (default)
+     - terraform apply
+     - Terraform creates the public Cloud DNS zone and the site verification TXT record.
+     - It also outputs dns_nameservers for the zone.
+  2) Update registrar nameservers
+     - At your domain registrar, set the domain’s nameservers to the Terraform output value of dns_nameservers.
+     - To print them: terraform output dns_nameservers
+  3) Wait for DNS propagation (commonly 5–30+ minutes)
+  4) Claim ownership
+     - Re-run apply with the flag enabled:
+       - terraform apply -var enable_site_verification=true
+  5) Domain mappings (optional)
+     - After ownership is verified and your Cloud Run services exist, enable mappings by setting cloud_run_services_exist = true (recommended via a local, gitignored infra/dev.local.auto.tfvars) and terraform apply.
+- If verification fails with permission errors
+  - Ensure ADC includes the Site Verification scope:
+    - gcloud auth application-default login --scopes=https://www.googleapis.com/auth/siteverification
 
 Migration note (infra variable rename)
 - The old toggle enable_domain_mappings is replaced by cloud_run_services_exist (default false).
