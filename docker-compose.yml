@@ -8,7 +8,7 @@ services:
     ports:
       - "5050:5050"  # Unified port for API + static
     environment:
-      - GCP_PROJECT=awfl-us
+      - GCP_PROJECT=cornerstoneai-org
       - NODE_ENV=development
       - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}

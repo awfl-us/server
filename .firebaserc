@@ -1,7 +1,7 @@
 {
   "projects": {
-    "default": "awfl-us",
-    "production": "awfl-us"
+    "default": "cornerstoneai-org",
+    "production": "cornerstoneai-org"
   },
   "targets": {},
   "etags": {}
