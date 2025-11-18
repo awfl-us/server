@@ -12,3 +12,5 @@ infra/terraform.tfstate.backup
 
 # Local Terraform overrides (keep out of version control)
 infra/*.local.auto.tfvars
+cloud/sse-consumer/node_modules
+package-lock.json
