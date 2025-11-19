@@ -4,6 +4,8 @@ import { createHandlers } from '../sse/consumer.js';
 import { EVENTS_HEARTBEAT_MS, SYNC_ON_START, GCS_BUCKET, GCS_PREFIX_TEMPLATE, SYNC_INTERVAL_MS } from '../config.js';
 import { syncBucketPrefix } from '../gcs-sync.js';
 
+const GCS_DEBUG = /^1|true|yes$/i.test(String(process.env.GCS_DEBUG || ''));
+
 function sanitizeHeaders(h) {
   const out = { ...h };
   if (out.authorization) out.authorization = '[redacted]';
@@ -94,6 +96,10 @@ export function registerStreamRoute(app) {
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn('[consumer] gcs sync error', err?.message || err);
+        if (GCS_DEBUG && err?.details) {
+          // eslint-disable-next-line no-console
+          console.warn('[consumer] gcs sync error details', err.details);
+        }
         if (!suppressWrite) {
           try { res.write(`${JSON.stringify({ type: 'gcs_sync_error', error: err?.message || String(err), kind })}\n`); } catch {}
         }

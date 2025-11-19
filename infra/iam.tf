@@ -15,6 +15,14 @@ variable "project_roles" {
   default     = []
 }
 
+# Name of the GCS bucket used by the consumer for workspace sync.
+# When set, the local dev service account will be granted objectViewer on this bucket.
+variable "gcs_bucket" {
+  description = "GCS bucket name used for workspace sync"
+  type        = string
+  default     = ""
+}
+
 # Service account used by local dev server
 resource "google_service_account" "dev_server" {
   account_id   = "local-dev-server"
@@ -28,6 +36,19 @@ resource "google_project_iam_member" "dev_server_bindings" {
   project  = var.project_id
   role     = each.value
   member   = "serviceAccount:${google_service_account.dev_server.email}"
+}
+
+# ------------------------------
+# Bucket-level IAM for local dev SA
+# Relies on local.shared_bucket_name defined in storage.tf
+# ------------------------------
+
+resource "google_storage_bucket_iam_member" "dev_server_object_viewer" {
+  count      = local.shared_bucket_name != "" ? 1 : 0
+  bucket     = local.shared_bucket_name
+  role       = "roles/storage.objectViewer"
+  member     = "serviceAccount:${google_service_account.dev_server.email}"
+  depends_on = [google_service_account.dev_server]
 }
 
 # ------------------------------

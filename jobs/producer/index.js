@@ -133,8 +133,8 @@ router.post('/start', async (req, res) => {
         ...(eventsHeartbeatMs ? [{ name: 'EVENTS_HEARTBEAT_MS', value: eventsHeartbeatMs }] : []),
         ...(reconnectBackoffMs ? [{ name: 'RECONNECT_BACKOFF_MS', value: reconnectBackoffMs }] : []),
         ...(sidecarWorkPrefixTemplate ? [{ name: 'WORK_PREFIX_TEMPLATE', value: sidecarWorkPrefixTemplate }] : []),
-        { name: 'GCS_BUCKET', value: process.env.GCS_BUCKET }
-        // No SERVICE_AUTH_TOKEN in dev sidecar; prod uses OIDC on Cloud Run
+        { name: 'GCS_BUCKET', value: process.env.GCS_BUCKET },
+        { name: 'GCS_DEBUG', value: '1' }
       ];
 
       const sidecarArgsTemplate = process.env.PRODUCER_SIDECAR_DOCKER_ARGS || '';
