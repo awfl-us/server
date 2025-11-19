@@ -26,6 +26,8 @@ services:
       # Ensure the launched containers join this compose network so they can reach js-server by DNS.
       # If your compose project name differs, update the network name accordingly or set COMPOSE_PROJECT_NAME=awfl-server before running compose.
       - PRODUCER_LOCAL_DOCKER_ARGS=--network awfl-server_default
+      # Provide ADC to the producer container for local dev (mount host key and set GOOGLE_APPLICATION_CREDENTIALS inside producer)
+      - PRODUCER_CREDENTIALS_MOUNT_PATH=/app/serviceAccountKey.json
       # Optional tunables for SSE
       - EVENTS_HEARTBEAT_MS=15000
       - RECONNECT_BACKOFF_MS=1000
@@ -96,7 +98,7 @@ services:
       context: .
       dockerfile: Dockerfile.firebase-emulator
     command: >
-      firebase emulators:start --only firestore --import=/app/.emulator_data/firestore --export-on-exit --debug
+      firebase emulators:start --only firestore --import=/app/.emulator_data/firestore --export-on-exit
     ports:
       - "8085:8085"
       - "4000:4000"

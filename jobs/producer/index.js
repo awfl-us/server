@@ -116,7 +116,8 @@ router.post('/start', async (req, res) => {
       ...(reconnectBackoffMs ? [{ name: 'RECONNECT_BACKOFF_MS', value: reconnectBackoffMs }] : []),
       // Useful context for logs
       { name: 'CONSUMER_ID', value: consumerId },
-      { name: 'GCS_BUCKET', value: process.env.GCS_BUCKET }
+      { name: 'GCS_BUCKET', value: process.env.GCS_BUCKET },
+      { name: 'GCS_DEBUG', value: '1' }
     ];
 
     let sidecarInfo = null;

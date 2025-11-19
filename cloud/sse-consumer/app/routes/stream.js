@@ -1,7 +1,7 @@
 import { checkInboundAuth } from '../auth.js';
 import { ensureWorkRoot } from '../storage.js';
 import { createHandlers } from '../sse/consumer.js';
-import { EVENTS_HEARTBEAT_MS, SYNC_ON_START, GCS_BUCKET, GCS_PREFIX_TEMPLATE } from '../config.js';
+import { EVENTS_HEARTBEAT_MS, SYNC_ON_START, GCS_BUCKET, GCS_PREFIX_TEMPLATE, SYNC_INTERVAL_MS } from '../config.js';
 import { syncBucketPrefix } from '../gcs-sync.js';
 
 function sanitizeHeaders(h) {
@@ -73,23 +73,47 @@ export function registerStreamRoute(app) {
     const gcsBucket = GCS_BUCKET;
     const gcsPrefix = renderPrefixTemplate(GCS_PREFIX_TEMPLATE, { userId, projectId, workspaceId, sessionId });
 
-    // Optionally trigger initial sync on connect
-    if (SYNC_ON_START && gcsBucket) {
+    // Periodic sync management
+    let syncIv = null;
+    let syncing = false;
+    let closed = false;
+
+    async function runSync(kind = 'manual', { suppressWrite = false } = {}) {
+      if (!gcsBucket) return;
+      if (syncing) return; // avoid overlapping runs
+      syncing = true;
       // eslint-disable-next-line no-console
-      console.log('[consumer] gcs sync start', { bucket: gcsBucket, prefix: gcsPrefix, tokenProvided: Boolean(gcsToken) });
+      console.log('[consumer] gcs sync start', { bucket: gcsBucket, prefix: gcsPrefix, tokenProvided: Boolean(gcsToken), kind });
       try {
         const stats = await syncBucketPrefix({ bucket: gcsBucket, prefix: gcsPrefix, workRoot, token: gcsToken });
         // eslint-disable-next-line no-console
-        console.log('[consumer] gcs sync done', { stats });
-        try { res.write(`${JSON.stringify({ type: 'gcs_sync', stats })}\n`); } catch {}
+        console.log('[consumer] gcs sync done', { stats, kind });
+        if (!suppressWrite) {
+          try { res.write(`${JSON.stringify({ type: 'gcs_sync', stats, kind })}\n`); } catch {}
+        }
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn('[consumer] gcs sync error', err?.message || err);
-        try { res.write(`${JSON.stringify({ type: 'gcs_sync_error', error: err?.message || String(err) })}\n`); } catch {}
+        if (!suppressWrite) {
+          try { res.write(`${JSON.stringify({ type: 'gcs_sync_error', error: err?.message || String(err), kind })}\n`); } catch {}
+        }
+      } finally {
+        syncing = false;
       }
+    }
+
+    // Optionally trigger initial sync on connect
+    if (SYNC_ON_START && gcsBucket) {
+      // fire and wait for first sync
+      await runSync('start');
     } else {
       // eslint-disable-next-line no-console
       console.log('[consumer] gcs sync skipped', { SYNC_ON_START, bucketConfigured: Boolean(gcsBucket) });
+    }
+
+    // Set up periodic sync while stream is open
+    if (gcsBucket && SYNC_INTERVAL_MS > 0) {
+      syncIv = setInterval(() => { if (!closed) runSync('interval', { suppressWrite: false }); }, Math.max(1000, SYNC_INTERVAL_MS));
     }
 
     const { handleLine } = createHandlers({ workRoot, res, gcs: { bucket: gcsBucket, prefix: gcsPrefix, token: gcsToken } });
@@ -129,26 +153,35 @@ export function registerStreamRoute(app) {
       // keep response open; heartbeats continue until close/aborted/error
     });
 
+    function cleanupAndClose(reason) {
+      closed = true;
+      try { clearInterval(pingIv); } catch {}
+      try { if (syncIv) clearInterval(syncIv); } catch {}
+      // Final sync on shutdown if bucket configured
+      // Fire and forget to avoid blocking close; we also suppress response writes since stream is closing
+      if (gcsBucket) {
+        try { runSync('shutdown', { suppressWrite: true }); } catch {}
+      }
+      // eslint-disable-next-line no-console
+      console.log('[consumer] closing stream', { reason, linesCount });
+      try { res.end(); } catch {}
+    }
+
     req.on('error', (e) => {
       // eslint-disable-next-line no-console
       console.warn('[consumer] request error', e?.message || e);
-      try { clearInterval(pingIv); } catch {}
-      try { res.end(); } catch {}
+      cleanupAndClose('req_error');
     });
 
     req.on('aborted', () => {
       // eslint-disable-next-line no-console
       console.warn('[consumer] request aborted by client');
-      try { clearInterval(pingIv); } catch {}
-      try { res.end(); } catch {}
+      cleanupAndClose('aborted');
     });
 
     // End the response only when the response is closed (client stopped reading) or the socket closes
     res.on('close', () => {
-      try { clearInterval(pingIv); } catch {}
-      // eslint-disable-next-line no-console
-      console.log('[consumer] response closed', { linesCount });
-      try { res.end(); } catch {}
+      cleanupAndClose('res_close');
     });
   });
 }

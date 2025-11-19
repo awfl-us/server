@@ -16,6 +16,7 @@ const SERVICE_AUTH_TOKEN = process.env.SERVICE_AUTH_TOKEN || '';
 const GCS_TOKEN_ENV = process.env.GCS_TOKEN || process.env.X_GCS_TOKEN || '';
 const GCS_BUCKET = process.env.GCS_BUCKET || '';
 const GCS_PREFIX_TEMPLATE = process.env.GCS_PREFIX_TEMPLATE || '{userId}/{projectId}/{workspaceId}/{sessionId}/';
+const GCS_DEBUG = /^1|true|yes$/i.test(String(process.env.GCS_DEBUG || ''));
 
 // Context
 const X_USER_ID = process.env.X_USER_ID || process.env.USER_ID || '';
@@ -409,6 +410,7 @@ async function run() {
       console.log('[producer] minted downscoped GCS token', { bucket: GCS_BUCKET, prefix: gcsPrefix });
     } catch (err) {
       console.warn('[producer] failed to mint downscoped GCS token; continuing without header', err?.message || err);
+      if (GCS_DEBUG) console.warn('[producer] gcs mint debug', { stack: err?.stack, details: err?.details });
     }
   }
 
