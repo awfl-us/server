@@ -1,13 +1,20 @@
 import { checkInboundAuth } from '../auth.js';
 import { ensureWorkRoot } from '../storage.js';
 import { createHandlers } from '../sse/consumer.js';
-import { EVENTS_HEARTBEAT_MS } from '../config.js';
+import { EVENTS_HEARTBEAT_MS, SYNC_ON_START, GCS_BUCKET, GCS_PREFIX_TEMPLATE } from '../config.js';
+import { syncBucketPrefix } from '../gcs-sync.js';
 
 function sanitizeHeaders(h) {
   const out = { ...h };
   if (out.authorization) out.authorization = '[redacted]';
   if (out['x-service-auth']) out['x-service-auth'] = '[redacted]';
+  if (out['x-gcs-token']) out['x-gcs-token'] = '[redacted]';
   return out;
+}
+
+function renderPrefixTemplate(tpl, ctx) {
+  const safe = String(tpl || '');
+  return safe.replace(/\{(userId|projectId|workspaceId|sessionId)\}/g, (_, k) => String(ctx[k] || ''));
 }
 
 export function registerStreamRoute(app) {
@@ -17,7 +24,7 @@ export function registerStreamRoute(app) {
       const sock = req.socket;
       const safeHeaders = sanitizeHeaders(req.headers || {});
       // eslint-disable-next-line no-console
-      console.log('[consumer] <- inbound /sessions/stream', {
+      console.log('[consumer] ← inbound /sessions/stream', {
         method: req.method,
         url: req.originalUrl || req.url,
         headers: safeHeaders,
@@ -61,7 +68,31 @@ export function registerStreamRoute(app) {
       return void res.end();
     }
 
-    const { handleLine } = createHandlers({ workRoot, res });
+    // Compute GCS sync inputs
+    const gcsToken = (req.headers['x-gcs-token'] || '').toString();
+    const gcsBucket = GCS_BUCKET;
+    const gcsPrefix = renderPrefixTemplate(GCS_PREFIX_TEMPLATE, { userId, projectId, workspaceId, sessionId });
+
+    // Optionally trigger initial sync on connect
+    if (SYNC_ON_START && gcsBucket) {
+      // eslint-disable-next-line no-console
+      console.log('[consumer] gcs sync start', { bucket: gcsBucket, prefix: gcsPrefix, tokenProvided: Boolean(gcsToken) });
+      try {
+        const stats = await syncBucketPrefix({ bucket: gcsBucket, prefix: gcsPrefix, workRoot, token: gcsToken });
+        // eslint-disable-next-line no-console
+        console.log('[consumer] gcs sync done', { stats });
+        try { res.write(`${JSON.stringify({ type: 'gcs_sync', stats })}\n`); } catch {}
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[consumer] gcs sync error', err?.message || err);
+        try { res.write(`${JSON.stringify({ type: 'gcs_sync_error', error: err?.message || String(err) })}\n`); } catch {}
+      }
+    } else {
+      // eslint-disable-next-line no-console
+      console.log('[consumer] gcs sync skipped', { SYNC_ON_START, bucketConfigured: Boolean(gcsBucket) });
+    }
+
+    const { handleLine } = createHandlers({ workRoot, res, gcs: { bucket: gcsBucket, prefix: gcsPrefix, token: gcsToken } });
 
     // Heartbeat pings back to producer
     try { res.write(`ready ${Date.now()}\n`); } catch {}

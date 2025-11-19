@@ -5,12 +5,17 @@ import { ensureWorkRoot } from './storage.js';
 import { PassThrough } from 'stream';
 import http from 'http';
 import https from 'https';
+import { getDownscopedToken, renderPrefixTemplate as renderGcsPrefixTemplate } from './gcs-downscope.js';
 
 // Env config
 const WORKFLOWS_BASE_URL = process.env.WORKFLOWS_BASE_URL || '';
 const WORKFLOWS_AUDIENCE = process.env.WORKFLOWS_AUDIENCE || WORKFLOWS_BASE_URL;
 const CONSUMER_BASE_URL = process.env.CONSUMER_BASE_URL || '';
 const SERVICE_AUTH_TOKEN = process.env.SERVICE_AUTH_TOKEN || '';
+// Optional downscoped GCS access token to pass to consumer (temporary until minting is wired)
+const GCS_TOKEN_ENV = process.env.GCS_TOKEN || process.env.X_GCS_TOKEN || '';
+const GCS_BUCKET = process.env.GCS_BUCKET || '';
+const GCS_PREFIX_TEMPLATE = process.env.GCS_PREFIX_TEMPLATE || '{userId}/{projectId}/{workspaceId}/{sessionId}/';
 
 // Context
 const X_USER_ID = process.env.X_USER_ID || process.env.USER_ID || '';
@@ -49,7 +54,7 @@ async function getWorkflowsIdTokenHeaders(aud) {
   }
 }
 
-function consumerHeaders() {
+function consumerHeaders({ gcsToken } = {}) {
   const h = {
     'Content-Type': 'application/x-ndjson',
     'X-User-Id': X_USER_ID,
@@ -60,6 +65,7 @@ function consumerHeaders() {
   if (X_WORKSPACE_ID) h['X-Workspace-Id'] = X_WORKSPACE_ID;
   if (X_SESSION_ID) h['X-Session-Id'] = X_SESSION_ID;
   if (SERVICE_AUTH_TOKEN) h['Authorization'] = `Bearer ${SERVICE_AUTH_TOKEN}`;
+  if (gcsToken) h['X-Gcs-Token'] = gcsToken; // pass downscoped token (if provided)
   return h;
 }
 
@@ -184,9 +190,8 @@ function parseToolArgs(maybe) {
 }
 
 // Persistent consumer connection (duplex NDJSON)
-function createPersistentConsumerClient() {
+function createPersistentConsumerClient(headers) {
   const url = `${CONSUMER_BASE_URL.replace(/\/$/, '')}/sessions/stream`;
-  const headers = consumerHeaders();
 
   // Keep-alive agents
   const isHttps = /^https:/i.test(url);
@@ -205,6 +210,7 @@ function createPersistentConsumerClient() {
   function logHeadersSafe(h) {
     const out = { ...h };
     if (out.Authorization) out.Authorization = '[redacted]';
+    if (out['X-Gcs-Token']) out['X-Gcs-Token'] = '[redacted]';
     return out;
   }
 
@@ -392,6 +398,20 @@ async function run() {
     console.warn('[producer] work root not available (continuing without persistence):', err?.message || err);
   }
 
+  // Compute downscoped GCS token (mint if not provided via env)
+  let gcsTokenToUse = GCS_TOKEN_ENV;
+  let gcsPrefix = '';
+  if (!gcsTokenToUse && GCS_BUCKET) {
+    try {
+      gcsPrefix = renderGcsPrefixTemplate(GCS_PREFIX_TEMPLATE, { userId: X_USER_ID, projectId: X_PROJECT_ID, workspaceId: X_WORKSPACE_ID, sessionId: X_SESSION_ID });
+      const token = await getDownscopedToken({ bucket: GCS_BUCKET, prefix: gcsPrefix });
+      gcsTokenToUse = token;
+      console.log('[producer] minted downscoped GCS token', { bucket: GCS_BUCKET, prefix: gcsPrefix });
+    } catch (err) {
+      console.warn('[producer] failed to mint downscoped GCS token; continuing without header', err?.message || err);
+    }
+  }
+
   // Fetch persisted project-wide cursor (best effort)
   let initialSinceId = SINCE_ID || undefined;
   let initialSinceTime = SINCE_TIME || undefined;
@@ -411,7 +431,8 @@ async function run() {
   const reconnectCap = 30000;
 
   // Create persistent consumer client
-  const consumer = createPersistentConsumerClient();
+  const headers = consumerHeaders({ gcsToken: gcsTokenToUse });
+  const consumer = createPersistentConsumerClient(headers);
 
   async function connectEvents() {
     const params = new URLSearchParams();

@@ -3,6 +3,7 @@ import { getIdTokenHeader } from '../auth.js';
 import { resolveWithin } from '../storage.js';
 import { parseToolArgs } from '../utils/parse.js';
 import { doReadFile, doRunCommand, doUpdateFile } from '../tools/index.js';
+import { syncBucketPrefix } from '../gcs-sync.js';
 
 function isCallbackEvent(obj) {
   // Accept multiple shapes:
@@ -24,7 +25,7 @@ function getToolArgs(obj) {
   return obj?.args ?? obj?.arguments ?? obj?.payload?.args ?? obj?.payload;
 }
 
-export function createHandlers({ workRoot, res }) {
+export function createHandlers({ workRoot, res, gcs }) {
   const resolvePath = (rel) => resolveWithin(workRoot, rel);
 
   async function handleCallback(ev) {
@@ -40,13 +41,19 @@ export function createHandlers({ workRoot, res }) {
         result = await doUpdateFile(args, resolvePath);
       } else if (tool === 'RUN_COMMAND') {
         result = await doRunCommand(args, workRoot);
+      } else if (tool === 'GCS_SYNC' || tool === 'SYNC_GCS' || tool === 'GCS.MIRROR') {
+        const bucket = String(args.bucket || gcs?.bucket || '');
+        const prefix = String(args.prefix || gcs?.prefix || '');
+        const token = String(args.token || gcs?.token || '');
+        if (!bucket) throw new Error('GCS_SYNC: missing bucket');
+        result = await syncBucketPrefix({ bucket, prefix, workRoot, token });
       } else {
         // Unknown callback — return null as result per minimization contract
         result = null;
       }
       try { res.write(`${JSON.stringify({ result })}\n`); } catch {}
-    } catch (_err) {
-      try { res.write(`${JSON.stringify({ result: null })}\n`); } catch {}
+    } catch (err) {
+      try { res.write(`${JSON.stringify({ result: null, error: String(err?.message || err || 'tool_error') })}\n`); } catch {}
     }
   }
 

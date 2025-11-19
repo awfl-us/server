@@ -13,6 +13,26 @@ export const SERVICE_AUTH_TOKEN = process.env.SERVICE_AUTH_TOKEN || '';
 // Filesystem work root base directory for per-session/project workspace
 export const WORK_ROOT_BASE = process.env.WORK_ROOT_BASE || '/workspace';
 
+// Optional path prefix template for workspace layout under WORK_ROOT_BASE.
+// Supports {userId},{projectId},{workspaceId},{sessionId}
+// Defaults to the prior layout to preserve behavior.
+export const WORK_PREFIX_TEMPLATE = process.env.WORK_PREFIX_TEMPLATE || '{userId}/{projectId}/{workspaceId}/{sessionId}';
+
+// GCS sync configuration
+// JSON API base for GCS
+export const GCS_API_BASE = process.env.GCS_API_BASE || 'https://www.googleapis.com';
+// Max number of parallel downloads when syncing
+export const GCS_DOWNLOAD_CONCURRENCY = Number(process.env.GCS_DOWNLOAD_CONCURRENCY || 8);
+// Bucket to sync from (producer-provided token should be scoped to this bucket/prefix)
+export const GCS_BUCKET = process.env.GCS_BUCKET || '';
+// Prefix template for objects within the bucket to mirror into the work root
+// Supports {userId},{projectId},{workspaceId},{sessionId}
+export const GCS_PREFIX_TEMPLATE = process.env.GCS_PREFIX_TEMPLATE || '{userId}/{projectId}/{workspaceId}/{sessionId}/';
+// Trigger an initial sync automatically when /sessions/stream is established
+export const SYNC_ON_START = ['1','true','yes'].includes(String(process.env.SYNC_ON_START || '1').toLowerCase());
+// Interval in ms to re-run GCS sync while the stream is open
+export const SYNC_INTERVAL_MS = Number(process.env.SYNC_INTERVAL_MS || 15000);
+
 // Stream heartbeat interval back to the producer
 export const EVENTS_HEARTBEAT_MS = Number(process.env.EVENTS_HEARTBEAT_MS || 15000);
 

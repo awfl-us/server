@@ -116,6 +116,7 @@ router.post('/start', async (req, res) => {
       ...(reconnectBackoffMs ? [{ name: 'RECONNECT_BACKOFF_MS', value: reconnectBackoffMs }] : []),
       // Useful context for logs
       { name: 'CONSUMER_ID', value: consumerId },
+      { name: 'GCS_BUCKET', value: process.env.GCS_BUCKET }
     ];
 
     let sidecarInfo = null;
@@ -131,6 +132,7 @@ router.post('/start', async (req, res) => {
         ...(eventsHeartbeatMs ? [{ name: 'EVENTS_HEARTBEAT_MS', value: eventsHeartbeatMs }] : []),
         ...(reconnectBackoffMs ? [{ name: 'RECONNECT_BACKOFF_MS', value: reconnectBackoffMs }] : []),
         ...(sidecarWorkPrefixTemplate ? [{ name: 'WORK_PREFIX_TEMPLATE', value: sidecarWorkPrefixTemplate }] : []),
+        { name: 'GCS_BUCKET', value: process.env.GCS_BUCKET }
         // No SERVICE_AUTH_TOKEN in dev sidecar; prod uses OIDC on Cloud Run
       ];
 

@@ -7,6 +7,19 @@ FROM node:22-slim AS base
 ENV NODE_ENV=production
 WORKDIR /app
 
+# Install helpful OS utilities for debugging and agent operations
+# Keep minimal and without recommends to limit image size
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       ca-certificates \
+       curl \
+       git \
+       jq \
+       bash \
+       unzip \
+       procps \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install deps separately for better layer caching. Prefer npm ci with lockfile.
 # Copies only package manifests so dependency layer is reused when app code changes.
 COPY package.json package-lock.json ./

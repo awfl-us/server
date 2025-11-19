@@ -39,6 +39,7 @@ services:
       # Optional: extra docker args for the sidecar with templating for {userId},{projectId},{workspaceId},{sessionId}
       # e.g., mount per-session host dir: -v /abs/path/work/{sessionId}:/mnt/work
       # - PRODUCER_SIDECAR_DOCKER_ARGS=-v /host/work/{sessionId}:/mnt/work
+      - GCS_BUCKET=${GCS_BUCKET}
     volumes:
       - ./serviceAccountKey.json:/app/serviceAccountKey.json
       - ./jobs:/app/jobs
@@ -95,7 +96,7 @@ services:
       context: .
       dockerfile: Dockerfile.firebase-emulator
     command: >
-      firebase emulators:start --only firestore --import=/app/.emulator_data/firestore --export-on-exit
+      firebase emulators:start --only firestore --import=/app/.emulator_data/firestore --export-on-exit --debug
     ports:
       - "8085:8085"
       - "4000:4000"
