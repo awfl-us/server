@@ -29,7 +29,7 @@ export async function postCursor({ eventId, timestamp }) {
         console.log('[producer] cursor updated', { projectId: X_PROJECT_ID, eventId, timestamp });
         return;
       }
-      console.warn('[producer] cursor update non-2xx', { status: resp.status });
+      console.warn('[producer] cursor update non-2xx', { status: resp.status, data: resp.data });
       throw new Error(`cursor_http_${resp.status}`);
     } catch (err) {
       const backoff = 250 * attempt + Math.floor(Math.random() * 150);
@@ -57,18 +57,26 @@ export async function getProjectCursor() {
     console.log('[producer] fetching project cursor', { projectId: X_PROJECT_ID });
     const resp = await axios.get(url, {
       headers,
-      params: { projectId: X_PROJECT_ID, target: 'project' },
+      params: { projectId: X_PROJECT_ID },
       timeout: 15000,
       validateStatus: (s) => s < 500,
     });
+
+    if (resp.status < 200 || resp.status >= 300) {
+      console.warn('[producer] fetch project cursor non-2xx', { status: resp.status, data: resp.data });
+      return null;
+    }
+
     const data = resp?.data || {};
-    const cursor = data.cursor || data;
-    const normalized = cursor && (cursor.eventId || cursor.since_id || cursor.timestamp || cursor.since_time)
+    // workflows/events/cursors.js responds with { projectId, sessionId, project, session }
+    const project = data.project || null;
+    const normalized = project && (project.eventId || project.timestamp)
       ? {
-          eventId: cursor.eventId || cursor.since_id || undefined,
-          timestamp: cursor.timestamp || cursor.since_time || undefined,
+          eventId: project.eventId || undefined,
+          timestamp: project.timestamp || undefined,
         }
       : null;
+
     console.log('[producer] fetched project cursor', { status: resp.status, projectId: X_PROJECT_ID, eventId: normalized?.eventId, timestamp: normalized?.timestamp });
     return normalized;
   } catch (err) {

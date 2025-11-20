@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { getWorkflowsIdTokenHeaders } from './auth.js';
-import { contextHeaders, SHUTDOWN_TIMEOUT_MS, WORKFLOWS_BASE_URL, X_PROJECT_ID } from './config.js';
+import { contextHeaders, SHUTDOWN_TIMEOUT_MS, WORKFLOWS_BASE_URL, X_PROJECT_ID, CONSUMER_ID } from './config.js';
 
 // Release project lock on shutdown
 export async function releaseProjectLock(reason = 'shutdown') {
@@ -10,7 +10,8 @@ export async function releaseProjectLock(reason = 'shutdown') {
     const authz = await getWorkflowsIdTokenHeaders();
     const headers = { 'Content-Type': 'application/json', ...contextHeaders(), ...authz };
 
-    const body = { reason, at: Date.now() };
+    // Include consumerId so the release endpoint can validate ownership
+    const body = { reason, at: Date.now(), ...(CONSUMER_ID ? { consumerId: CONSUMER_ID } : {}) };
     const maxAttempts = 3;
     let attempt = 0;
     while (attempt < maxAttempts) {
@@ -18,7 +19,7 @@ export async function releaseProjectLock(reason = 'shutdown') {
       try {
         const resp = await axios.post(url, body, { headers, timeout: 2500, validateStatus: (s) => s < 500 });
         if (resp.status >= 200 && resp.status < 300) {
-          console.log('[producer] released project lock', { projectId: X_PROJECT_ID });
+          console.log('[producer] released project lock', { projectId: X_PROJECT_ID, consumerId: CONSUMER_ID || null });
           return true;
         }
         console.warn('[producer] lock release non-2xx', { status: resp.status });

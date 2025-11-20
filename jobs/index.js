@@ -17,11 +17,14 @@ import { projectIdMiddleware } from '../workflows/projects/util.js';
 import callbacksRoutes from './callbacks/index.js'
 import callbacksProxyRoutes from '../workflows/callbacks/index.js'
 import producerRoutes from './producer/index.js'
+import projectsRouter from '../workflows/projects/index.js'
 
 const router = express.Router();
 router.use(express.json());
 router.use(workflowsUserInject);
 router.use(projectIdMiddleware);
+
+router.use('/projects', projectsRouter);
 
 // Mount individual job routes
 router.use('/business-report', businessReportWorkerRoutes);

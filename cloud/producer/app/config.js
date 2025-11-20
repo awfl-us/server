@@ -8,7 +8,7 @@ export const SERVICE_AUTH_TOKEN = process.env.SERVICE_AUTH_TOKEN || '';
 // Optional downscoped GCS access token to pass to consumer (temporary until minting is wired)
 export const GCS_TOKEN_ENV = process.env.GCS_TOKEN || process.env.X_GCS_TOKEN || '';
 export const GCS_BUCKET = process.env.GCS_BUCKET || '';
-export const GCS_PREFIX_TEMPLATE = process.env.GCS_PREFIX_TEMPLATE || '{userId}/{projectId}/{workspaceId}/{sessionId}/';
+export const GCS_PREFIX_TEMPLATE = process.env.GCS_PREFIX_TEMPLATE || '{userId}/{projectId}/{sessionId}/';
 export const GCS_DEBUG = /^1|true|yes$/i.test(String(process.env.GCS_DEBUG || ''));
 export const SHUTDOWN_TIMEOUT_MS = Number(process.env.SHUTDOWN_TIMEOUT_MS || 4000);
 
