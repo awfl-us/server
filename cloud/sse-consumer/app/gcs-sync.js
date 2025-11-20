@@ -3,7 +3,7 @@ import fsp from 'fs/promises';
 import path from 'path';
 import axios from 'axios';
 import { GoogleAuth, OAuth2Client } from 'google-auth-library';
-import { GCS_API_BASE, GCS_DOWNLOAD_CONCURRENCY } from './config.js';
+import { GCS_API_BASE, GCS_DOWNLOAD_CONCURRENCY, GCS_UPLOAD_CONCURRENCY, GCS_ENABLE_UPLOAD } from './config.js';
 import { resolveWithin } from './storage.js';
 
 const GCS_DEBUG = /^1|true|yes$/i.test(String(process.env.GCS_DEBUG || ''));
@@ -162,7 +162,7 @@ async function downloadObject({ bucket, objectName, destPath, headers }) {
   });
   if (resp.status === 404) {
     dlog('download 404 (skipping)', { bucket, objectName });
-    return;
+    return false;
   }
   if (resp.status !== 200) {
     if (GCS_DEBUG) {
@@ -182,6 +182,7 @@ async function downloadObject({ bucket, objectName, destPath, headers }) {
   }
   await fsp.mkdir(path.dirname(destPath), { recursive: true });
   await fsp.writeFile(destPath, resp.data);
+  return true;
 }
 
 function limitConcurrency(limit) {
@@ -200,21 +201,105 @@ function limitConcurrency(limit) {
   return run;
 }
 
+function guessContentType(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  switch (ext) {
+    case '.txt': return 'text/plain; charset=utf-8';
+    case '.md': return 'text/markdown; charset=utf-8';
+    case '.json': return 'application/json; charset=utf-8';
+    case '.js': return 'application/javascript; charset=utf-8';
+    case '.ts': return 'application/typescript; charset=utf-8';
+    case '.css': return 'text/css; charset=utf-8';
+    case '.html': case '.htm': return 'text/html; charset=utf-8';
+    case '.svg': return 'image/svg+xml';
+    case '.png': return 'image/png';
+    case '.jpg': case '.jpeg': return 'image/jpeg';
+    case '.gif': return 'image/gif';
+    case '.pdf': return 'application/pdf';
+    default: return 'application/octet-stream';
+  }
+}
+
+async function uploadObject({ bucket, objectName, filePath, headers, ifGenerationMatch }) {
+  const url = `${GCS_API_BASE.replace(/\/$/, '')}/upload/storage/v1/b/${encodeURIComponent(bucket)}/o`;
+  const params = { uploadType: 'media', name: objectName };
+  if (ifGenerationMatch !== undefined && ifGenerationMatch !== null) params.ifGenerationMatch = String(ifGenerationMatch);
+  const contentType = guessContentType(filePath);
+  const data = await fsp.readFile(filePath);
+
+  const resp = await http.post(url, data, { params, headers: { ...headers, 'Content-Type': contentType } });
+  if (resp.status !== 200) {
+    if (GCS_DEBUG) {
+      // eslint-disable-next-line no-console
+      console.warn('[consumer][gcs] upload error', {
+        url,
+        params,
+        status: resp.status,
+        respHeaders: resp?.headers,
+        respData: resp?.data,
+        reqHeaders: redactAuth(headers),
+        bucket,
+        objectName,
+      });
+    }
+    const err = new Error(`gcs_upload_http_${resp.status}`);
+    err.details = { status: resp.status, response: resp?.data };
+    throw err;
+  }
+  return resp.data; // object resource with generation, etc.
+}
+
+function normalizeManifestRecord(rec) {
+  if (rec == null) return null;
+  if (typeof rec === 'string') return { remoteGen: String(rec) };
+  const out = { ...rec };
+  if (out.remoteGen != null) out.remoteGen = String(out.remoteGen);
+  return out;
+}
+
+async function walkLocalFiles(rootDir) {
+  const results = [];
+  async function walk(dir) {
+    const entries = await fsp.readdir(dir, { withFileTypes: true });
+    for (const ent of entries) {
+      const abs = path.join(dir, ent.name);
+      const rel = path.relative(rootDir, abs);
+      if (rel === '.gcs-manifest.json') continue; // skip manifest
+      if (ent.isDirectory()) {
+        await walk(abs);
+      } else if (ent.isFile()) {
+        try {
+          const st = await fsp.stat(abs);
+          results.push({ rel, abs, stat: st });
+        } catch {}
+      }
+    }
+  }
+  await walk(rootDir);
+  return results;
+}
+
 export async function syncBucketPrefix({ bucket, prefix, workRoot, token }) {
   if (!bucket) throw new Error('missing_bucket');
   const authz = await getAuthHeader(token);
 
   // When debugging, verify effective permissions of the current Authorization header
   if (GCS_DEBUG && authz?.Authorization) {
-    await debugTestPermissions({ bucket, permissions: ['storage.objects.list'], headers: authz });
+    const perms = ['storage.objects.list'];
+    if (GCS_ENABLE_UPLOAD) perms.push('storage.objects.create');
+    await debugTestPermissions({ bucket, permissions: perms, headers: authz });
   }
 
   const manifestPath = path.join(workRoot, '.gcs-manifest.json');
   const manifest = await readManifest(manifestPath);
 
+  // Index current remote objects
   const all = await listAllObjects({ bucket, prefix, headers: authz });
-  const toDownload = [];
+  const remoteIndex = Object.create(null);
+  for (const it of all) { if (it?.name) remoteIndex[it.name] = it; }
 
+  // Determine downloads (remote -> local) based on generation
+  const toDownload = [];
   for (const it of all) {
     const name = it?.name || '';
     if (!name || name.endsWith('/')) continue; // skip folder markers
@@ -222,25 +307,97 @@ export async function syncBucketPrefix({ bucket, prefix, workRoot, token }) {
     rel = rel.replace(/^\/+/, '');
     if (!rel) continue;
 
-    const current = manifest[name];
-    const want = it?.etag || it?.generation || '';
-    if (current && want && (current === want || String(current) === String(want))) continue; // up-to-date
+    const current = normalizeManifestRecord(manifest[name]);
+    const wantGen = String(it?.generation || '');
+    if (current?.remoteGen && current.remoteGen === wantGen) continue; // up-to-date
 
     const dest = resolveWithin(workRoot, rel);
-    toDownload.push({ name, dest, want });
+    toDownload.push({ name, dest, wantGen });
   }
 
-  const run = limitConcurrency(Math.max(1, GCS_DOWNLOAD_CONCURRENCY));
-  let completed = 0;
+  const runDl = limitConcurrency(Math.max(1, GCS_DOWNLOAD_CONCURRENCY));
+  let downloaded = 0;
   for (const file of toDownload) {
     // eslint-disable-next-line no-await-in-loop
-    await run(async () => {
-      await downloadObject({ bucket, objectName: file.name, destPath: file.dest, headers: authz });
-      manifest[file.name] = file.want;
-      completed++;
+    await runDl(async () => {
+      const ok = await downloadObject({ bucket, objectName: file.name, destPath: file.dest, headers: authz });
+      if (ok) {
+        try {
+          const st = await fsp.stat(file.dest);
+          manifest[file.name] = { remoteGen: file.wantGen, localMtime: st.mtimeMs, localSize: st.size };
+        } catch {
+          manifest[file.name] = { remoteGen: file.wantGen };
+        }
+        downloaded++;
+      }
     });
   }
 
+  // Determine uploads (local -> remote) if enabled
+  let uploaded = 0;
+  let conflicts = 0;
+  if (GCS_ENABLE_UPLOAD) {
+    const locals = await walkLocalFiles(workRoot);
+    const runUl = limitConcurrency(Math.max(1, GCS_UPLOAD_CONCURRENCY));
+
+    for (const lf of locals) {
+      const rel = lf.rel.replace(/^\\+/, '').replace(/^\/+/, '');
+      if (!rel) continue;
+      const objectName = `${prefix}${rel}`;
+      const prev = normalizeManifestRecord(manifest[objectName]);
+      const remote = remoteIndex[objectName];
+
+      // Determine if local file changed since last sync
+      const changedLocally = !(prev && prev.localMtime === lf.stat.mtimeMs && prev.localSize === lf.stat.size);
+      if (!changedLocally) continue;
+
+      // Conflict detection: if remote exists and its generation differs from what we recorded, skip
+      if (remote && prev && prev.remoteGen && String(remote.generation) !== String(prev.remoteGen)) {
+        conflicts++;
+        if (GCS_DEBUG) {
+          // eslint-disable-next-line no-console
+          console.warn('[consumer][gcs] skip upload due to remote conflict', { objectName, remoteGen: String(remote.generation), prevRemoteGen: String(prev.remoteGen) });
+        }
+        continue;
+      }
+
+      // If manifest missing and remote exists, avoid overwriting unknown remote state
+      if (!prev && remote) {
+        conflicts++;
+        if (GCS_DEBUG) {
+          // eslint-disable-next-line no-console
+          console.warn('[consumer][gcs] skip upload of untracked file; remote exists', { objectName, remoteGen: String(remote.generation) });
+        }
+        continue;
+      }
+
+      // Prepare conditional upload
+      let ifMatch = undefined;
+      if (remote && prev && prev.remoteGen) {
+        ifMatch = String(prev.remoteGen);
+      } else if (!remote) {
+        // Only create if object does not exist
+        ifMatch = '0';
+      }
+
+      // eslint-disable-next-line no-await-in-loop
+      await runUl(async () => {
+        try {
+          const obj = await uploadObject({ bucket, objectName, filePath: lf.abs, headers: authz, ifGenerationMatch: ifMatch });
+          manifest[objectName] = { remoteGen: String(obj?.generation || ''), localMtime: lf.stat.mtimeMs, localSize: lf.stat.size };
+          uploaded++;
+        } catch (err) {
+          if (GCS_DEBUG) {
+            // eslint-disable-next-line no-console
+            console.warn('[consumer][gcs] upload failed', { objectName, message: err?.message, details: err?.details });
+          }
+          // Permission denied is common when provided token is read-only; count as conflict to surface
+          if (String(err?.message || '').includes('gcs_upload_http_403')) conflicts++;
+        }
+      });
+    }
+  }
+
   await writeManifest(manifestPath, manifest);
-  return { scanned: all.length, downloaded: toDownload.length, updated: completed };
+  return { scannedRemote: all.length, downloaded, uploaded, conflicts };
 }

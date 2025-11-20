@@ -28,7 +28,10 @@ router.get('/status/:execId', async (req, res) => {
 });
 
 // GET /workflows/exec/status/latest/:sessionId?limit=5
-// Returns the latest N exec registrations for a session, each with its current status (or UNKNOWN if not recorded)
+// Returns the latest N exec registrations for a session, each with its current status.
+// Note: Sub-workflow executions without a defined status are skipped so that the returned list
+// contains only "real" statuses in created-desc order. When limit=1, the single item is the
+// most recent defined status for the session.
 router.get('/status/latest/:sessionId', async (req, res) => {
   try {
     const userId = await getUserIdFromReq(req);
@@ -42,17 +45,21 @@ router.get('/status/latest/:sessionId', async (req, res) => {
     const limitRaw = req.query?.limit;
     let limit = Number(limitRaw);
     if (!Number.isFinite(limit) || limit <= 0) limit = 5;
-    if (limit > 50) limit = 50; // defensive cap
+    if (limit > 50) limit = 50; // defensive cap on returned items
 
     const db = getFirestore();
     const regsCollection = projectScopedCollectionPath(userId, req.projectId, COLLECTIONS.regs);
     const statusesCollection = projectScopedCollectionPath(userId, req.projectId, COLLECTIONS.statuses);
 
+    // Search window: fetch more recent registrations than strictly needed so we can
+    // skip sub-workflow execs that don't carry a status. Cap to avoid excessive reads.
+    const searchWindow = Math.min(50, Math.max(limit * 5, limit));
+
     const regsSnap = await db
       .collection(regsCollection)
       .where('sessionId', '==', String(sessionId))
       .orderBy('created', 'desc')
-      .limit(limit)
+      .limit(searchWindow)
       .get();
 
     if (regsSnap.empty) {
@@ -74,16 +81,22 @@ router.get('/status/latest/:sessionId', async (req, res) => {
       items.map(async (it) => {
         try {
           const snap = await db.collection(statusesCollection).doc(it.execId).get();
-          if (!snap.exists) return { ...it, /*status: 'UNKNOWN'*/ };
+          if (!snap.exists) return { ...it };
           const data = snap.data() || {};
           return { ...it, ...data };
         } catch (e) {
-          return { ...it, status: 'UNKNOWN', error: `status-fetch-failed: ${e?.message || String(e)}` };
+          return { ...it, error: `status-fetch-failed: ${e?.message || String(e)}` };
         }
       })
     );
 
-    return res.status(200).json({ sessionId, limit, items: results });
+    // Keep only entries with a concrete, defined status (skip sub-workflow execs with no status)
+    const withStatus = results.filter(r => typeof r.status === 'string' && r.status.trim() !== '');
+
+    // Return up to the requested limit
+    const trimmed = withStatus.slice(0, limit);
+
+    return res.status(200).json({ sessionId, limit, items: trimmed });
   } catch (err) {
     console.error('Error getting latest exec statuses:', err);
     return res.status(500).json({ error: 'Failed to get latest exec statuses', details: err?.message || String(err) });

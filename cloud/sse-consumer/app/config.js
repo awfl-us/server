@@ -23,6 +23,10 @@ export const WORK_PREFIX_TEMPLATE = process.env.WORK_PREFIX_TEMPLATE || '{userId
 export const GCS_API_BASE = process.env.GCS_API_BASE || 'https://www.googleapis.com';
 // Max number of parallel downloads when syncing
 export const GCS_DOWNLOAD_CONCURRENCY = Number(process.env.GCS_DOWNLOAD_CONCURRENCY || 8);
+// Max number of parallel uploads when syncing
+export const GCS_UPLOAD_CONCURRENCY = Number(process.env.GCS_UPLOAD_CONCURRENCY || 4);
+// Enable pushing modified local files back to GCS (default: enabled)
+export const GCS_ENABLE_UPLOAD = ['1','true','yes'].includes(String(process.env.GCS_ENABLE_UPLOAD || '1').toLowerCase());
 // Bucket to sync from (producer-provided token should be scoped to this bucket/prefix)
 export const GCS_BUCKET = process.env.GCS_BUCKET || '';
 // Prefix template for objects within the bucket to mirror into the work root

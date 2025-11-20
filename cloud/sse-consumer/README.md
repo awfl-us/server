@@ -48,6 +48,7 @@ Endpoints
 - Behavior:
   - Executes the tool_call in each input line and writes the result line immediately. No outbound callbacks.
   - Sends periodic {"type":"ping"} lines to keep the connection alive.
+  - When GCS sync is configured, emits gcs_sync stats lines summarizing sync work during initial/periodic/shutdown syncs.
 - Auth inbound: SERVICE_AUTH_TOKEN (dev) or Cloud Run IAM. No outbound auth needed.
 
 Event schema (input)
@@ -95,6 +96,16 @@ Storage and working directory
   - Example: WORK_PREFIX_TEMPLATE="{projectId}/{workspaceId}/{userId}" with projectId=p-1, workspaceId=w-2, userId=u-9 => /mnt/work/p-1/w-2/u-9
 - Safety: All file paths used by tools must be relative; absolute paths and parent traversal are rejected. Paths are resolved and enforced to stay within the per-request working directory.
 
+GCS sync (download + upload)
+- When provided a GCS bucket/prefix and a downscoped token via X-Gcs-Token, the consumer mirrors objects under that prefix into the per-request work root and can push local changes back to GCS.
+- Uploads are enabled by default (GCS_ENABLE_UPLOAD=1). Set to 0 to disable uploads.
+- Change detection is manifest-based: a .gcs-manifest.json file in the work root tracks each object’s remote generation, local size, and mtime.
+- Conflict protection: uploads use conditional ifGenerationMatch to avoid overwriting remote changes.
+  - ifGenerationMatch=prev.remoteGen when replacing an existing object.
+  - ifGenerationMatch=0 when creating a new object.
+- Sync lifecycle: initial sync on stream start (if SYNC_ON_START=1), periodic sync while the stream is open, and a final sync on shutdown.
+- The streaming endpoint emits gcs_sync stats lines: { scannedRemote, downloaded, uploaded, conflicts }.
+
 Environment variables
 - SERVICE_AUTH_TOKEN: inbound bearer token (dev only). If unset, auth is skipped locally; prefer IAM in Cloud Run.
 - WORK_ROOT: directory mount point (default /mnt/work).
@@ -106,6 +117,13 @@ Environment variables
 - RUN_COMMAND_TIMEOUT_SECONDS: command timeout (default 120).
 - READ_FILE_MAX_BYTES: max bytes returned by READ_FILE (default 200000).
 - OUTPUT_MAX_BYTES: max combined stdout/stderr captured by RUN_COMMAND (default 50000).
+- GCS_BUCKET: Cloud Storage bucket used for sync (when present and token provided).
+- GCS_PREFIX_TEMPLATE: object prefix template for sync (supports {projectId},{workspaceId},{sessionId},{userId}).
+- GCS_ENABLE_UPLOAD: enable consumer uploads to GCS (default 1).
+- GCS_UPLOAD_CONCURRENCY: parallel uploads (default 4).
+- SYNC_ON_START: run an initial sync on stream start (default 1).
+- SYNC_INTERVAL_MS: periodic sync interval in milliseconds (default 15000).
+- GCS_DEBUG: set to 1 to enable verbose sync and permission diagnostics.
 
 Cloud Run deployment notes
 - Deploy private; use IAM for inbound auth. Example flags (adjust for your environment):

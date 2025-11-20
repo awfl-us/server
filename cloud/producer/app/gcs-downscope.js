@@ -7,10 +7,14 @@ try { GAL_VERSION = require('google-auth-library/package.json')?.version || 'unk
 const GCS_DEBUG = /^1|true|yes$/i.test(String(process.env.GCS_DEBUG || ''));
 function dlog(...args) { if (GCS_DEBUG) console.log('[producer][gcs]', ...args); }
 
-// Base auth client with read-only Storage scope
-const auth = new GoogleAuth({
-  scopes: ['https://www.googleapis.com/auth/devstorage.read_only'],
-});
+// Whether upload back to GCS is enabled; if so, we must request wider source scopes and permissions
+const GCS_ENABLE_UPLOAD = ['1','true','yes'].includes(String(process.env.GCS_ENABLE_UPLOAD || '1').toLowerCase());
+
+// Base auth client. If uploads are enabled, request read_write; otherwise read_only
+const STORAGE_SCOPE = GCS_ENABLE_UPLOAD
+  ? 'https://www.googleapis.com/auth/devstorage.read_write'
+  : 'https://www.googleapis.com/auth/devstorage.read_only';
+const auth = new GoogleAuth({ scopes: [STORAGE_SCOPE] });
 
 // Simple in-process cache of tokens per bucket/prefix
 // Value: { token: string, expiresAt: number }
@@ -22,7 +26,7 @@ function cacheKey(bucket, prefix) {
 
 function normalizePrefix(raw) {
   const s = String(raw || '');
-  if (!s) return s; // empty prefix is allowed
+  if (!s) return s; // empty prefix is allowed only if explicitly enabled via ALLOW_BUCKET_WIDE_CAB
   return s.endsWith('/') ? s : `${s}/`;
 }
 
@@ -30,18 +34,28 @@ function buildCab({ bucket, prefix, permissionMode = process.env.GCS_CAB_PERMISS
   if (!bucket) throw new Error('bucket is required');
   const availableResource = `//storage.googleapis.com/projects/_/buckets/${bucket}`;
   const normalizedPrefix = normalizePrefix(prefix);
+
+  // By default, disallow bucket-wide downscope unless explicitly allowed
+  if (!normalizedPrefix && !/^1|true|yes$/i.test(String(process.env.ALLOW_BUCKET_WIDE_CAB || ''))) {
+    const err = new Error('empty_prefix_not_allowed');
+    err.details = { message: 'Refusing to mint bucket-wide downscoped token. Provide a non-empty prefix or set ALLOW_BUCKET_WIDE_CAB=1 to override.' };
+    throw err;
+  }
+
   const expression = `resource.name.startsWith('projects/_/buckets/${bucket}/objects/${normalizedPrefix}')`;
 
   let availablePermissions;
   if (String(permissionMode).toLowerCase() === 'explicit') {
     // Explicit permissions variant
     availablePermissions = ['storage.objects.get', 'storage.objects.list'];
+    if (GCS_ENABLE_UPLOAD) availablePermissions.push('storage.objects.create');
   } else {
-    // Role alias variant (broadest compatibility)
+    // Role alias variant
     availablePermissions = ['inRole:roles/storage.objectViewer'];
+    // Note: If uploads are enabled, explicit mode is recommended so we can add 'storage.objects.create'.
   }
 
-  // Build the Access Boundary rules (v9-compatible shape)
+  // Build the Access Boundary rules
   const accessBoundary = {
     accessBoundaryRules: [
       {
@@ -56,44 +70,14 @@ function buildCab({ bucket, prefix, permissionMode = process.env.GCS_CAB_PERMISS
   if (!Array.isArray(rules) || rules.length === 0) {
     throw new Error('invalid_access_boundary');
   }
-  dlog('built CAB', { availableResource, expression, availablePermissions, permissionMode: String(permissionMode).toLowerCase(), normalizedPrefix });
+  dlog('built CAB', { availableResource, expression, availablePermissions, permissionMode: String(permissionMode).toLowerCase(), normalizedPrefix, STORAGE_SCOPE });
   return { accessBoundary };
 }
 
 async function constructDownscopedClient(sourceClient, accessBoundary) {
-  let downscopedClient;
-  let variant = '';
-  const errors = [];
-
-  try {
-    downscopedClient = new DownscopedClient(sourceClient, { accessBoundary });
-    variant = 'two_arg_accessBoundary';
-  } catch (e1) {
-    errors.push(`two_arg_accessBoundary:${e1?.message || e1}`);
-    try {
-      downscopedClient = new DownscopedClient({ sourceClient, accessBoundary });
-      variant = 'opts_accessBoundary';
-    } catch (e2) {
-      errors.push(`opts_accessBoundary:${e2?.message || e2}`);
-      try {
-        downscopedClient = new DownscopedClient({ sourceClient, credentialAccessBoundary: accessBoundary });
-        variant = 'opts_credentialAccessBoundary';
-      } catch (e3) {
-        errors.push(`opts_credentialAccessBoundary:${e3?.message || e3}`);
-        try {
-          downscopedClient = new DownscopedClient(sourceClient, { credentialAccessBoundary: accessBoundary });
-          variant = 'two_arg_credentialAccessBoundary';
-        } catch (e4) {
-          errors.push(`two_arg_credentialAccessBoundary:${e4?.message || e4}`);
-          const err = new Error('DownscopedClient_ctor_failed');
-          err.details = { GAL_VERSION, errors };
-          throw err;
-        }
-      }
-    }
-  }
-
-  return { downscopedClient, variant };
+  // Use canonical constructor form supported by current google-auth-library
+  const downscopedClient = new DownscopedClient({ sourceClient, accessBoundary });
+  return { downscopedClient, variant: 'opts_accessBoundary' };
 }
 
 async function mintTokenOnce({ bucket, prefix, permissionMode }) {
@@ -109,46 +93,23 @@ async function mintTokenOnce({ bucket, prefix, permissionMode }) {
       err.details = { GAL_VERSION, variant, permissionMode };
       throw err;
     }
-    dlog('minted downscoped', { GAL_VERSION, variant, permissionMode, tokenPreview: token.slice(0, 8) + '…' });
-
-    const ttlMs = 10 * 60 * 1000; // 10 minutes conservative TTL
-    return { token, expiresAt: Date.now() + ttlMs };
+    // Prefer actual expiry when provided by the library
+    const expiresAt = typeof res === 'object' && res?.expiry_date ? res.expiry_date : Date.now() + 10 * 60 * 1000;
+    dlog('minted downscoped', { GAL_VERSION, variant, permissionMode, tokenPreview: token.slice(0, 8) + '…', expiresAt, STORAGE_SCOPE, GCS_ENABLE_UPLOAD });
+    return { token, expiresAt };
   } catch (e) {
     const cause = e?.response?.data || e?.stack || String(e);
     const err = new Error(e?.message || 'mint_failed');
-    err.details = { GAL_VERSION, variant, permissionMode, cause };
+    err.details = { GAL_VERSION, permissionMode, cause, STORAGE_SCOPE, GCS_ENABLE_UPLOAD };
     throw err;
   }
 }
 
 async function mintToken({ bucket, prefix }) {
   if (!bucket) throw new Error('bucket is required');
-
-  // Default to explicit unless overridden via env
-  const envMode = String(process.env.GCS_CAB_PERMISSION_MODE || 'explicit').toLowerCase();
-  if (envMode === 'explicit') {
-    return await mintTokenOnce({ bucket, prefix, permissionMode: 'explicit' });
-  }
-
-  // If explicitly set to role, try role-based first (most broadly compatible)
-  try {
-    return await mintTokenOnce({ bucket, prefix, permissionMode: 'role' });
-  } catch (e1) {
-    dlog('role-based CAB mint failed; will try explicit perms', e1?.details || e1?.message || e1);
-    const causeErr = (e1?.details?.cause && JSON.stringify(e1.details.cause)) || '';
-    const isInvalidReq = String(e1?.message || '').includes('invalid_request') || causeErr.includes('invalid_request');
-    // Retry only if STS says invalid_request; otherwise bubble up
-    if (!isInvalidReq) throw e1;
-    // Retry with explicit permissions
-    try {
-      return await mintTokenOnce({ bucket, prefix, permissionMode: 'explicit' });
-    } catch (e2) {
-      // Bubble up second failure with both attempts info
-      const err = new Error('downscope_mint_failed_after_retries');
-      err.details = { first: e1?.details || String(e1), second: e2?.details || String(e2) };
-      throw err;
-    }
-  }
+  // Use selected mode directly; no cross-mode retries
+  const mode = String(process.env.GCS_CAB_PERMISSION_MODE || 'explicit').toLowerCase();
+  return await mintTokenOnce({ bucket, prefix, permissionMode: mode });
 }
 
 export async function getDownscopedToken({ bucket, prefix, force = false }) {
