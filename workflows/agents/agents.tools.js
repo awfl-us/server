@@ -1,5 +1,5 @@
 import express from 'express';
-import { db, projectScopedCollectionPath, normalizeToolsInput, uniqueMerge, removeFromList, DEFAULT_TOOLS } from './common.js';
+import { db, userScopedCollectionPath, normalizeToolsInput, uniqueMerge, removeFromList, DEFAULT_TOOLS } from './common.js';
 
 const router = express.Router();
 
@@ -12,7 +12,7 @@ router.post('/:id/tools', async (req, res) => {
     const toAdd = normalizeToolsInput(req.body?.tools);
     if (!toAdd.length) return res.status(400).json({ error: 'tools is required (string or array of strings)' });
 
-    const docRef = db.doc(projectScopedCollectionPath(userId, req.projectId, `agents/${id}`));
+    const docRef = db.doc(userScopedCollectionPath(userId, `agents/${id}`));
     const snap = await docRef.get();
     if (!snap.exists) return res.status(404).json({ error: 'Agent not found' });
 
@@ -36,7 +36,7 @@ router.delete('/:id/tools', async (req, res) => {
     const toRemove = normalizeToolsInput(req.body?.tools);
     if (!toRemove.length) return res.status(400).json({ error: 'tools is required (string or array of strings)' });
 
-    const docRef = db.doc(projectScopedCollectionPath(userId, req.projectId, `agents/${id}`));
+    const docRef = db.doc(userScopedCollectionPath(userId, `agents/${id}`));
     const snap = await docRef.get();
     if (!snap.exists) return res.status(404).json({ error: 'Agent not found' });
 
@@ -62,7 +62,7 @@ router.get('/:id/tools', async (req, res) => {
       return res.status(200).json({ tools: DEFAULT_TOOLS });
     }
 
-    const docRef = db.doc(projectScopedCollectionPath(userId, req.projectId, `agents/${id}`));
+    const docRef = db.doc(userScopedCollectionPath(userId, `agents/${id}`));
     const snap = await docRef.get();
     if (!snap.exists) return res.status(404).json({ error: 'Agent not found' });
 

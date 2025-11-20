@@ -1,5 +1,5 @@
 import { getFirestore } from 'firebase-admin/firestore';
-import { projectScopedCollectionPath } from '../utils.js';
+import { projectScopedCollectionPath, userScopedCollectionPath } from '../utils.js';
 
 // Shared Firestore handle
 export const db = getFirestore();
@@ -43,4 +43,4 @@ export function sessionMapDocPath(userId, projectId, sessionId) {
   return projectScopedCollectionPath(userId, projectId, `agentSessions/${sessionId}`);
 }
 
-export { projectScopedCollectionPath };
+export { userScopedCollectionPath };

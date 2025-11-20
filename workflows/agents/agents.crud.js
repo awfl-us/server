@@ -1,5 +1,5 @@
 import express from 'express';
-import { db, projectScopedCollectionPath } from './common.js';
+import { db, userScopedCollectionPath } from './common.js';
 import { readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -33,7 +33,7 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'name is required' });
     }
 
-    const colRef = db.collection(projectScopedCollectionPath(userId, req.projectId, 'agents'));
+    const colRef = db.collection(userScopedCollectionPath(userId, 'agents'));
     const docRef = colRef.doc();
     const now = Date.now();
 
@@ -67,7 +67,7 @@ router.get('/', async (req, res) => {
     const { limit = 50, order = 'desc' } = req.query || {};
 
     const q = db
-      .collection(projectScopedCollectionPath(userId, req.projectId, 'agents'))
+      .collection(userScopedCollectionPath(userId, 'agents'))
       .orderBy('created', order === 'asc' ? 'asc' : 'desc')
       .limit(Math.min(Number(limit) || 50, 200));
 
@@ -90,7 +90,7 @@ router.get('/:id', async (req, res) => {
   try {
     const userId = req.userId;
     const { id } = req.params;
-    const docRef = db.doc(projectScopedCollectionPath(userId, req.projectId, `agents/${id}`));
+    const docRef = db.doc(userScopedCollectionPath(userId, `agents/${id}`));
     const snap = await docRef.get();
     if (!snap.exists) return res.status(404).json({ error: 'Agent not found' });
     const agent = snap.data();
@@ -112,7 +112,7 @@ router.patch('/:id', async (req, res) => {
 
     const has = (v) => v !== undefined && v !== null;
 
-    const docRef = db.doc(projectScopedCollectionPath(userId, req.projectId, `agents/${id}`));
+    const docRef = db.doc(userScopedCollectionPath(userId, `agents/${id}`));
     const snap = await docRef.get();
     if (!snap.exists) return res.status(404).json({ error: 'Agent not found' });
 
@@ -142,7 +142,7 @@ router.delete('/:id', async (req, res) => {
     const userId = req.userId;
     const { id } = req.params;
 
-    const docRef = db.doc(projectScopedCollectionPath(userId, req.projectId, `agents/${id}`));
+    const docRef = db.doc(userScopedCollectionPath(userId, `agents/${id}`));
     const snap = await docRef.get();
     if (!snap.exists) return res.status(404).json({ error: 'Agent not found' });
 

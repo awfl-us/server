@@ -1,5 +1,5 @@
 import express from 'express';
-import { db, projectScopedCollectionPath, sessionMapDocPath, DEFAULT_TOOLS } from './common.js';
+import { db, userScopedCollectionPath, sessionMapDocPath, DEFAULT_TOOLS } from './common.js';
 
 const router = express.Router();
 
@@ -15,7 +15,7 @@ router.put('/session/:sessionId', async (req, res) => {
     }
 
     // Validate agent exists
-    const agentRef = db.doc(projectScopedCollectionPath(userId, req.projectId, `agents/${agentId}`));
+    const agentRef = db.doc(userScopedCollectionPath(userId, `agents/${agentId}`));
     const agentSnap = await agentRef.get();
     if (!agentSnap.exists) return res.status(404).json({ error: 'Agent not found' });
 
@@ -79,7 +79,7 @@ router.get('/session/:sessionId/tools', async (req, res) => {
     if (!mapSnap.exists) return res.status(404).json({ error: 'Session not linked to an agent' });
 
     const { agentId } = mapSnap.data();
-    const agentRef = db.doc(projectScopedCollectionPath(userId, req.projectId, `agents/${agentId}`));
+    const agentRef = db.doc(userScopedCollectionPath(userId, `agents/${agentId}`));
     const agentSnap = await agentRef.get();
     if (!agentSnap.exists) return res.status(404).json({ error: 'Agent not found' });
 
