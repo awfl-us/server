@@ -75,8 +75,8 @@ export async function doRunCommand(args, cwd) {
     const { stdout, stderr } = await execAsync(cmd, opts);
     return {
       command: cmd,
-      stdout: limitOutput(stdout),
-      stderr: limitOutput(stderr),
+      output: limitOutput(stdout),
+      error: limitOutput(stderr),
       exitCode: 0,
       timeoutMs,
     };
@@ -84,8 +84,8 @@ export async function doRunCommand(args, cwd) {
     // exec throws on non-zero exit; include partial outputs
     return {
       command: cmd,
-      stdout: limitOutput(err?.stdout || ''),
-      stderr: limitOutput(err?.stderr || String(err?.message || '')),
+      output: limitOutput(err?.stdout || ''),
+      error: limitOutput(err?.stderr || String(err?.message || '')),
       exitCode: typeof err?.code === 'number' ? err.code : 1,
       timeoutMs,
     };

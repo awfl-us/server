@@ -86,7 +86,7 @@ Supported tools
   - Returns { ok: true, filepath, content, truncated }.
 - RUN_COMMAND({ command })
   - Executes via bash -lc in the working directory with timeout RUN_COMMAND_TIMEOUT_SECONDS; caps output at OUTPUT_MAX_BYTES.
-  - Returns { ok: true|false, exitCode, stdout, stderr, truncated?, timed_out? }.
+  - Returns { exitCode, output, error, timeoutMs }.
 
 Storage and working directory
 - Base mount: WORK_ROOT specifies the base mount path for sandboxed storage (default /mnt/work). For local dev, bind-mount a host folder to this path. In Cloud Run, mount a Cloud Storage bucket or other volume at this path (see below).

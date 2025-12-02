@@ -59,4 +59,19 @@ These principles are broadly applicable across projects and help avoid fragile i
 - Callbacks should carry structured fields (e.g., result and error) and remain backward-compatible; when necessary, wrap payloads or version schemas.
 - Log at high-signal points (send/receive/commit) and keep retry policy explicit and bounded for transport faults.
 
+Appendix: General, reusable learnings
+- Keep wire schemas small, explicit, and stable. Evolve them backward-compatibly and prefer clear field names (e.g., output over stdout, error over stderr) to avoid ambiguity.
+- Treat tool errors as successful protocol outcomes so cursors/offsets can advance. Return structured error payloads rather than failing transport.
+- Never interleave logs with protocol streams. Default to high-signal start/done logging; gate verbose traces behind env flags.
+- Propagate correlation identifiers (ids) end-to-end without mutation across producer, consumer, and callbacks.
+- Separate transport from business outcome: retries are for transport faults; business/tool failures are results to record.
+- Avoid overlapping background runs; isolate background activity from client-facing streams and keep it non-blocking.
+- Prefer safe, minimal defaults and feature flags. Validate configuration early and surface clear, actionable errors.
+- Enforce filesystem and subprocess guards (root scoping, timeouts, size limits) and normalize encodings/line endings.
+- Make shutdown graceful and idempotent. Clear timers/listeners and bound finalization by time.
+- Maintain cheap observability (counters/timings, health endpoints) and keep correlation consistent across logs/metrics.
+- Keep security least-privilege and explicit; avoid logging secrets; use audience-bound tokens where applicable.
+- Test for parity across local and cloud environments; document any cloud-only behaviors and gate placeholders behind flags.
+- Provide operational kill-switches (e.g., stopRequested flags) and clearly document placeholders and follow-up work when full wiring isn’t ready.
+
 These guidelines are intended to remain stable; refine cautiously and keep examples generic rather than project-specific.

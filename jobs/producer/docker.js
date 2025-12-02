@@ -98,3 +98,15 @@ export async function stopContainer(nameOrId) {
     // best-effort; ignore
   }
 }
+
+export async function waitContainer(nameOrId) {
+  // Blocks until the specified container stops; returns exit status.
+  try {
+    const { stdout } = await execFileAsync('docker', ['wait', nameOrId], { timeout: 0, maxBuffer: 10 * 1024 });
+    const code = parseInt(String(stdout || '').trim(), 10);
+    return { exited: true, exitCode: Number.isNaN(code) ? null : code };
+  } catch (e) {
+    // If the container doesn't exist or docker isn't reachable, surface a structured result.
+    return { exited: false, error: e?.message || String(e) };
+  }
+}

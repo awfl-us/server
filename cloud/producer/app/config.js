@@ -4,6 +4,7 @@
 export const WORKFLOWS_BASE_URL = process.env.WORKFLOWS_BASE_URL || '';
 export const WORKFLOWS_AUDIENCE = process.env.WORKFLOWS_AUDIENCE || WORKFLOWS_BASE_URL;
 export const CONSUMER_BASE_URL = process.env.CONSUMER_BASE_URL || '';
+export const CONSUMER_AUDIENCE = process.env.CONSUMER_AUDIENCE || CONSUMER_BASE_URL;
 export const SERVICE_AUTH_TOKEN = process.env.SERVICE_AUTH_TOKEN || '';
 // Optional downscoped GCS access token to pass to consumer (temporary until minting is wired)
 export const GCS_TOKEN_ENV = process.env.GCS_TOKEN || process.env.X_GCS_TOKEN || '';

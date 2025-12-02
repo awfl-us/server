@@ -46,6 +46,7 @@ export async function acquireConsumerLock({ userId, projectId, consumerId, lease
         acquiredAt: now,
         refreshedAt: now,
         expiresAt: now + lease,
+        runtime: null,
       };
       tx.set(ref, { consumerLock: newLock, updated: now }, { merge: true });
       return { ok: true, lock: shapeLock(newLock) };
@@ -129,4 +130,52 @@ export async function getConsumerLockStatus({ userId, projectId }) {
   const msRemaining = Math.max(0, Number(existing.expiresAt || 0) - now);
   const locked = msRemaining > 0;
   return { ok: true, locked, holder: shapeLock(existing), msRemaining };
+}
+
+// New helpers to persist and fetch runtime information bound to the consumer lock
+export async function setConsumerRuntimeInfo({ userId, projectId, consumerId, runtime }) {
+  if (!userId) throw new Error('setConsumerRuntimeInfo: userId required');
+  if (!projectId) throw new Error('setConsumerRuntimeInfo: projectId required');
+  if (!consumerId) throw new Error('setConsumerRuntimeInfo: consumerId required');
+
+  const pid = String(projectId).trim();
+  const ref = projectDoc(userId, pid);
+
+  const result = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) {
+      const err = new Error('Project not found');
+      err.code = 404;
+      throw err;
+    }
+    const data = snap.data() || {};
+    const existing = data.consumerLock || null;
+    const now = nowMs();
+
+    if (!existing || existing.consumerId !== consumerId) {
+      return { ok: false, error: 'Lock not held by this consumer' };
+    }
+
+    const updated = { ...existing, runtime, refreshedAt: now };
+    tx.set(ref, { consumerLock: updated, updated: now }, { merge: true });
+    return { ok: true, lock: shapeLock(updated), runtime: runtime || null };
+  });
+
+  return result;
+}
+
+export async function getConsumerLock({ userId, projectId }) {
+  if (!userId) throw new Error('getConsumerLock: userId required');
+  if (!projectId) throw new Error('getConsumerLock: projectId required');
+  const pid = String(projectId).trim();
+  const ref = projectDoc(userId, pid);
+  const snap = await ref.get();
+  if (!snap.exists) {
+    const err = new Error('Project not found');
+    err.code = 404;
+    throw err;
+  }
+  const data = snap.data() || {};
+  const lock = data.consumerLock || null;
+  return { ok: true, lock: lock ? { ...shapeLock(lock), runtime: lock.runtime || null } : null };
 }

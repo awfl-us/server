@@ -131,3 +131,91 @@ output "service_account_key_json" {
   value       = base64decode(google_service_account_key.dev_server.private_key)
   sensitive   = true
 }
+
+# ==============================================================
+# AWFL Producer/Consumer service accounts and minimal IAM
+# ==============================================================
+
+# Producer service account
+resource "google_service_account" "producer" {
+  account_id   = "awfl-producer"
+  display_name = "AWFL Producer Service Account"
+  depends_on   = [google_project_service.iam]
+}
+
+# Consumer service account
+resource "google_service_account" "consumer" {
+  account_id   = "awfl-consumer"
+  display_name = "AWFL Consumer Service Account"
+  depends_on   = [google_project_service.iam]
+}
+
+# Project-level logging for both SAs
+resource "google_project_iam_member" "producer_logging" {
+  project = var.project_id
+  role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${google_service_account.producer.email}"
+}
+
+resource "google_project_iam_member" "consumer_logging" {
+  project = var.project_id
+  role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${google_service_account.consumer.email}"
+}
+
+# Allow producer SA to create tokens on itself (self-impersonation)
+resource "google_service_account_iam_member" "producer_token_creator_self" {
+  service_account_id = google_service_account.producer.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_service_account.producer.email}"
+}
+
+# Minimal GCS read on the shared/project bucket for producer only
+resource "google_storage_bucket_iam_member" "producer_object_viewer" {
+  count      = var.gcs_bucket != "" ? 1 : 0
+  bucket     = var.gcs_bucket
+  role       = "roles/storage.objectViewer"
+  member     = "serviceAccount:${google_service_account.producer.email}"
+  depends_on = [google_service_account.producer]
+}
+
+# Placeholder: grant Cloud Run run.invoker on the consumer service to the producer SA
+# This is gated behind a flag and requires the service name/region to be specified.
+resource "google_cloud_run_service_iam_member" "consumer_invoker_from_producer" {
+  count    = var.enable_consumer_invoker_binding && var.consumer_service_name != "" && var.consumer_service_region != "" ? 1 : 0
+  project  = var.project_id
+  location = var.consumer_service_region
+  service  = var.consumer_service_name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.producer.email}"
+}
+
+# Outputs for SA emails
+output "producer_service_account_email" {
+  description = "Email of the AWFL Producer service account"
+  value       = google_service_account.producer.email
+}
+
+output "consumer_service_account_email" {
+  description = "Email of the AWFL Consumer service account"
+  value       = google_service_account.consumer.email
+}
+
+# Variables controlling the optional Cloud Run invoker binding
+variable "enable_consumer_invoker_binding" {
+  description = "Enable binding roles/run.invoker on the consumer Cloud Run service to the producer SA"
+  type        = bool
+  default     = false
+}
+
+variable "consumer_service_name" {
+  description = "Name of the Cloud Run Consumer service (for optional invoker binding)"
+  type        = string
+  default     = ""
+}
+
+variable "consumer_service_region" {
+  description = "Region of the Cloud Run Consumer service (for optional invoker binding)"
+  type        = string
+  default     = ""
+}
