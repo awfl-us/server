@@ -293,6 +293,15 @@ function normalizeManifestRecord(rec) {
   return out;
 }
 
+function relFromName(name, prefix) {
+  const n = String(name || '');
+  const p = String(prefix || '');
+  let rel = n.startsWith(p) ? n.slice(p.length) : n;
+  // tolerate historical double slashes after prefix
+  rel = rel.replace(/^\/+/, '');
+  return rel;
+}
+
 async function walkLocalFiles(rootDir) {
   const results = [];
   async function walk(dir) {
@@ -334,13 +343,24 @@ export async function syncBucketPrefix({ bucket, prefix, workRoot, token }) {
   const remoteIndex = Object.create(null);
   for (const it of all) { if (it?.name) remoteIndex[it.name] = it; }
 
+  // Build helper indexes to bridge historical key variants
+  const manifestByRel = Object.create(null);
+  for (const name of Object.keys(manifest)) {
+    const rel = relFromName(name, prefix);
+    if (rel) manifestByRel[rel] = name; // first write wins; stable
+  }
+  const remoteByRel = Object.create(null);
+  for (const name of Object.keys(remoteIndex)) {
+    const rel = relFromName(name, prefix);
+    if (rel && remoteByRel[rel] == null) remoteByRel[rel] = name;
+  }
+
   // Determine downloads (remote -> local) based on generation
   const toDownload = [];
   for (const it of all) {
     const name = it?.name || '';
     if (!name || name.endsWith('/')) continue; // skip folder markers
-    let rel = name.startsWith(prefix) ? name.slice(prefix.length) : name;
-    rel = rel.replace(/^\/+/, '');
+    const rel = relFromName(name, prefix);
     if (!rel) continue;
 
     const current = normalizeManifestRecord(manifest[name]);
@@ -379,9 +399,13 @@ export async function syncBucketPrefix({ bucket, prefix, workRoot, token }) {
     for (const lf of locals) {
       const rel = lf.rel.replace(/^\\+/, '').replace(/^\/+/, '');
       if (!rel) continue;
-      const objectName = `${prefix}${rel}`;
-      const prev = normalizeManifestRecord(manifest[objectName]);
-      const remote = remoteIndex[objectName];
+
+      // Prefer existing remote/manifest mapping for this rel to avoid // vs / key drift
+      const mappedName = manifestByRel[rel] ?? remoteByRel[rel];
+      const objectName = mappedName || `${prefix}${rel}`;
+
+      const prev = normalizeManifestRecord(manifest[objectName] || (mappedName ? manifest[mappedName] : null));
+      const remote = remoteIndex[objectName] || (mappedName ? remoteIndex[mappedName] : undefined);
 
       // Determine if local file changed since last sync
       const changedLocally = !(prev && prev.localMtime === lf.stat.mtimeMs && prev.localSize === lf.stat.size);

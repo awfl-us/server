@@ -58,7 +58,7 @@ function buildCab({ bucket, prefix, permissionMode = process.env.GCS_CAB_PERMISS
 
   // Rule A: object-level permissions constrained to prefix
   const availablePermissions = [map.viewer];
-  if (wantUpload) availablePermissions.push(map.creator);
+  if (wantUpload) availablePermissions.push(map.creator, map.deleter); // allow create + overwrite (delete)
   const accessBoundaryRules = [
     {
       availableResource,

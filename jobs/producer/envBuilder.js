@@ -98,6 +98,8 @@ export function buildLocalConsumerEnv({
     { name: 'TOPIC', value: topic },
     { name: 'SUBSCRIPTION', value: subReq },
     { name: 'REPLY_CHANNEL', value: 'resp' },
+    { name: 'GCS_TRACE', value: '0' },
+    { name: 'GCS_DEBUG', value: '0' }
   ];
   return env;
 }
