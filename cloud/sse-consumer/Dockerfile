@@ -22,8 +22,11 @@ RUN apt-get update \
 
 # Install deps separately for better layer caching. Prefer npm ci with lockfile.
 # Copies only package manifests so dependency layer is reused when app code changes.
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+# Use package*.json so build does not fail when package-lock.json is absent.
+COPY package*.json ./
+# If a lockfile exists, use npm ci for reproducible installs; otherwise fall back to npm install.
+RUN if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit=dev; fi \
+    && npm cache clean --force
 
 # App sources
 COPY app ./app
