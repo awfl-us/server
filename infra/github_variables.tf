@@ -33,13 +33,17 @@ resource "local_file" "actions_variables" {
     CLOUD_RUN_RUNTIME_SA   = local.default_compute_sa
     CLOUD_RUN_API_SERVICE  = "api"
     CLOUD_RUN_JOBS_SERVICE = "jobs"
-    # Include service account emails for Producer and Consumer Jobs
-    PRODUCER_SA_EMAIL      = google_service_account.producer.email
-    CONSUMER_SA_EMAIL      = google_service_account.consumer.email
-    # Include the shared Pub/Sub topic used for req/resp channels
-    PUBSUB_TOPIC           = google_pubsub_topic.shared.name
+
+    # Service account emails for Producer and Consumer Jobs
+    # deploy-cloud-run.yml expects *_JOB_SA_EMAIL (and falls back to CLOUD_RUN_RUNTIME_SA)
+    PRODUCER_JOB_SA_EMAIL = google_service_account.producer.email
+    CONSUMER_JOB_SA_EMAIL = google_service_account.consumer.email
+
+    # Shared Pub/Sub topic used for req/resp channels
+    PUBSUB_TOPIC = google_pubsub_topic.shared.name
+
     # Use Cloud Run Jobs service URL when available; otherwise provide a safe placeholder
-    WORKFLOWS_BASE_URL     = var.cloud_run_services_exist ? data.google_cloud_run_service.jobs[0].status[0].url : "https://jobs.${var.root_domain}"
+    WORKFLOWS_BASE_URL = var.cloud_run_services_exist ? data.google_cloud_run_service.jobs[0].status[0].url : "https://jobs.${var.root_domain}"
   })
   depends_on = [
     google_iam_workload_identity_pool_provider.github,

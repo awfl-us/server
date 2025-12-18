@@ -23,6 +23,9 @@ jobs:
       CLOUD_RUN_JOBS_SERVICE: ${{ vars.CLOUD_RUN_JOBS_SERVICE }}
       # Pub/Sub topic (stable per env) used by producer/consumer
       PUBSUB_TOPIC: ${{ vars.PUBSUB_TOPIC }}
+      # Optional stable Job names. If omitted, Jobs service/orchestrator can generate per-run/random job ids.
+      PRODUCER_CLOUD_RUN_JOB_NAME: ${{ vars.PRODUCER_CLOUD_RUN_JOB_NAME }}
+      CONSUMER_CLOUD_RUN_JOB_NAME: ${{ vars.CONSUMER_CLOUD_RUN_JOB_NAME }}
       # Disable any gcloud interactive prompts in CI
       CLOUDSDK_CORE_DISABLE_PROMPTS: '1'
       CLOUDSDK_COMPONENT_MANAGER_DISABLE_UPDATE_CHECK: '1'
@@ -155,17 +158,18 @@ jobs:
           docker push "${CONSUMER_IMAGE_URI}"
 
       # Create/replace Producer Cloud Run Job (no sidecar)
+      # If PRODUCER_CLOUD_RUN_JOB_NAME is omitted, skip. Orchestrator can generate per-run/random job ids.
       - name: Create/replace Producer Cloud Run Job (no sidecar)
+        if: ${{ env.PRODUCER_CLOUD_RUN_JOB_NAME != '' }}
         shell: bash
         env:
-          PRODUCER_CLOUD_RUN_JOB_NAME: ${{ vars.PRODUCER_CLOUD_RUN_JOB_NAME }}
           PRODUCER_IMG: ${{ steps.producer_image.outputs.PRODUCER_IMAGE_URI }}
           PRODUCER_JOB_SA_EMAIL: ${{ vars.PRODUCER_JOB_SA_EMAIL }}
           CLOUD_RUN_RUNTIME_SA: ${{ env.CLOUD_RUN_RUNTIME_SA }}
         run: |
           set -euo pipefail
-          : "${PRODUCER_CLOUD_RUN_JOB_NAME?Set repo var PRODUCER_CLOUD_RUN_JOB_NAME}"
-          : "${PRODUCER_IMG?missing}"
+          : "${PRODUCER_IMG:?missing}"
+          : "${PUBSUB_TOPIC:?Set repo var PUBSUB_TOPIC}"
           SA_EMAIL="${PRODUCER_JOB_SA_EMAIL:-$CLOUD_RUN_RUNTIME_SA}"
 
           sed -e "s|__JOB_NAME__|${PRODUCER_CLOUD_RUN_JOB_NAME}|g" \
@@ -177,17 +181,18 @@ jobs:
           gcloud run jobs replace /tmp/producer.job.rendered.yaml --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}"
 
       # Create/replace Consumer Cloud Run Job (Pub/Sub only)
+      # If CONSUMER_CLOUD_RUN_JOB_NAME is omitted, skip. Orchestrator can generate per-run/random job ids.
       - name: Create/replace Consumer Cloud Run Job (Pub/Sub only)
+        if: ${{ env.CONSUMER_CLOUD_RUN_JOB_NAME != '' }}
         shell: bash
         env:
-          CONSUMER_CLOUD_RUN_JOB_NAME: ${{ vars.CONSUMER_CLOUD_RUN_JOB_NAME }}
           CONSUMER_IMG: ${{ steps.consumer_image.outputs.CONSUMER_IMAGE_URI }}
           CONSUMER_JOB_SA_EMAIL: ${{ vars.CONSUMER_JOB_SA_EMAIL }}
           CLOUD_RUN_RUNTIME_SA: ${{ env.CLOUD_RUN_RUNTIME_SA }}
         run: |
           set -euo pipefail
-          : "${CONSUMER_CLOUD_RUN_JOB_NAME?Set repo var CONSUMER_CLOUD_RUN_JOB_NAME}"
-          : "${CONSUMER_IMG?missing}"
+          : "${CONSUMER_IMG:?missing}"
+          : "${PUBSUB_TOPIC:?Set repo var PUBSUB_TOPIC}"
           SA_EMAIL="${CONSUMER_JOB_SA_EMAIL:-$CLOUD_RUN_RUNTIME_SA}"
 
           sed -e "s|__JOB_NAME__|${CONSUMER_CLOUD_RUN_JOB_NAME}|g" \
@@ -229,10 +234,10 @@ jobs:
             --service-account="${CLOUD_RUN_RUNTIME_SA}" \
             --no-allow-unauthenticated \
             --timeout=3600 \
-            --set-env-vars="NODE_ENV=production,SERVICE_TARGET=start:jobs,GCP_PROJECT=${GCP_PROJECT_ID},ALLOW_SKIP_AUTH=0,WORKFLOWS_BASE_URL=${WORKFLOWS_BASE_URL},PRODUCER_CLOUD_RUN_JOB_NAME=${PRODUCER_CLOUD_RUN_JOB_NAME},CONSUMER_CLOUD_RUN_JOB_NAME=${{ vars.CONSUMER_CLOUD_RUN_JOB_NAME }},CLOUD_RUN_LOCATION=${GCP_REGION}" \
+            --set-env-vars="NODE_ENV=production,SERVICE_TARGET=start:jobs,GCP_PROJECT=${GCP_PROJECT_ID},ALLOW_SKIP_AUTH=0,WORKFLOWS_BASE_URL=${WORKFLOWS_BASE_URL},CLOUD_RUN_LOCATION=${GCP_REGION}" \
             ${{ steps.secrets.outputs.SECRET_FLAGS }}
 
 # Notes:
-# - Producer and Consumer both run as Cloud Run Jobs with their own service accounts.
+# - Producer and Consumer can run as Cloud Run Jobs with their own service accounts.
 # - Communication is Pub/Sub-only; no HTTP sidecar or direct service-to-service calls.
-# - The Jobs service orchestrates per-run ephemeral Pub/Sub subscriptions and triggers both Jobs with per-run env overrides.
+# - The Jobs service orchestrates per-run ephemeral Pub/Sub subscriptions and can trigger Jobs with per-run env overrides.
