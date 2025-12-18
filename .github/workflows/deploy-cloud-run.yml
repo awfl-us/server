@@ -64,7 +64,7 @@ jobs:
           set -euo pipefail
           gcloud components install beta --quiet
           # Sanity check to ensure beta is available and suppress any prompts
-          gcloud --quiet beta --version >/dev/null || true
+          gcloud --quiet beta --version > /dev/null || true
 
       - name: Configure gcloud
         run: |
@@ -178,6 +178,15 @@ jobs:
               -e "s|__TOPIC__|${PUBSUB_TOPIC}|g" \
               cloud/producer/job.yaml > /tmp/producer.job.rendered.yaml
 
+          echo "==================== Rendered Producer Job YAML ===================="
+          sed -n '1,220p' /tmp/producer.job.rendered.yaml
+          echo "==================================================================="
+
+          # Validate manifest schema before applying (helps pinpoint parse errors)
+          gcloud run jobs replace /tmp/producer.job.rendered.yaml \
+            --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" \
+            --validate-only
+
           gcloud run jobs replace /tmp/producer.job.rendered.yaml --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}"
 
       # Create/replace Consumer Cloud Run Job (Pub/Sub only)
@@ -200,6 +209,15 @@ jobs:
               -e "s|__CONSUMER_IMAGE__|${CONSUMER_IMG}|g" \
               -e "s|__TOPIC__|${PUBSUB_TOPIC}|g" \
               cloud/consumer/job.yaml > /tmp/consumer.job.rendered.yaml
+
+          echo "==================== Rendered Consumer Job YAML ===================="
+          sed -n '1,260p' /tmp/consumer.job.rendered.yaml
+          echo "==================================================================="
+
+          # Validate manifest schema before applying (helps pinpoint parse errors)
+          gcloud run jobs replace /tmp/consumer.job.rendered.yaml \
+            --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" \
+            --validate-only
 
           gcloud run jobs replace /tmp/consumer.job.rendered.yaml --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}"
 
