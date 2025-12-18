@@ -55,14 +55,19 @@ function parseToolArgs(maybe) {
   return { value: maybe };
 }
 
-// Simple retry helper with exponential backoff
-async function withRetries(fn, { attempts = 3, baseDelayMs = 250, label = 'retry-op' } = {}) {
+// Simple retry helper with exponential backoff and optional retry predicate
+async function withRetries(fn, { attempts = 3, baseDelayMs = 250, label = 'retry-op', shouldRetry } = {}) {
   let lastErr;
   for (let i = 0; i < attempts; i++) {
     try {
       return await fn(i);
     } catch (err) {
       lastErr = err;
+      // Allow caller or error to declare non-retryable
+      const nonRetry = (typeof shouldRetry === 'function' && shouldRetry(err) === false) || err?.noRetry === true || err?.status === 404;
+      if (nonRetry) {
+        throw err;
+      }
       const delay = baseDelayMs * Math.pow(2, i);
       if (i < attempts - 1) {
         const jitter = Math.floor(Math.random() * 100);
@@ -301,12 +306,23 @@ async function run() {
         ? { result: toolResult ?? null, error: toolError }
         : toolResult;
       try {
-        await withRetries(() => postCallback(evt.callback_id, cbPayload), { attempts: 3, baseDelayMs: 300, label: 'callback-post' });
+        await withRetries(() => postCallback(evt.callback_id, cbPayload), {
+          attempts: 3,
+          baseDelayMs: 300,
+          label: 'callback-post',
+          // Do not retry on explicit 404/expired signals
+          shouldRetry: (err) => (err?.status ?? err?.response?.status) !== 404 && err?.noRetry !== true,
+        });
         console.log('[producer] callback posted', { id: evt.id, callbackId: evt.callback_id, hasError: toolError !== undefined });
       } catch (err) {
-        console.warn('[producer] callback post failed; will not commit cursor', { id: evt.id, callbackId: evt.callback_id, error: err?.message || err });
-        // Do not commit; rely on reconnect/resume to retry event and callback
-        return false;
+        if (err?.status === 404 || err?.noRetry) {
+          console.warn('[producer] callback expired (404); skipping retries and proceeding to commit', { id: evt.id, callbackId: evt.callback_id });
+          // proceed to cursor commit
+        } else {
+          console.warn('[producer] callback post failed; will not commit cursor', { id: evt.id, callbackId: evt.callback_id, error: err?.message || err });
+          // Do not commit; rely on reconnect/resume to retry event and callback
+          return false;
+        }
       }
     }
 

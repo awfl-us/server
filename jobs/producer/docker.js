@@ -38,6 +38,46 @@ async function tryResolveHostPathForMountedFile(inContainerPath) {
   return null;
 }
 
+function hasExplicitNetworkArg(args = []) {
+  // Detect presence of --network/--net flags in provided args
+  return args.some((a, i) => {
+    if (a === '--network' || a === '--net') return true;
+    if (a.startsWith('--network=') || a.startsWith('--net=')) return true;
+    // handle short form "-net" (rare nowadays)
+    if (a === '-net') return true;
+    // also handle the case of flag followed by value
+    if ((a === '--network' || a === '--net' || a === '-net') && typeof args[i + 1] === 'string') return true;
+    return false;
+  });
+}
+
+async function detectComposeNetwork() {
+  // Strategy:
+  // 1) If PRODUCER_DOCKER_NETWORK is set, use it (explicit override).
+  // 2) If running inside a container with access to Docker, inspect this container's networks and prefer one ending with "_default".
+  // 3) Otherwise, return null (no-op; caller should avoid changing behavior).
+  const override = (process.env.PRODUCER_DOCKER_NETWORK || '').trim();
+  if (override) return { network: override, source: 'env:PRODUCER_DOCKER_NETWORK' };
+
+  const containerId = (process.env.HOSTNAME || '').trim();
+  if (!containerId) return { network: null, source: 'none' };
+
+  try {
+    const { stdout } = await execFileAsync('docker', ['inspect', containerId, '--format', '{{json .NetworkSettings.Networks}}'], { timeout: 5_000 });
+    const networksObj = JSON.parse(stdout || '{}') || {};
+    const names = Object.keys(networksObj);
+    if (!names.length) return { network: null, source: 'inspect:none' };
+
+    // Prefer names that end with _default (compose default network)
+    const preferred = names.find(n => /_default$/.test(n))
+      || names.find(n => n === 'server_default')
+      || names[0];
+    return { network: preferred || null, source: 'auto' };
+  } catch {
+    return { network: null, source: 'inspect:error' };
+  }
+}
+
 export async function runLocalDocker({ image, containerName, envPairs, extraArgs = [] }) {
   const args = ['run', '-d', '--rm', '--name', containerName, ...toDockerEnvFlags(envPairs)];
 
@@ -62,10 +102,27 @@ export async function runLocalDocker({ image, containerName, envPairs, extraArgs
     args.push('-e', `GOOGLE_APPLICATION_CREDENTIALS=${mountTarget}`);
   }
 
-  // optional mounts/args (global default for producer container only)
-  const argStr = (process.env.PRODUCER_LOCAL_DOCKER_ARGS || '').trim();
-  if (argStr) args.push(...splitArgs(argStr));
-  if (Array.isArray(extraArgs) && extraArgs.length) args.push(...extraArgs);
+  // Collect optional args from env and request
+  const envArgStr = (process.env.PRODUCER_LOCAL_DOCKER_ARGS || '').trim();
+  const envArgs = envArgStr ? splitArgs(envArgStr) : [];
+  const reqArgs = Array.isArray(extraArgs) ? extraArgs : [];
+
+  // Determine network arg only if not explicitly provided
+  const explicitHasNetwork = hasExplicitNetworkArg([...envArgs, ...reqArgs]);
+  let networkApplied = null;
+  let networkSource = null;
+  if (!explicitHasNetwork) {
+    const { network, source } = await detectComposeNetwork();
+    if (network) {
+      args.push('--network', network);
+      networkApplied = network;
+      networkSource = source;
+    }
+  }
+
+  // Append env/request-provided args and image
+  if (envArgs.length) args.push(...envArgs);
+  if (reqArgs.length) args.push(...reqArgs);
   args.push(image);
 
   // Diagnostics: log the docker run we are about to execute (sanitized)
@@ -74,7 +131,9 @@ export async function runLocalDocker({ image, containerName, envPairs, extraArgs
     console.log('[jobs/producer][docker] docker run', {
       image,
       containerName,
-      extraArgs,
+      extraArgs: reqArgs,
+      envArgs: envArgs,
+      network: networkApplied ? { value: networkApplied, source: networkSource } : (explicitHasNetwork ? { value: 'explicit', source: 'args' } : { value: null, source: 'none' }),
       // Note: GOOGLE_APPLICATION_CREDENTIALS value will be printed, which is a file path only.
       env: sanitizeEnvPairs(envPairs),
       adc: keyHostPath ? { mounted: true, mountPath: mountTarget } : { mounted: false },

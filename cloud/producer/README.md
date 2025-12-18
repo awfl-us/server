@@ -84,6 +84,7 @@ Troubleshooting GCS 403
 Troubleshooting
 - 403 on bucket access: ensure the service account has storage.objectAdmin on the bucket and that the volume is mounted at /mnt/work.
 - Connection issues to workflows: verify URLs, audiences, and IAM settings.
+- NOT_FOUND on Pub/Sub topic/subscription: ensure you created them in the same GCP project the container uses (GOOGLE_CLOUD_PROJECT). Pass --project "$PROJECT_ID" to gcloud commands and prefer a fully-qualified topic in subscription creation, e.g., --topic "projects/$PROJECT_ID/topics/$TOPIC".
 
 Run locally with Docker Desktop (build image and run)
 - This runs the Producer using a locally built image. Use production Pub/Sub (no emulator).
@@ -92,25 +93,31 @@ Run locally with Docker Desktop (build image and run)
 1) Build the image
 
 ```
-docker build -t awfl/producer:dev cloud/producer
+docker build -t awfl-producer:dev cloud/producer
 ```
 
-2) Prepare env and Pub/Sub resources
+2) Prepare env and Pub/Sub resources (use `setopt INTERACTIVE_COMMENTS` in zsh)
 
 ```
-export PROJECT_ID="cornerstoneai-org"
+export PROJECT_ID="awfl-us"
 export TOPIC="awfl-events"
-export SUB_RESP="producer-replies-$(date +%s)"
+export SUB_RESP="producer-replies-$(date '+%s')"
 export USER_ID="u_demo"
 export PROJECT_CTX="p_demo"              # project id used for routing (not GCP project)
 export ENC_KEY_B64="$(openssl rand -base64 32)"
-export WORKFLOWS_BASE_URL="http://localhost:5050/jobs"  # if workflows runs on your host
+export WORKFLOWS_BASE_URL="http://host.docker.internal:5050/jobs"  # if workflows runs on your host
 
-(gcloud pubsub topics describe "$TOPIC" >/dev/null 2>&1) || gcloud pubsub topics create "$TOPIC"
+(gcloud pubsub topics describe "$TOPIC" --project "$PROJECT_ID" >/dev/null 2>&1) || \
+  gcloud pubsub topics create "$TOPIC" --project "$PROJECT_ID"
+
 gcloud pubsub subscriptions create "$SUB_RESP" \
-  --topic "$TOPIC" \
+  --project "$PROJECT_ID" \
+  --topic "projects/$PROJECT_ID/topics/$TOPIC" \
   --ack-deadline 20 \
   --message-retention-duration 3600s || true
+
+# Optional: sanity check
+#gcloud pubsub subscriptions describe "$SUB_RESP" --project "$PROJECT_ID"
 ```
 
 3) Run the container
