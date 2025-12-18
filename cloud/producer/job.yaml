@@ -18,23 +18,26 @@ metadata:
   name: __JOB_NAME__
 spec:
   template:
-    taskCount: 1
-    parallelism: 1
     template:
-      serviceAccount: __SERVICE_ACCOUNT__
-      timeoutSeconds: 3600
-      containers:
-      - name: producer
-        image: __PRODUCER_IMAGE__
-        env:
-        - name: NODE_ENV
-          value: production
-        - name: PUBSUB_ENABLE
-          value: "1"
-        - name: TOPIC
-          value: "__TOPIC__"
-        # Per-run values; the Jobs runner typically overrides these at run time
-        - name: SUBSCRIPTION
-          value: ""
-        - name: ENC_KEY_B64
-          value: ""
+      # Execution controls
+      taskCount: 1
+      parallelism: 1
+      # Task template
+      template:
+        serviceAccountName: __SERVICE_ACCOUNT__
+        timeoutSeconds: 3600
+        containers:
+        - name: producer
+          image: __PRODUCER_IMAGE__
+          env:
+          - name: NODE_ENV
+            value: production
+          - name: PUBSUB_ENABLE
+            value: "1"
+          - name: TOPIC
+            value: "__TOPIC__"
+          # Per-run values; the Jobs runner typically overrides these at run time
+          - name: SUBSCRIPTION
+            value: ""
+          - name: ENC_KEY_B64
+            value: ""

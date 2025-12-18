@@ -19,25 +19,28 @@ metadata:
 spec:
   template:
     template:
-      serviceAccountName: __SERVICE_ACCOUNT__
-      timeoutSeconds: 3600
-      containers:
-      - name: consumer
-        image: __CONSUMER_IMAGE__
-        env:
-        - name: NODE_ENV
-          value: production
-        - name: PUBSUB_ENABLE
-          value: "1"
-        - name: TOPIC
-          value: __TOPIC__
-        # Per-run values; the Jobs runner overrides these at run time
-        - name: SUBSCRIPTION
-          value: ""
-        - name: ENC_KEY_B64
-          value: ""
-        - name: REPLY_CHANNEL
-          value: "resp"
-      restartPolicy: Never
-  taskCount: 1
-  parallelism: 1
+      # Execution controls
+      taskCount: 1
+      parallelism: 1
+      # Task template
+      template:
+        serviceAccountName: __SERVICE_ACCOUNT__
+        timeoutSeconds: 3600
+        containers:
+        - name: consumer
+          image: __CONSUMER_IMAGE__
+          env:
+          - name: NODE_ENV
+            value: production
+          - name: PUBSUB_ENABLE
+            value: "1"
+          - name: TOPIC
+            value: "__TOPIC__"
+          # Per-run values; the Jobs runner overrides these at run time
+          - name: SUBSCRIPTION
+            value: ""
+          - name: ENC_KEY_B64
+            value: ""
+          - name: REPLY_CHANNEL
+            value: "resp"
+        restartPolicy: Never
