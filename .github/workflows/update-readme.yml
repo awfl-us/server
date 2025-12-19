@@ -1,0 +1,56 @@
+name: Update README on Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  update-readme:
+    name: Update README install/version snippets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Derive version from tag
+        id: ver
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Update README.md patterns
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          FILE=README.md
+          [ -f "$FILE" ] || { echo "README.md not found, skipping"; exit 0; }
+          # Patterns supported (no-op if not present):
+          # 1) SBT dep: us.awfl %% server % "x.y.z"
+          perl -0777 -pe 's/(libraryDependencies\s+\+=\s+\"us\.awfl\"\s+%%\s+\"server\"\s+%\s*\")([^\"]+)(\")/$1$ENV{VERSION}$3/g' -i "$FILE" || true
+          # 2) npm: @awfl/server@x.y.z
+          perl -0777 -pe 's/(@awfl\/server@)([0-9A-Za-z\._\-\+]+)/$1$ENV{VERSION}/g' -i "$FILE" || true
+          # 3) Docker image tag: awfl-server:x.y.z
+          perl -0777 -pe 's/(awfl-server:)([0-9A-Za-z\._\-\+]+)/$1$ENV{VERSION}/g' -i "$FILE" || true
+
+          echo "Diff (if any):" || true
+          git --no-pager diff -- "$FILE" || true
+
+      - name: Commit and push changes
+        run: |
+          if git diff --quiet -- README.md; then
+            echo "No README changes, skipping commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "docs: update README install snippets to ${{ steps.ver.outputs.version }}"
+          git push origin HEAD:${{ github.event.repository.default_branch }}
