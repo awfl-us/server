@@ -251,6 +251,8 @@ router.post('/start', async (req, res) => {
         { name: 'ENC_KEY_B64', value: encKeyB64 },
         { name: 'ENC_VER', value: encVer },
         { name: 'REPLY_CHANNEL', value: 'resp' },
+        { name: 'GCS_DEBUG', value: '1' },
+        { name: 'GCS_TRACE', value: '1' },
       ],
     }];
 
