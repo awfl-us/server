@@ -28,10 +28,42 @@ async function runShutdownHooks() {
   );
 }
 
-// Release project lock on shutdown
+// Unified stop against the same base as the event stream
+async function postUnifiedStop(reason = 'shutdown') {
+  const base = WORKFLOWS_BASE_URL.replace(/\/$/, '');
+  if (!base) return false;
+  const url = `${base}/producer/stop`;
+  const idTokenHeaders = await getWorkflowsIdTokenHeaders();
+  const headers = {
+    'Content-Type': 'application/json',
+    ...contextHeaders(),
+    ...idTokenHeaders,
+  };
+  const body = { reason, at: Date.now(), ...(CONSUMER_ID ? { consumerId: CONSUMER_ID } : {}) };
+
+  const maxAttempts = 3;
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      const resp = await axios.post(url, body, { headers, timeout: 2500, validateStatus: (s) => s < 500 });
+      if (resp.status >= 200 && resp.status < 300) {
+        console.log('[producer] unified stop posted to server');
+        return true;
+      }
+      console.warn('[producer] unified stop non-2xx', { status: resp.status });
+    } catch (err) {
+      console.warn('[producer] unified stop attempt failed', err?.message || err);
+    }
+    const backoff = 150 * (i + 1) + Math.floor(Math.random() * 100);
+    await new Promise((r) => setTimeout(r, backoff));
+  }
+  return false;
+}
+
+// Release project lock on shutdown (fallback)
 export async function releaseProjectLock(reason = 'shutdown') {
   try {
     const base = WORKFLOWS_BASE_URL.replace(/\/$/, '');
+    if (!base) return false;
     const url = `${base}/projects/${encodeURIComponent(X_PROJECT_ID)}/consumer-lock/release`;
     const authz = await getWorkflowsIdTokenHeaders();
     const headers = { 'Content-Type': 'application/json', ...contextHeaders(), ...authz };
@@ -73,11 +105,19 @@ export async function gracefulShutdown(code = 0, signal = 'signal') {
       new Promise((resolve) => setTimeout(resolve, Math.max(500, Math.floor(SHUTDOWN_TIMEOUT_MS / 2)))),
     ]);
 
-    // 2) Then attempt to release the lock
-    await Promise.race([
-      releaseProjectLock(`process_${signal}`),
-      new Promise((resolve) => setTimeout(resolve, Math.max(500, Math.floor(SHUTDOWN_TIMEOUT_MS / 2)))),
+    // 2) First attempt unified stop via API (ensures consumer also stops and subs deleted)
+    const stopOk = await Promise.race([
+      postUnifiedStop(`process_${signal}`),
+      new Promise((resolve) => setTimeout(() => resolve(false), Math.max(500, Math.floor(SHUTDOWN_TIMEOUT_MS / 2)))),
     ]);
+
+    // 3) If unified stop is not available or fails, fall back to direct lock release
+    if (!stopOk) {
+      await Promise.race([
+        releaseProjectLock(`process_${signal}`),
+        new Promise((resolve) => setTimeout(resolve, Math.max(500, Math.floor(SHUTDOWN_TIMEOUT_MS / 2)))),
+      ]);
+    }
   } catch (_) {
     // ignore
   } finally {

@@ -5,7 +5,6 @@ import {
   splitArgs,
 } from './utils.js';
 import { runLocalDocker, stopContainer } from './docker.js';
-import { startExitMonitor } from './monitor.js';
 import { ensureWorkspaceId } from '../../workflows/workspace/service.js';
 import {
   acquireConsumerLock,
@@ -16,7 +15,7 @@ import {
 import { ensureSubscription, addSubscriberBinding, deleteSubscription } from './pubsubAdmin.js';
 import { sanitizeId, buildBaseContext, deriveEncryption, buildProducerEnv } from './envBuilder.js';
 import { launchLocalPair } from './localDocker.js';
-import { runCloudRunJob } from './cloudRun.js';
+import { runCloudRunJob, cancelOperation, cancelJobExecutions } from './cloudRun.js';
 import { resolveStoredGithubToken } from '../../workflows/gitFiles.js';
 
 const router = express.Router();
@@ -208,8 +207,6 @@ router.post('/start', async (req, res) => {
             console.warn('[jobs/producer:start] failed to persist runtime info', e?.message || e);
           }
 
-          startExitMonitor({ producerKey: producerContainerName || producerInfo?.id, sidecarName, userId, projectId, consumerId });
-
           return res.status(202).json({ ok: true, mode: 'local-docker', image, containerName: producerContainerName, containerId: (producerInfo?.id || null), consumerId, workspaceId, sessionId: sessionIdForFilter || null, enc_ver: encVer, enc_fp: encFp, sub_req: subReq, sub_resp: subResp, topic });
         }
 
@@ -236,8 +233,6 @@ router.post('/start', async (req, res) => {
         } catch (e) {
           console.warn('[jobs/producer:start] failed to persist runtime info', e?.message || e);
         }
-
-        startExitMonitor({ producerKey: producerContainerName || id, sidecarName: null, userId, projectId, consumerId });
 
         return res.status(202).json({ ok: true, mode: 'local-docker', image, containerName: producerContainerName, containerId: id, consumerId, args, workspaceId, sessionId: sessionIdForFilter || null, enc_ver: encVer, enc_fp: encFp, sub_req: subReq, sub_resp: subResp, topic });
       } catch (e) {
@@ -387,11 +382,28 @@ router.post('/stop', async (req, res) => {
         if (runtime?.sub_resp) await deleteSubscription({ gcpProject, name: runtime.sub_resp });
       } catch {}
 
+      // Attempt to cancel current operations and any running executions for both producer and consumer jobs
+      const location = runtime?.location || process.env.CLOUD_RUN_LOCATION || process.env.REGION || 'us-central1';
+      const cancelOps = [];
+      if (runtime?.operation) cancelOps.push(cancelOperation({ name: runtime.operation }).catch(() => ({ ok: false })));
+      if (runtime?.consumerOperation) cancelOps.push(cancelOperation({ name: runtime.consumerOperation }).catch(() => ({ ok: false })));
+      const jobCancels = [];
+      if (runtime?.jobName) jobCancels.push(cancelJobExecutions({ gcpProject, location, jobName: runtime.jobName }).catch(() => ({ ok: false })));
+      if (runtime?.consumerJobName) jobCancels.push(cancelJobExecutions({ gcpProject, location, jobName: runtime.consumerJobName }).catch(() => ({ ok: false })));
+      try {
+        const [opRes, jobRes] = await Promise.allSettled([
+          Promise.all(cancelOps),
+          Promise.all(jobCancels),
+        ]);
+        results.operations = opRes.status === 'fulfilled' ? opRes.value : [];
+        results.jobCancels = jobRes.status === 'fulfilled' ? jobRes.value : [];
+      } catch {}
+
       try {
         await setConsumerRuntimeInfo({ userId, projectId, consumerId: lock.consumerId, runtime: { ...runtime, stopRequested: true, stopAt: Date.now() } });
       } catch {}
       const rel = await releaseConsumerLock({ userId, projectId, force: true });
-      return res.status(200).json({ ok: true, mode: 'cloud-run', message: 'Stop requested. Lock released. Subscriptions deleted (best-effort).', released: rel?.released !== false });
+      return res.status(200).json({ ok: true, mode: 'cloud-run', message: 'Stop requested. Jobs cancellation attempted. Lock released. Subscriptions deleted (best-effort).', results, released: rel?.released !== false });
     }
 
     const rel = await releaseConsumerLock({ userId, projectId, force: true });
