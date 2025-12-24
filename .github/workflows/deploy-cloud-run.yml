@@ -221,7 +221,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          COMMON_ENV_VARS="NODE_ENV=production,GCP_PROJECT=${GCP_PROJECT_ID},ALLOW_SKIP_AUTH=0,WORKFLOWS_BASE_URL=${WORKFLOWS_BASE_URL},GCS_BUCKET=${GCS_BUCKET},PUBSUB_TOPIC=${PUBSUB_TOPIC},PRODUCER_CLOUD_RUN_JOB_NAME=${PRODUCER_CLOUD_RUN_JOB_NAME},CONSUMER_CLOUD_RUN_JOB_NAME=${CONSUMER_CLOUD_RUN_JOB_NAME},CORS_ALLOW_ORIGIN=${CORS_ALLOW_ORIGIN}"
+          # Use an alternate delimiter (;) to avoid escaping commas inside values (e.g., CORS_ALLOW_ORIGIN)
+          COMMON_ENV_VARS="NODE_ENV=production;GCP_PROJECT=${GCP_PROJECT_ID};ALLOW_SKIP_AUTH=0;WORKFLOWS_BASE_URL=${WORKFLOWS_BASE_URL};GCS_BUCKET=${GCS_BUCKET};PUBSUB_TOPIC=${PUBSUB_TOPIC};PRODUCER_CLOUD_RUN_JOB_NAME=${PRODUCER_CLOUD_RUN_JOB_NAME};CONSUMER_CLOUD_RUN_JOB_NAME=${CONSUMER_CLOUD_RUN_JOB_NAME};CORS_ALLOW_ORIGIN=${CORS_ALLOW_ORIGIN}"
           echo "COMMON_ENV_VARS=${COMMON_ENV_VARS}" >> "$GITHUB_OUTPUT"
 
       - name: Deploy API service (public)
@@ -233,7 +234,7 @@ jobs:
             --service-account="${CLOUD_RUN_RUNTIME_SA}" \
             --allow-unauthenticated \
             --timeout=3600 \
-            --set-env-vars="${{ steps.common_env.outputs.COMMON_ENV_VARS }},SERVICE_TARGET=start:api" \
+            --set-env-vars="^;^${{ steps.common_env.outputs.COMMON_ENV_VARS }};SERVICE_TARGET=start:api" \
             ${{ steps.secrets.outputs.SECRET_FLAGS }}
 
       - name: Deploy Jobs service (auth-required)
@@ -245,7 +246,7 @@ jobs:
             --service-account="${CLOUD_RUN_RUNTIME_SA}" \
             --no-allow-unauthenticated \
             --timeout=3600 \
-            --set-env-vars="${{ steps.common_env.outputs.COMMON_ENV_VARS }},SERVICE_TARGET=start:jobs,CLOUD_RUN_LOCATION=${GCP_REGION}" \
+            --set-env-vars="^;^${{ steps.common_env.outputs.COMMON_ENV_VARS }};SERVICE_TARGET=start:jobs;CLOUD_RUN_LOCATION=${GCP_REGION}" \
             ${{ steps.secrets.outputs.SECRET_FLAGS }}
 
 # Notes:
