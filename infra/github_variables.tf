@@ -53,8 +53,8 @@ resource "local_file" "actions_variables" {
     # Use Cloud Run Jobs service URL when available; otherwise provide a safe placeholder
     WORKFLOWS_BASE_URL = var.cloud_run_services_exist ? data.google_cloud_run_service.jobs[0].status[0].url : "https://jobs.${var.root_domain}"
 
-    # CORS allowlist origin (full URL). Must match exact Origin header value.
-    CORS_ALLOW_ORIGIN = "https://${var.root_domain}"
+    # CORS allowlist origins (full URL). Comma/space-separated supported; server auto-expands base/www for https root domains.
+    CORS_ALLOW_ORIGIN = "https://${var.root_domain}, https://www.${var.root_domain}"
   })
   depends_on = [
     google_iam_workload_identity_pool_provider.github,
