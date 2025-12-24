@@ -2,7 +2,7 @@ project_id        = "cornerstoneai-org"
 root_domain       = "cornerstoneai.org"
 github_repository = "cornerstone-ai/awfl-server"
 
-cloud_run_services_exist = false
+cloud_run_services_exist = true
 enable_site_verification = true
 
 # Allow LAN dev from Vite served over http://<LAN-IP>:5173
@@ -23,3 +23,5 @@ authorized_domains_extra = [
 # ]
 
 firebase_web_app_display_name = "cornerstoneai-web"
+
+web_tfstate_bucket_name = "tfstate-cornerstone-web"
