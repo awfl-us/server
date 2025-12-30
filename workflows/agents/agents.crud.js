@@ -1,46 +1,7 @@
 import express from 'express';
-import { db, userScopedCollectionPath } from './common.js';
-import fs from 'node:fs/promises';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { db, userScopedCollectionPath, loadFileDefinedAgents } from './common.js';
 
 const router = express.Router();
-
-// ESM-safe __dirname
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Load file-defined agents from workflows/agents/defs/*.json
-async function loadFileDefinedAgents() {
-  try {
-    const defsDir = path.resolve(__dirname, './defs');
-    const entries = await fs.readdir(defsDir, { withFileTypes: true });
-    const files = entries.filter(e => e.isFile() && e.name.endsWith('.json'));
-    const out = [];
-    for (const f of files) {
-      try {
-        const full = path.join(defsDir, f.name);
-        const raw = await fs.readFile(full, 'utf8');
-        const parsed = JSON.parse(raw);
-        if (!parsed || typeof parsed !== 'object') continue;
-        const name = typeof parsed.name === 'string' ? parsed.name.trim() : null;
-        const providedId = typeof parsed.id === 'string' ? parsed.id.trim() : null;
-        const id = providedId || (name ? name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') : null);
-        if (!id || !name) continue;
-        const description = typeof parsed.description === 'string' ? parsed.description : null;
-        const workflowName = typeof parsed.workflowName === 'string' ? parsed.workflowName.trim() : null;
-        const tools = Array.isArray(parsed.tools) ? parsed.tools.filter(t => typeof t === 'string') : undefined;
-        const inputSchema = parsed.inputSchema && typeof parsed.inputSchema === 'object' ? parsed.inputSchema : undefined;
-        out.push({ id, name, description, workflowName, tools, inputSchema, source: 'file' });
-      } catch (_) {
-        // skip malformed
-      }
-    }
-    return out;
-  } catch (_) {
-    return [];
-  }
-}
 
 function dedupeById(preferred = [], fallbacks = []) {
   const map = new Map();

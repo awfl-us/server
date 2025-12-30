@@ -1,5 +1,8 @@
 import { getFirestore } from 'firebase-admin/firestore';
 import { projectScopedCollectionPath, userScopedCollectionPath } from '../utils.js';
+import fs from 'node:fs/promises';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 // Shared Firestore handle
 export const db = getFirestore();
@@ -41,6 +44,48 @@ export const DEFAULT_TOOLS = [
 
 export function sessionMapDocPath(userId, projectId, sessionId) {
   return projectScopedCollectionPath(userId, projectId, `agentSessions/${sessionId}`);
+}
+
+// ESM-safe __dirname for this module
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Shared loader for file-defined agents (from ./defs/*.json)
+export async function loadFileDefinedAgents() {
+  try {
+    const defsDir = path.resolve(__dirname, './defs');
+    const entries = await fs.readdir(defsDir, { withFileTypes: true });
+    const files = entries.filter(e => e.isFile() && e.name.endsWith('.json'));
+    const out = [];
+    for (const f of files) {
+      try {
+        const full = path.join(defsDir, f.name);
+        const raw = await fs.readFile(full, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') continue;
+        const name = typeof parsed.name === 'string' ? parsed.name.trim() : null;
+        const providedId = typeof parsed.id === 'string' ? parsed.id.trim() : null;
+        const id = providedId || (name ? name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') : null);
+        if (!id || !name) continue;
+        const description = typeof parsed.description === 'string' ? parsed.description : null;
+        const workflowName = typeof parsed.workflowName === 'string' ? parsed.workflowName.trim() : null;
+        const tools = Array.isArray(parsed.tools) ? parsed.tools.filter(t => typeof t === 'string') : undefined;
+        const inputSchema = parsed.inputSchema && typeof parsed.inputSchema === 'object' ? parsed.inputSchema : undefined;
+        out.push({ id, name, description, workflowName, tools, inputSchema, source: 'file' });
+      } catch (_) {
+        // skip malformed file
+      }
+    }
+    return out;
+  } catch (_) {
+    return [];
+  }
+}
+
+export async function getFileDefinedAgentById(id) {
+  if (!id) return null;
+  const list = await loadFileDefinedAgents();
+  return list.find(a => a?.id === id) || null;
 }
 
 export { userScopedCollectionPath };

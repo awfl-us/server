@@ -1,5 +1,5 @@
 import express from 'express';
-import { db, userScopedCollectionPath, normalizeToolsInput, uniqueMerge, removeFromList, DEFAULT_TOOLS } from './common.js';
+import { db, userScopedCollectionPath, normalizeToolsInput, uniqueMerge, removeFromList, DEFAULT_TOOLS, getFileDefinedAgentById } from './common.js';
 
 const router = express.Router();
 
@@ -14,7 +14,15 @@ router.post('/:id/tools', async (req, res) => {
 
     const docRef = db.doc(userScopedCollectionPath(userId, `agents/${id}`));
     const snap = await docRef.get();
-    if (!snap.exists) return res.status(404).json({ error: 'Agent not found' });
+
+    if (!snap.exists) {
+      // If this is a file-defined agent, we currently treat mutation as unsupported
+      const fileAgent = await getFileDefinedAgentById(id);
+      if (fileAgent) {
+        return res.status(409).json({ error: 'Agent is file-defined and cannot be modified via tools endpoint' });
+      }
+      return res.status(404).json({ error: 'Agent not found' });
+    }
 
     const current = snap.data()?.tools || [];
     const tools = uniqueMerge(current, toAdd);
@@ -38,7 +46,15 @@ router.delete('/:id/tools', async (req, res) => {
 
     const docRef = db.doc(userScopedCollectionPath(userId, `agents/${id}`));
     const snap = await docRef.get();
-    if (!snap.exists) return res.status(404).json({ error: 'Agent not found' });
+
+    if (!snap.exists) {
+      // If this is a file-defined agent, we currently treat mutation as unsupported
+      const fileAgent = await getFileDefinedAgentById(id);
+      if (fileAgent) {
+        return res.status(409).json({ error: 'Agent is file-defined and cannot be modified via tools endpoint' });
+      }
+      return res.status(404).json({ error: 'Agent not found' });
+    }
 
     const current = snap.data()?.tools || [];
     const tools = removeFromList(current, toRemove);
@@ -64,19 +80,29 @@ router.get('/:id/tools', async (req, res) => {
 
     const docRef = db.doc(userScopedCollectionPath(userId, `agents/${id}`));
     const snap = await docRef.get();
-    if (!snap.exists) return res.status(404).json({ error: 'Agent not found' });
 
-    const data = snap.data() || {};
+    if (snap.exists) {
+      const data = snap.data() || {};
 
-    let tools;
-    if (Object.prototype.hasOwnProperty.call(data, 'tools')) {
-      tools = Array.isArray(data.tools) ? data.tools : [];
-    } else {
-      // If tools have never been defined for this agent, return default set
-      tools = DEFAULT_TOOLS;
+      let tools;
+      if (Object.prototype.hasOwnProperty.call(data, 'tools')) {
+        tools = Array.isArray(data.tools) ? data.tools : [];
+      } else {
+        // If tools have never been defined for this agent, return default set
+        tools = DEFAULT_TOOLS;
+      }
+
+      return res.status(200).json({ tools });
     }
 
-    return res.status(200).json({ tools });
+    // Fallback to file-defined agent tools if present
+    const fileAgent = await getFileDefinedAgentById(id);
+    if (fileAgent) {
+      const tools = Array.isArray(fileAgent.tools) && fileAgent.tools.length ? fileAgent.tools : DEFAULT_TOOLS;
+      return res.status(200).json({ tools });
+    }
+
+    return res.status(404).json({ error: 'Agent not found' });
   } catch (err) {
     console.error('[agents] list tools failed', err);
     return res.status(500).json({ error: 'Failed to list tools' });
