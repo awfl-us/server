@@ -1,7 +1,7 @@
 // Cloud Run startup readiness monitor
 // - Polls LROs to discover execution names
 // - Polls executions for state and updates project.status_message with concise status
-// - Clears status_message as soon as both jobs are running (no "Running…" status emitted)
+// - Clears status_message as soon as both jobs have started (>= starting); no "Running…" status emitted
 
 import { getOperation, getExecutionByName } from './cloudRun.js';
 import { setStartupStatus, completeStartupProgress } from './progress.js';
@@ -71,8 +71,8 @@ export async function monitorCloudRunStartup({
 
   // Initial message: explicitly queued/creating
   try {
-    await setStartupStatus({ userId, projectId, message: 'Queued/creating…' });
-    lastBase = 'Queued/creating…';
+    await setStartupStatus({ userId, projectId, message: 'Queued/creating cloud compute…' });
+    lastBase = 'Queued/creating cloud compute…';
   } catch {}
 
   const order = { queued: 0, starting: 1, running: 2 };
@@ -121,14 +121,14 @@ export async function monitorCloudRunStartup({
     const cs = stateOfExecution(consExec);
     const slow = (ps && cs) ? (order[ps] <= order[cs] ? ps : cs) : (ps || cs || 'queued');
 
-    // If both are running, clear the status message (do not emit "Running…")
-    if (slow === 'running') {
-      try { await completeStartupProgress({ userId, projectId, reason: 'cloud-run running' }); } catch {}
+    // If both have reached at least "starting", clear the status message immediately
+    if (order[slow] >= order['starting']) {
+      try { await completeStartupProgress({ userId, projectId, reason: 'cloud-run starting' }); } catch {}
       return true;
     }
 
-    // Otherwise, show concise message per phase
-    const base = slow === 'queued' ? 'Queued/creating…' : 'Starting cloud consumer..';
+    // Otherwise, show concise message per phase (only 'queued' can show here)
+    const base = slow === 'queued' ? 'Queued/creating cloud compute…' : 'Starting…';
     if (base !== lastBase) {
       try { await setStartupStatus({ userId, projectId, message: base }); } catch {}
       lastBase = base;
