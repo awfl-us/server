@@ -57,3 +57,24 @@ export async function cancelJobExecutions({ gcpProject, location, jobName }) {
     return { ok: false, status: 500, data: { error: String(e?.message || e) } };
   }
 }
+
+// Lightweight helpers for readiness/monitoring
+export async function getOperation({ name }) {
+  if (!name) return { ok: false, status: 400, data: { error: 'missing operation name' } };
+  const token = await getAccessToken();
+  const url = `https://run.googleapis.com/v2/${name}`; // name: projects/.../locations/.../operations/...
+  const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  let data = {};
+  try { data = await resp.json(); } catch {}
+  return { ok: resp.ok, status: resp.status, data };
+}
+
+export async function getExecutionByName({ name }) {
+  if (!name) return { ok: false, status: 400, data: { error: 'missing execution name' } };
+  const token = await getAccessToken();
+  const url = `https://run.googleapis.com/v2/${name}`; // name: projects/.../locations/.../jobs/.../executions/...
+  const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  let data = {};
+  try { data = await resp.json(); } catch {}
+  return { ok: resp.ok, status: resp.status, data };
+}

@@ -125,11 +125,15 @@ export async function getConsumerLockStatus({ userId, projectId }) {
   const existing = data.consumerLock || null;
   const now = nowMs();
 
-  if (!existing) return { ok: true, locked: false };
+  // Include status_message if present (omit when null/undefined for back-compat)
+  const status = {};
+  if (data.status_message != null) status.status_message = data.status_message;
+
+  if (!existing) return { ok: true, locked: false, ...status };
 
   const msRemaining = Math.max(0, Number(existing.expiresAt || 0) - now);
   const locked = msRemaining > 0;
-  return { ok: true, locked, holder: shapeLock(existing), msRemaining };
+  return { ok: true, locked, holder: shapeLock(existing), msRemaining, ...status };
 }
 
 // New helpers to persist and fetch runtime information bound to the consumer lock

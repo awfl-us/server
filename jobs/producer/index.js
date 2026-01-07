@@ -17,6 +17,8 @@ import { sanitizeId, buildBaseContext, deriveEncryption, buildProducerEnv } from
 import { launchLocalPair } from './localDocker.js';
 import { runCloudRunJob, cancelOperation, cancelJobExecutions } from './cloudRun.js';
 import { resolveStoredGithubToken } from '../../workflows/gitFiles.js';
+import { scheduleStartupProgress, cancelStartupProgress, completeStartupProgress } from './progress.js';
+import { monitorCloudRunStartup } from './readiness.js';
 
 const router = express.Router();
 router.use(express.json());
@@ -166,6 +168,12 @@ router.post('/start', async (req, res) => {
 
         if (sidecarEnabled) {
           sidecarName = `consumer-${consumerId}`.slice(0, 63);
+
+          // Schedule startup progress BEFORE launching containers so the overlay reflects actual startup.
+          const sched = scheduleStartupProgress({ userId, projectId });
+          if (!sched?.ok) console.warn('[jobs/producer:start] progress schedule failed', sched);
+          else console.log('[jobs/producer:start] progress scheduled', { userId, projectId });
+
           const { producerInfo, consumerInfo } = await launchLocalPair({
             producerImage: image,
             producerContainerName,
@@ -207,6 +215,9 @@ router.post('/start', async (req, res) => {
             console.warn('[jobs/producer:start] failed to persist runtime info', e?.message || e);
           }
 
+          // Both containers are launched; clear the startup overlay immediately.
+          try { completeStartupProgress({ userId, projectId, reason: 'local-docker started' }); } catch (e) { console.warn('[jobs/producer:start] progress early-complete failed', e?.message || e); }
+
           return res.status(202).json({ ok: true, mode: 'local-docker', image, containerName: producerContainerName, containerId: (producerInfo?.id || null), consumerId, workspaceId, sessionId: sessionIdForFilter || null, enc_ver: encVer, enc_fp: encFp, sub_req: subReq, sub_resp: subResp, topic });
         }
 
@@ -234,12 +245,15 @@ router.post('/start', async (req, res) => {
           console.warn('[jobs/producer:start] failed to persist runtime info', e?.message || e);
         }
 
+        // No sidecar/consumer -> skip progress overlay
         return res.status(202).json({ ok: true, mode: 'local-docker', image, containerName: producerContainerName, containerId: id, consumerId, args, workspaceId, sessionId: sessionIdForFilter || null, enc_ver: encVer, enc_fp: encFp, sub_req: subReq, sub_resp: subResp, topic });
       } catch (e) {
         console.error('[jobs/producer:start] local docker error', e);
         await deleteSubscription({ gcpProject, name: subReq }).catch(() => {});
         await deleteSubscription({ gcpProject, name: subResp }).catch(() => {});
         await bestEffortRelease({ userId, projectId });
+        // On error, ensure any scheduled progress is cancelled/cleared (best-effort)
+        cancelStartupProgress({ userId, projectId, reason: 'local-docker error' });
         return res.status(500).json({ error: 'Failed to start local docker container', details: String(e?.message || e) });
       }
     }
@@ -298,6 +312,8 @@ router.post('/start', async (req, res) => {
       await deleteSubscription({ gcpProject, name: subReq }).catch(() => {});
       await deleteSubscription({ gcpProject, name: subResp }).catch(() => {});
       await bestEffortRelease({ userId, projectId });
+      // Best-effort clear/cancel any progress schedule
+      cancelStartupProgress({ userId, projectId, reason: 'cloud-run launch transport error' });
       return res.status(500).json({ error: 'Transport error starting Cloud Run jobs', details: String(e?.message || e) });
     }
 
@@ -315,6 +331,8 @@ router.post('/start', async (req, res) => {
       await bestEffortRelease({ userId, projectId });
 
       const status = (!consumerRun?.ok ? consumerRun?.status : null) || (!producerRun?.ok ? producerRun?.status : null) || 500;
+      // Best-effort clear/cancel any progress schedule
+      cancelStartupProgress({ userId, projectId, reason: 'cloud-run start failed' });
       return res.status(status).json({
         error: 'Failed to start jobs',
         consumer: consumerRun,
@@ -348,6 +366,24 @@ router.post('/start', async (req, res) => {
       console.warn('[jobs/producer:start] failed to persist cloud-run runtime info', e?.message || e);
     }
 
+    // Schedule user-visible startup progress messages (~80s)
+    const sched = scheduleStartupProgress({ userId, projectId });
+    if (!sched?.ok) console.warn('[jobs/producer:start] progress schedule failed', sched);
+    else console.log('[jobs/producer:start] progress scheduled', { userId, projectId });
+
+    // Fire-and-forget readiness monitor that clears as soon as both jobs have started
+    try {
+      void monitorCloudRunStartup({
+        userId,
+        projectId,
+        producerOperationName: producerRun.data.name || null,
+        consumerOperationName: consumerRun.data.name || null,
+        timeoutMs: 90_000,
+      });
+    } catch (e) {
+      console.warn('[jobs/producer:start] readiness monitor failed to start', e?.message || e);
+    }
+
     return res.status(202).json({ ok: true, mode: 'cloud-run', producerJob: producerJobName, consumerJob: consumerJobName, location, operation: producerRun.data.name || null, consumerOperation: consumerRun.data.name || null, consumerId, lock: lock.lock || null, workspaceId, sidecarEnabled, sessionId: sessionIdForFilter || null, enc_ver: encVer, enc_fp: encFp, sub_req: subReq, sub_resp: subResp, topic });
   } catch (err) {
     console.error('[jobs/producer:start] error', err);
@@ -357,6 +393,8 @@ router.post('/start', async (req, res) => {
       if (userId && projectId && consumerId) {
         await releaseConsumerLock({ userId, projectId, consumerId });
       }
+      // Best-effort: cancel/clear any scheduled progress
+      if (req.userId && req.projectId) cancelStartupProgress({ userId: req.userId, projectId: req.projectId, reason: 'exception' });
     } catch {}
     return res.status(500).json({ error: String(err?.message || err) });
   }
@@ -369,6 +407,9 @@ router.post('/stop', async (req, res) => {
     const projectId = req.projectId;
     if (!userId) return res.status(401).json({ error: 'Unauthorized: missing user context' });
     if (!projectId) return res.status(400).json({ error: 'Missing x-project-id header' });
+
+    // Cancel any in-progress startup overlay immediately
+    try { cancelStartupProgress({ userId, projectId, reason: 'stop requested' }); } catch {}
 
     const { ok, lock } = await getConsumerLock({ userId, projectId });
     if (!ok) return res.status(500).json({ error: 'Failed to read lock' });
