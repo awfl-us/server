@@ -25,7 +25,9 @@ const PRICING = {
   'o3': { prompt: 2.00, completion: 8.00 },
   'gpt-5': { prompt: 1.25, completion: 10.00 },
   'gpt-5.1': { prompt: 1.25, completion: 10.00 },
-  'gpt-5.2': { prompt: 1.75, completion: 14.00 }
+  'gpt-5.2': { prompt: 1.75, completion: 14.00 },
+  'gpt-5.4': { prompt: 2.5, completion: 15.00 },
+  'gpt-5.5': { prompt: 5.00, completion: 30.00 }
 };
 
 // Max token limits for known models
@@ -42,12 +44,14 @@ const MAX_TOKENS = {
   'o3': 100000,
   'gpt-5': 128000,
   'gpt-5.1': 128000,
-  'gpt-5.2': 128000
+  'gpt-5.2': 128000,
+  'gpt-5.4': 128000,
+  'gpt-5.5': 128000,
 };
 
 function fixed_temperature(model, temperature) {
-  const fixed = { 'o3': 1, 'gpt-5': 1 };
-  return fixed[model] ?? temperature; // ensure a value is returned
+  const fixed = { 'o3': 1, 'gpt-5': 1, 'gpt-5.5': 1 };
+  return fixed[model] ?? temperature;
 }
 
 function estimateCost(model, usage) {
