@@ -35,11 +35,11 @@ export function removeFromList(prev = [], remove = []) {
 }
 
 export const DEFAULT_TOOLS = [
-  'READ_FILE',
-  'UPDATE_FILE',
-  'RUN_COMMAND',
-  'CREATE_TASK',
-  'UPDATE_TASK',
+  // 'READ_FILE',
+  // 'UPDATE_FILE',
+  // 'RUN_COMMAND',
+  // 'CREATE_TASK',
+  // 'UPDATE_TASK',
 ];
 
 export function sessionMapDocPath(userId, projectId, sessionId) {

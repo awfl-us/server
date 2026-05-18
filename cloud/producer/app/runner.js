@@ -8,6 +8,7 @@ import {
   WORKFLOWS_BASE_URL,
   GCS_TOKEN_ENV,
   GCS_BUCKET,
+  GCS_PREFIX,
   GCS_PREFIX_TEMPLATE,
   GCS_DEBUG,
   X_USER_ID,
@@ -80,6 +81,11 @@ async function withRetries(fn, { attempts = 3, baseDelayMs = 250, label = 'retry
   throw lastErr;
 }
 
+function normalizePrefix(p) {
+  const s = String(p || '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+  return s ? `${s}/` : '';
+}
+
 async function run() {
   console.log('[producer] starting with context', { X_USER_ID, X_PROJECT_ID, X_WORKSPACE_ID, X_SESSION_ID, SINCE_ID, SINCE_TIME, CONSUMER_ID });
   console.log('[producer] mode', { transport: 'pubsub', TOPIC, SUBSCRIPTION });
@@ -92,12 +98,13 @@ async function run() {
     console.warn('[producer] work root not available (continuing without persistence):', err?.message || err);
   }
 
+  // Compute preferred GCS prefix first, regardless of token source
+  let gcsPrefix = normalizePrefix(GCS_PREFIX || renderGcsPrefixTemplate(GCS_PREFIX_TEMPLATE, { userId: X_USER_ID, projectId: X_PROJECT_ID, workspaceId: X_WORKSPACE_ID, sessionId: X_SESSION_ID }));
+
   // Compute downscoped GCS token (mint if not provided via env)
   let gcsTokenToUse = GCS_TOKEN_ENV;
-  let gcsPrefix = '';
   if (!gcsTokenToUse && GCS_BUCKET) {
     try {
-      gcsPrefix = renderGcsPrefixTemplate(GCS_PREFIX_TEMPLATE, { userId: X_USER_ID, projectId: X_PROJECT_ID, workspaceId: X_WORKSPACE_ID, sessionId: X_SESSION_ID });
       const token = await getDownscopedToken({ bucket: GCS_BUCKET, prefix: gcsPrefix });
       gcsTokenToUse = token;
       console.log('[producer] minted downscoped GCS token', { bucket: GCS_BUCKET, prefix: gcsPrefix });
@@ -271,8 +278,9 @@ async function run() {
     const forwardEvt = { ...evt, tool_call: { function: { name: tool, arguments: args } } };
 
     // Attach GCS bootstrap info only on the first message for this producer session
-    if (!gcsBootstrapSent && gcsTokenToUse) {
-      forwardEvt.gcs = { bucket: GCS_BUCKET, prefix: gcsPrefix, token: gcsTokenToUse };
+    if (!gcsBootstrapSent && (gcsTokenToUse || gcsPrefix)) {
+      // Include prefix even if token is absent so consumer can resolve paths when it has its own access
+      forwardEvt.gcs = { bucket: GCS_BUCKET, prefix: gcsPrefix, ...(gcsTokenToUse ? { token: gcsTokenToUse } : {}) };
       gcsBootstrapSent = true;
     }
 

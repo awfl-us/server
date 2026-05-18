@@ -1,13 +1,20 @@
 import express from 'express';
-import { OpenAI } from 'openai';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getUserIdFromReq, userScopedCollectionPath } from '../workflows/utils.js';
 import { decryptString } from '../workflows/crypto.js';
 
+// Provider adapters
+import openaiAdapter from './providers/openai.js';
+import anthropicAdapter from './providers/anthropic.js';
+import geminiAdapter from './providers/gemini.js';
+import grokAdapter from './providers/grok.js';
+import deepseekAdapter from './providers/deepseek.js';
+import { stripNullsDeep } from './providers/utils.js';
+
 const router = express.Router();
 const db = getFirestore();
 
-// Pricing per 1,000,000 tokens in USD for OpenAI models (as of May 2025)
+// Pricing per 1,000,000 tokens in USD (OpenAI only for now)
 const PRICING = {
   'gpt-3.5-turbo': { prompt: 0.50, completion: 1.50 },
   'gpt-3.5-turbo-16k': { prompt: 3.00, completion: 4.00 },
@@ -30,8 +37,9 @@ const PRICING = {
   'gpt-5.5': { prompt: 5.00, completion: 30.00 }
 };
 
-// Max token limits for known models
+// Max completion token defaults per known models/providers
 const MAX_TOKENS = {
+  // OpenAI
   'gpt-4o': 16384,
   'chatgpt-4o-latest': 16384,
   'gpt-4-turbo': 4096,
@@ -47,6 +55,20 @@ const MAX_TOKENS = {
   'gpt-5.2': 128000,
   'gpt-5.4': 128000,
   'gpt-5.5': 128000,
+  // Anthropic (conservative completion caps)
+  'claude-3-5-sonnet': 8192,
+  'claude-3-opus': 8192,
+  'claude-3-haiku': 8192,
+  // Gemini
+  'gemini-1.5-pro': 8192,
+  'gemini-1.5-flash': 8192,
+  'gemini-2.0-flash': 8192,
+  // xAI Grok
+  'grok-2': 8192,
+  'grok-2-mini': 8192,
+  // DeepSeek
+  'deepseek-chat': 8192,
+  'deepseek-reasoner': 8192
 };
 
 function fixed_temperature(model, temperature) {
@@ -67,60 +89,135 @@ function resolveMaxTokens(model, fallback = 16384) {
   return MAX_TOKENS[model] || fallback;
 }
 
-async function getOpenAIKeyForUser(userId) {
-  const docRef = db.collection(userScopedCollectionPath(userId, 'creds')).doc('openai');
+function inferProvider(model = '') {
+  const m = (model || '').toLowerCase();
+  if (m.startsWith('claude-')) return 'anthropic';
+  if (m.startsWith('gemini-') || m.includes('gemini')) return 'gemini';
+  if (m.startsWith('grok-')) return 'grok';
+  if (m.startsWith('deepseek-')) return 'deepseek';
+  // Default to OpenAI (gpt-, chatgpt-, o1/o3, etc.)
+  return 'openai';
+}
+
+async function getApiKeyForUser(userId, providerId) {
+  const docRef = db.collection(userScopedCollectionPath(userId, 'creds')).doc(providerId);
   const snap = await docRef.get();
   if (!snap.exists) return null;
   const data = snap.data() || {};
   try {
     return decryptString(data.enc);
   } catch (e) {
-    console.error('[llm] decrypt openai cred failed:', e?.message || e);
-    throw new Error('Failed to decrypt stored OpenAI credential');
+    console.error(`[llm] decrypt ${providerId} cred failed:`, e?.message || e);
+    throw new Error(`Failed to decrypt stored ${providerId} credential`);
   }
 }
 
+// List supported model prefixes and known models
+router.get('/models', (_req, res) => {
+  const providers = [
+    {
+      id: 'openai',
+      prefixes: ['gpt-', 'chatgpt-', 'o1', 'o3', 'o4', 'gpt-5'],
+      examples: ['gpt-4o', 'chatgpt-4o-latest', 'o3']
+    },
+    {
+      id: 'anthropic',
+      prefixes: ['claude-'],
+      examples: ['claude-3-5-sonnet']
+    },
+    {
+      id: 'gemini',
+      prefixes: ['gemini-'],
+      examples: ['gemini-1.5-pro']
+    },
+    {
+      id: 'grok',
+      prefixes: ['grok-'],
+      examples: ['grok-2']
+    },
+    {
+      id: 'deepseek',
+      prefixes: ['deepseek-'],
+      examples: ['deepseek-chat']
+    }
+  ];
+
+  const inference = {
+    default_provider: 'openai',
+    rules: [
+      { provider: 'anthropic', match: 'claude-*' },
+      { provider: 'gemini', match: 'gemini-*' },
+      { provider: 'grok', match: 'grok-*' },
+      { provider: 'deepseek', match: 'deepseek-*' },
+      { provider: 'openai', match: 'gpt-*, chatgpt-*, o1*, o3*, o4*, gpt-5*' }
+    ]
+  };
+
+  res.status(200).json({
+    providers,
+    inference,
+    known_models: Object.keys(MAX_TOKENS),
+    max_tokens: MAX_TOKENS,
+    pricing: { openai: PRICING }
+  });
+});
+
 router.post('/chat', async (req, res) => {
   try {
-    console.log(`Chat request: ${JSON.stringify(req.body, null, 2)}`);
-
     const userId = await getUserIdFromReq(req);
     if (!userId) {
       return res.status(401).json({ error: 'Unauthorized: missing or invalid user' });
     }
 
-    const apiKey = await getOpenAIKeyForUser(userId);
-    if (!apiKey) {
-      return res.status(400).json({ error: 'Missing OpenAI credential for user. Set it via POST /workflows/creds/openai with { value: "sk-..." }.' });
-    }
-
-    const client = new OpenAI({ apiKey });
-
-    // Accept both max_completion_tokens (preferred) and legacy max_tokens
-    const { messages, model = 'gpt-4', temperature = 0.7, max_tokens, max_completion_tokens, response_format, tools, tool_choice } = req.body;
+    const { messages, model = 'gpt-4', temperature = 0.7, max_tokens, max_completion_tokens, response_format, tools, tool_choice } = req.body || {};
 
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: 'Missing or invalid "messages" array in request body.' });
     }
 
+    const provider = inferProvider(model);
+    const apiKey = await getApiKeyForUser(userId, provider);
+    if (!apiKey) {
+      return res.status(400).json({
+        error: `Missing ${provider} credential for user. Set it via POST /workflows/creds/${provider} with { value: "<api-key>" }.`
+      });
+    }
+
     const resolvedMaxTokens = (max_completion_tokens ?? max_tokens) ?? resolveMaxTokens(model);
 
-    const response = await client.chat.completions.create({
+    const params = stripNullsDeep({
+      apiKey,
       model,
       messages,
       temperature: fixed_temperature(model, temperature),
-      max_completion_tokens: resolvedMaxTokens,
+      max_tokens: resolvedMaxTokens,
       response_format,
       tools,
       tool_choice
     });
 
-    console.log('Full LLM response:', JSON.stringify(response, null, 2));
+    let result;
+    switch (provider) {
+      case 'anthropic':
+        result = await anthropicAdapter.chat(params);
+        break;
+      case 'gemini':
+        result = await geminiAdapter.chat(params);
+        break;
+      case 'grok':
+        result = await grokAdapter.chat(params);
+        break;
+      case 'deepseek':
+        result = await deepseekAdapter.chat(params);
+        break;
+      case 'openai':
+      default:
+        result = await openaiAdapter.chat(params);
+        break;
+    }
 
-    const choice = response.choices?.[0];
-    const message = choice?.message
-    const usage = response.usage;
-    const total_cost = estimateCost(model, usage);
+    const { message, usage } = result || {};
+    const total_cost = provider === 'openai' ? estimateCost(model, usage) : null;
 
     res.status(200).json({ message, usage, total_cost });
   } catch (error) {

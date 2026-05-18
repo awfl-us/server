@@ -17,6 +17,8 @@ import gitFilesRouter from './gitFiles.js';
 import callbacksRoutes from './callbacks/index.js'
 import credsRoutes from './creds/index.js'
 import producerRoutes from '../jobs/producer/index.js'
+import filesystemRoutes from './services/filesystem.js'
+import llmApiRoutes from './llm.api.js'
 
 const router = express.Router()
 router.use(express.json())
@@ -41,10 +43,14 @@ router.use('/definitions', definitionsRoutes)
 router.use('/types', typesRoutes)
 router.use('/prompts', promptsRoutes)
 router.use('/services/git', gitFilesRouter)
+router.use('/services/filesystem', filesystemRoutes)
 router.use('/workspace', workspaceRoutes)
 router.use('/creds', credsRoutes)
 router.use('/callbacks', callbacksRoutes)
 router.use('/producer', producerRoutes)
+
+// Client-facing LLM info (models list, etc.)
+router.use('/llm', llmApiRoutes)
 
 router.use('/', workflows)
 

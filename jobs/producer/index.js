@@ -44,6 +44,9 @@ router.post('/start', async (req, res) => {
     const body = req.body || {};
     let workspaceId = String(body.workspaceId || body.workspace_id || '').trim();
 
+    // Optional explicit GCS prefix to pass to producer/consumer
+    const gcsPrefix = String(body.gcsPrefix || body.gcs_prefix || '').trim();
+
     // Session handling:
     // - Use the provided sessionId (if any) for Pub/Sub filtering and runtime reporting.
     // - Do NOT default to a random session for workspace resolution; if absent, the workspace is project-wide.
@@ -157,6 +160,9 @@ router.post('/start', async (req, res) => {
         reconnectBackoffMs: baseCtx.reconnectBackoffMs,
         consumerId,
       });
+
+      // Pass explicit GCS prefix if provided
+      if (gcsPrefix) producerEnvPairs.push({ name: 'GCS_PREFIX', value: gcsPrefix });
 
       producerEnvPairs.push({ name: 'PUBSUB_ENABLE', value: '1' });
       producerEnvPairs.push({ name: 'TOPIC', value: topic });
@@ -297,6 +303,9 @@ router.post('/start', async (req, res) => {
       reconnectBackoffMs: baseCtx.reconnectBackoffMs,
       consumerId,
     });
+
+    // Pass explicit GCS prefix if provided
+    if (gcsPrefix) producerEnvPairs.push({ name: 'GCS_PREFIX', value: gcsPrefix });
 
     const producerOverrides = [{ name: producerContainerName, env: [...producerEnvPairs, { name: 'SUBSCRIPTION', value: subResp }] }];
 
