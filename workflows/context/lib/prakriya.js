@@ -149,24 +149,22 @@ export async function buildYojMessages({ name, kala, userId, projectId, framing 
     }
     case 'SessionKala': {
       const { sessionId, sessionEnd } = kala;
-      const eightHours = sessionEnd - (60 * 60 * 8)
+      const eightHours = sessionEnd - 60 * 60 * 8;
       const sessions = await listBetweenFlat(userId, projectId, convoCollection(sessionId, name), eightHours, sessionEnd);
-      const weeklyDoc = await readDoc(userId, projectId, logSessionsCollection(name), sessionId);
-
-      let weeklyDocuments = [];
-      if (weeklyDoc) {
-        if (Array.isArray(weeklyDoc.documents)) {
-          weeklyDocuments = weeklyDoc.documents.map((d, idx) => ({ id: `${sessionId}#${idx}`, data: d.data ?? d }));
-        } else {
-          weeklyDocuments = [{ id: sessionId, data: weeklyDoc }];
-        }
-      }
-      documents = [...sessions, ...weeklyDocuments];
+      documents = sessions;
       break;
     }
     case 'WeekKala': {
-      // Yoj.read returns empty for WeekKala in Scala
-      documents = [];
+      const { weekEnd } = kala;
+      const weekBegin = weekEnd - WEEK_SECONDS;
+      // Return all session-level documents during the week window (one per session)
+      documents = await listBetweenFlat(
+        userId,
+        projectId,
+        logSessionsCollection(name),
+        weekBegin,
+        weekEnd
+      );
       break;
     }
     case 'TermKala': {

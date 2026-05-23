@@ -8,7 +8,9 @@
     "start:jobs": "node jobs.server.js",
     "dev:api": "nodemon api.server.js",
     "dev:jobs": "nodemon jobs.server.js",
-    "test": "mocha test.js"
+    "test": "mocha test.js",
+    "test:jest": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --env=node",
+    "test:context": "npm run -s test:jest -- --config ./jest.config.mjs"
   },
   "engines": {
     "node": "22"
@@ -37,6 +39,7 @@
     "twilio": "^5.4.4"
   },
   "devDependencies": {
+    "jest": "^29.7.0",
     "nodemon": "^3.1.10"
   },
   "private": true
