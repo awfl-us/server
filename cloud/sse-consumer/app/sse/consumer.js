@@ -1,3 +1,4 @@
+import path from 'path';
 import { WORKFLOWS_BASE_URL, EVENTS_HEARTBEAT_MS } from '../config.js';
 import { getIdTokenHeader } from '../auth.js';
 import { resolveWithin } from '../storage.js';
@@ -31,9 +32,7 @@ function getToolArgs(obj) {
   return obj?.args ?? obj?.arguments ?? obj?.payload?.args ?? obj?.payload;
 }
 
-export function createHandlers({ workRoot, res, gcs }) {
-  const resolvePath = (rel) => resolveWithin(workRoot, rel);
-
+export function createHandlers({ workRoot, res, gcs, sessionId }) {
   async function handleCallback(ev) {
     const id = ev?.id || ev?.event_id || ev?.request_id || null;
     const callbackId = ev?.callbackId || ev?.callback_id || null;
@@ -41,7 +40,20 @@ export function createHandlers({ workRoot, res, gcs }) {
     const argsRaw = getToolArgs(ev);
     const args = parseToolArgs(argsRaw);
 
-    ctr('tool start', { id, tool, hasCallback: Boolean(callbackId) });
+    // Determine active root: allow explicit directory override via ev.workdir
+    let activeRoot = workRoot;
+    try {
+      const wd = ev?.workdir;
+      if (wd && typeof wd === 'string' && wd.trim()) {
+        activeRoot = path.isAbsolute(wd) ? wd : path.resolve(workRoot, wd);
+      }
+    } catch (_) {
+      // Ignore malformed workdir; fall back to default workRoot
+    }
+
+    const resolvePath = (rel) => resolveWithin(activeRoot, rel);
+
+    ctr('tool start', { id, tool, hasCallback: Boolean(callbackId), usingWorkdir: activeRoot !== workRoot, activeRoot });
 
     try {
       let result;
@@ -50,13 +62,19 @@ export function createHandlers({ workRoot, res, gcs }) {
       } else if (tool === 'UPDATE_FILE') {
         result = await doUpdateFile(args, resolvePath);
       } else if (tool === 'RUN_COMMAND') {
-        result = await doRunCommand(args, workRoot);
+        // Support top-level timeout_seconds on the event object. null => unlimited
+        let runArgs = args;
+        if (Object.prototype.hasOwnProperty.call(ev || {}, 'timeout_seconds')) {
+          const t = ev.timeout_seconds;
+          runArgs = { ...args, timeoutSeconds: t === null ? null : Number(t) };
+        }
+        result = await doRunCommand(runArgs, activeRoot);
       } else if (tool === 'GCS_SYNC' || tool === 'SYNC_GCS' || tool === 'GCS.MIRROR') {
         const bucket = String(args.bucket || gcs?.bucket || '');
         const prefix = String(args.prefix || gcs?.prefix || '');
         const token = String(args.token || gcs?.token || '');
         if (!bucket) throw new Error('GCS_SYNC: missing bucket');
-        result = await syncBucketPrefix({ bucket, prefix, workRoot, token });
+        result = await syncBucketPrefix({ bucket, prefix, workRoot: activeRoot, token });
       } else {
         // Unknown callback — return null as result per minimization contract
         result = null;
@@ -99,7 +117,7 @@ export async function startConsumer({ userId, projectId, workspaceId, sessionId,
     try { res.write(`ping ${Date.now()}\n`); } catch {}
   }, EVENTS_HEARTBEAT_MS);
 
-  const { handleLine } = createHandlers({ workRoot, res });
+  const { handleLine } = createHandlers({ workRoot, res, sessionId });
 
   try {
     const url = new URL(`${WORKFLOWS_BASE_URL.replace(/\/$/, '')}/events/stream`);

@@ -123,7 +123,7 @@ export function registerStreamRoute(app) {
       syncIv = setInterval(() => { if (!closed) runSync('interval'); }, Math.max(1000, SYNC_INTERVAL_MS));
     }
 
-    const { handleLine } = createHandlers({ workRoot, res, gcs: { bucket: gcsBucket, prefix: gcsPrefix, token: gcsToken } });
+    const { handleLine } = createHandlers({ workRoot, res, gcs: { bucket: gcsBucket, prefix: gcsPrefix, token: gcsToken }, sessionId });
 
     // Heartbeat pings back to producer
     try { res.write(`ready ${Date.now()}\n`); } catch {}

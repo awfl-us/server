@@ -19,6 +19,7 @@
     "@google-cloud/pubsub": "^5.1.0",
     "@google-cloud/tasks": "^6.1.0",
     "@google-cloud/workflows": "^4.1.0",
+    "@kubernetes/client-node": "^0.21.0",
     "@langchain/openai": "^0.5.7",
     "@sendgrid/mail": "^8.1.4",
     "axios": "^1.7.8",

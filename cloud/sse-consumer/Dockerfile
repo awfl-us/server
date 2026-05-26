@@ -1,19 +1,21 @@
-# Node-only SSE consumer for local dev and Cloud Run
-# - Uses Node 22 (includes global fetch)
-# - Installs production deps only
-# - Runs as non-root user and writes workspace under /workspace
-#
-# GitHub auth:
-# - Provide authentication via one of:
-#   - Set environment variable GH_TOKEN or GITHUB_TOKEN to a classic GitHub PAT
-#     with at least public_repo scope (repo if you might fork private repos), OR
-#   - Use interactive auth: gh auth login --web
+# Python AWFL consumer workspace image
+# - Python 3.11 slim
+# - Installs awfl from PyPI
+# - Includes git, ssh, curl, gh
+# - Runs as non-root user
+# - Writable workspace under /workspace
 
-FROM node:22-slim AS base
-ENV NODE_ENV=production
+FROM python:3.11-slim AS base
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PATH="/home/awfl/.local/bin:${PATH}" \
+    HOME="/home/awfl" \
+    WORKDIR="/workspace"
+
 WORKDIR /app
 
-# Install OS utilities needed for git/GitHub operations.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        ca-certificates \
@@ -21,9 +23,15 @@ RUN apt-get update \
        git \
        openssh-client \
        gnupg \
+       bash \
+       jq \
+       coreutils \
+       sed \
+       grep \
+       findutils \
     && rm -rf /var/lib/apt/lists/*
 
-# Install GitHub CLI (gh) v2.x from the official GitHub apt repo.
+# Install GitHub CLI from official GitHub apt repo.
 RUN mkdir -p /etc/apt/keyrings \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       | dd of=/etc/apt/keyrings/githubcli-archive-keyring.gpg \
@@ -34,18 +42,17 @@ RUN mkdir -p /etc/apt/keyrings \
     && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
-# Install deps separately for better layer caching.
-COPY package*.json ./
-RUN if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit=dev; fi \
-    && npm cache clean --force
+# Non-root user for tool execution.
+RUN useradd -m -s /bin/bash awfl \
+    && mkdir -p /workspace /app \
+    && chown -R awfl:awfl /workspace /app /home/awfl
 
-# App sources
-COPY app ./app
-COPY README.md ./README.md
+USER awfl
 
-# Prepare writable workspace for tools
-RUN mkdir -p /workspace && chown -R node:node /workspace
+# Pin this once you have a known-good release.
+RUN python -m pip install --user --upgrade pip \
+    && python -m pip install --user awfl
 
-USER node
+WORKDIR /workspace
 
-CMD ["node", "app/worker.js"]
+CMD ["awfl"]

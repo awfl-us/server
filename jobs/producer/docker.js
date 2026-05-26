@@ -78,7 +78,7 @@ async function detectComposeNetwork() {
   }
 }
 
-export async function runLocalDocker({ image, containerName, envPairs, extraArgs = [] }) {
+export async function runLocalDocker({ image, containerName, envPairs, extraArgs = [], command, shCommand }) {
   const args = ['run', '-d', '--rm', '--name', containerName, ...toDockerEnvFlags(envPairs)];
 
   // If provided, mount a host service account key into the producer container and set ADC path.
@@ -125,6 +125,13 @@ export async function runLocalDocker({ image, containerName, envPairs, extraArgs
   if (reqArgs.length) args.push(...reqArgs);
   args.push(image);
 
+  // Override container command if provided
+  if (Array.isArray(command) && command.length) {
+    args.push(...command.map(String));
+  } else if (typeof shCommand === 'string' && shCommand.trim()) {
+    args.push('sh', '-lc', shCommand);
+  }
+
   // Diagnostics: log the docker run we are about to execute (sanitized)
   try {
     // eslint-disable-next-line no-console
@@ -137,6 +144,7 @@ export async function runLocalDocker({ image, containerName, envPairs, extraArgs
       // Note: GOOGLE_APPLICATION_CREDENTIALS value will be printed, which is a file path only.
       env: sanitizeEnvPairs(envPairs),
       adc: keyHostPath ? { mounted: true, mountPath: mountTarget } : { mounted: false },
+      command: Array.isArray(command) ? command : (shCommand ? ['sh', '-lc', shCommand] : null),
     });
   } catch {}
 

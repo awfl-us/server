@@ -17,6 +17,7 @@ services:
       - WORKFLOW_ENV=Dev
       - CHROMIUM_PATH=/usr/bin/headless-chromium
       - WORKFLOWS_BASE_URL=${WORKFLOWS_BASE_URL}
+      - API_ORIGIN=http://js-server:5050/api
       - ALLOW_SKIP_AUTH=${ALLOW_SKIP_AUTH}
       - SERVICE_TARGET=dev
       - ENCRYPTION_SECRET_KEY=${ENCRYPTION_SECRET_KEY}
@@ -44,6 +45,8 @@ services:
       - GCS_BUCKET=${GCS_BUCKET}
       - PUBSUB_TOPIC=${PUBSUB_TOPIC}
       - LOCAL_DOCKER_RM=0 # Disable to keep producer/consumer containers around after ending
+      - FIREBASE_CLIENT_EMAIL=${FIREBASE_CLIENT_EMAIL}
+      - FIREBASE_PRIVATE_KEY=${FIREBASE_PRIVATE_KEY}
     volumes:
       - ./serviceAccountKey.json:/app/serviceAccountKey.json
       - ./jobs:/app/jobs

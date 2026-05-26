@@ -11,10 +11,6 @@ import {
 
 const execAsync = promisify(exec);
 
-function clamp(n, min, max) {
-  return Math.max(min, Math.min(max, n));
-}
-
 function ensureString(val) {
   return typeof val === 'string' ? val : String(val ?? '');
 }
@@ -68,7 +64,25 @@ export async function doUpdateFile(args, resolvePath) {
 export async function doRunCommand(args, cwd) {
   const cmd = ensureString(args.command || args.cmd || args.run || args.shell);
   if (!cmd) throw new Error('RUN_COMMAND: missing command');
-  const timeoutMs = clamp(Number(args.timeoutSeconds ?? RUN_COMMAND_TIMEOUT_SECONDS) * 1000, 1000, 10 * 60 * 1000);
+
+  // timeoutSeconds behavior:
+  // - undefined => use env default (RUN_COMMAND_TIMEOUT_SECONDS)
+  // - null => no timeout (0 for child_process.exec)
+  // - number => seconds, no upper clamp (allow long-running ops)
+  let timeoutMs;
+  if (Object.prototype.hasOwnProperty.call(args, 'timeoutSeconds')) {
+    const t = args.timeoutSeconds;
+    if (t === null) {
+      timeoutMs = 0; // unlimited
+    } else {
+      const n = Number(t);
+      timeoutMs = Number.isFinite(n) && n >= 0 ? Math.floor(n * 1000) : 0;
+    }
+  } else {
+    const def = Number(RUN_COMMAND_TIMEOUT_SECONDS);
+    timeoutMs = Number.isFinite(def) && def > 0 ? Math.floor(def * 1000) : 0; // 0 = unlimited if misconfigured
+  }
+
   const env = { ...process.env };
   const opts = { cwd: cwd || process.cwd(), timeout: timeoutMs, maxBuffer: Math.max(OUTPUT_MAX_BYTES * 4, 1_000_000), env };
   try {

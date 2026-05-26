@@ -100,6 +100,25 @@ router.patch('/:id', async (req, res) => {
   }
 });
 
+// Delete a project
+router.delete('/:id', async (req, res) => {
+  try {
+    const userId = req.userId;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized: missing req.userId' });
+    const { id } = req.params;
+
+    const ref = projectDoc(userId, id);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ error: 'Project not found' });
+
+    await ref.delete();
+    return res.status(200).json({ ok: true });
+  } catch (err) {
+    console.error('[projects] delete failed', err);
+    return res.status(500).json({ error: 'Failed to delete project' });
+  }
+});
+
 // Obtain or refresh a consumer lock for a project
 // Endpoint: POST /:id/consumer-lock/acquire
 // Headers (optional): x-consumer-id, x-lock-lease-ms, x-consumer-type

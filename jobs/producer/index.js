@@ -1,29 +1,31 @@
 import express from 'express';
-import {
-  requiredEnv,
-  randomId,
-  splitArgs,
-} from './utils.js';
-import { runLocalDocker, stopContainer } from './docker.js';
+import { randomBytes } from 'node:crypto';
+import { requiredEnv, randomId } from './utils.js';
 import { ensureWorkspaceId } from '../../workflows/workspace/service.js';
 import {
   acquireConsumerLock,
   releaseConsumerLock,
-  setConsumerRuntimeInfo,
   getConsumerLock,
 } from '../../workflows/projects/lock.js';
 import { ensureSubscription, addSubscriberBinding, deleteSubscription } from './pubsubAdmin.js';
-import { sanitizeId, buildBaseContext, deriveEncryption, buildProducerEnv } from './envBuilder.js';
-import { launchLocalPair } from './localDocker.js';
-import { runCloudRunJob, cancelOperation, cancelJobExecutions } from './cloudRun.js';
+import { sanitizeId, buildBaseContext, deriveEncryption } from './envBuilder.js';
+import { startCloudRun } from './paths/cloudRun.js';
+import { startGke } from './paths/gke.js';
+import { startLocalDocker } from './paths/localDocker.js';
+import { stopByRuntime } from './paths/stop.js';
 import { resolveStoredGithubToken } from '../../workflows/gitFiles.js';
-import { scheduleStartupProgress, cancelStartupProgress, completeStartupProgress } from './progress.js';
-import { monitorCloudRunStartup } from './readiness.js';
+import { cancelStartupProgress } from './progress.js';
+import { mintUserTokens } from './auth/firebaseTokens.js';
 
 const router = express.Router();
 router.use(express.json());
 
 // POST /jobs/producer/start
+// Supports optional request body param `image` to specify the CONSUMER image only.
+// - Local Docker path: overrides the sidecar consumer image if sidecar is enabled.
+// - Cloud Run path: attempts a best-effort per-run image override via containerOverrides; if the
+//   platform ignores image overrides, the job's configured image will be used.
+// - GKE path: uses CONSUMER_K8S_IMAGE by default, but allows override via body.image
 router.post('/start', async (req, res) => {
   let consumerId = null;
   let lockAcquired = false;
@@ -47,9 +49,13 @@ router.post('/start', async (req, res) => {
     // Optional explicit GCS prefix to pass to producer/consumer
     const gcsPrefix = String(body.gcsPrefix || body.gcs_prefix || '').trim();
 
-    // Session handling:
-    // - Use the provided sessionId (if any) for Pub/Sub filtering and runtime reporting.
-    // - Do NOT default to a random session for workspace resolution; if absent, the workspace is project-wide.
+    // Optional consumer image override (for local sidecar, Cloud Run, or GKE consumer)
+    const requestedConsumerImage = String(body.image || '').trim();
+    if (requestedConsumerImage && /\s|["'`]/.test(requestedConsumerImage)) {
+      return res.status(400).json({ error: 'Invalid image parameter' });
+    }
+
+    // Session handling
     const requestedSessionId = String(body.sessionId || body.session_id || '').trim();
     const sessionIdForFilter = requestedSessionId; // may be '' (meaning no session filter)
     const sessionIdForWorkspace = requestedSessionId || undefined; // undefined -> project-wide workspace
@@ -76,7 +82,11 @@ router.post('/start', async (req, res) => {
       overrideVer: body.ENC_VER || body.enc_ver,
     });
 
-    consumerId = randomId('producer');
+    consumerId = randomId('consumer');
+
+    // Mint an external project lock token and id for this run
+    const lockToken = randomBytes(32).toString('hex');
+    const lockId = randomId('lock');
 
     const lock = await acquireConsumerLock({ userId, projectId, consumerId, leaseMs, consumerType: 'CLOUD' });
     if (!lock.ok && lock.conflict) {
@@ -85,7 +95,8 @@ router.post('/start', async (req, res) => {
     lockAcquired = true;
 
     const sidecarEnabled = String(process.env.PRODUCER_SIDECAR_ENABLE || '').trim() === '1';
-    const sidecarImage = process.env.PRODUCER_SIDECAR_CONSUMER_IMAGE || 'awfl-consumer:dev';
+    const sidecarDefaultImage = process.env.PRODUCER_SIDECAR_CONSUMER_IMAGE || 'awfl-consumer:dev';
+    const sidecarImage = requestedConsumerImage || sidecarDefaultImage;
     const sidecarArgsTemplate = process.env.PRODUCER_SIDECAR_DOCKER_ARGS || '';
 
     console.log('[jobs/producer:start] plan', { userId, projectId, sessionId: sessionIdForFilter || null, enc_ver: encVer, enc_fp: encFp, localDocker, sidecarEnabled });
@@ -140,260 +151,113 @@ router.post('/start', async (req, res) => {
       githubToken = null;
     }
 
+    // Mint per-request Firebase auth tokens for the calling user
+    let firebaseIdToken = '';
+    let firebaseCustomToken = '';
+    try {
+      const minted = await mintUserTokens({ uid: userId });
+      firebaseIdToken = minted?.idToken || '';
+      firebaseCustomToken = minted?.customToken || '';
+    } catch (e) {
+      console.warn('[jobs/producer:start] token mint failed; continuing without per-request token', e?.message || e);
+    }
+
+    // Local Docker path
     if (localDocker) {
-      const image = localDockerImage || 'awfl-producer:dev';
-      const producerContainerName = `producer-${consumerId}`.slice(0, 63);
-      const producerEnvPairs = buildProducerEnv({
+      const { status, body: bodyOut } = await startLocalDocker({
         userId,
         projectId,
-        workspaceId,
-        sessionId: sessionIdForFilter || undefined,
-        since_id,
-        since_time,
-        workflowsBaseUrl: baseCtx.workflowsBaseUrl,
-        workflowsAudience: baseCtx.workflowsAudience,
-        serviceAuthToken: baseCtx.serviceAuthToken,
-        leaseMs,
+        consumerId,
+        gcpProject,
+        gcsPrefix,
+        baseCtx,
         encKeyB64,
         encVer,
-        eventsHeartbeatMs: baseCtx.eventsHeartbeatMs,
-        reconnectBackoffMs: baseCtx.reconnectBackoffMs,
-        consumerId,
+        encFp,
+        topic,
+        subReq,
+        subResp,
+        sessionIdForFilter,
+        workspaceId,
+        sidecarEnabled,
+        sidecarImage,
+        sidecarArgsTemplate,
+        localDockerImage,
+        localDockerArgs: body.localDockerArgs,
+        githubToken,
+        since_id,
+        since_time,
+        leaseMs,
+        bestEffortRelease,
+        firebaseIdToken,
+        firebaseCustomToken,
+        lockToken,
+        lockId,
       });
-
-      // Pass explicit GCS prefix if provided
-      if (gcsPrefix) producerEnvPairs.push({ name: 'GCS_PREFIX', value: gcsPrefix });
-
-      producerEnvPairs.push({ name: 'PUBSUB_ENABLE', value: '1' });
-      producerEnvPairs.push({ name: 'TOPIC', value: topic });
-      producerEnvPairs.push({ name: 'SUBSCRIPTION', value: subResp });
-
-      try {
-        let sidecarInfo = null;
-        let sidecarName = null;
-
-        if (sidecarEnabled) {
-          sidecarName = `consumer-${consumerId}`.slice(0, 63);
-
-          // Schedule startup progress BEFORE launching containers so the overlay reflects actual startup.
-          const sched = scheduleStartupProgress({ userId, projectId });
-          if (!sched?.ok) console.warn('[jobs/producer:start] progress schedule failed', sched);
-          else console.log('[jobs/producer:start] progress scheduled', { userId, projectId });
-
-          const { producerInfo, consumerInfo } = await launchLocalPair({
-            producerImage: image,
-            producerContainerName,
-            producerEnvPairs,
-            producerExtraArgs: Array.isArray(body.localDockerArgs) ? body.localDockerArgs : splitArgs(body.localDockerArgs || ''),
-            consumerImage: sidecarImage,
-            consumerContainerName: sidecarName,
-            consumerArgsTemplate: sidecarArgsTemplate,
-            workflowsBaseUrl: baseCtx.workflowsBaseUrl,
-            eventsHeartbeatMs: baseCtx.eventsHeartbeatMs,
-            reconnectBackoffMs: baseCtx.reconnectBackoffMs,
-            encKeyB64,
-            encVer,
-            topic,
-            subReq,
-            // Pass through stored token (if any)
-            githubToken,
-          });
-          sidecarInfo = consumerInfo;
-          try {
-            await setConsumerRuntimeInfo({
-              userId,
-              projectId,
-              consumerId,
-              runtime: {
-                mode: 'local-docker',
-                producer: { containerName: producerContainerName, containerId: producerInfo?.id || null },
-                sidecar: sidecarName ? { containerName: sidecarName, containerId: sidecarInfo?.id || null } : null,
-                stopRequested: false,
-                enc_ver: encVer,
-                enc_fp: encFp,
-                sessionId: sessionIdForFilter || null,
-                sub_req: subReq,
-                sub_resp: subResp,
-                topic,
-              },
-            });
-          } catch (e) {
-            console.warn('[jobs/producer:start] failed to persist runtime info', e?.message || e);
-          }
-
-          // Both containers are launched; clear the startup overlay immediately.
-          try { completeStartupProgress({ userId, projectId, reason: 'local-docker started' }); } catch (e) { console.warn('[jobs/producer:start] progress early-complete failed', e?.message || e); }
-
-          return res.status(202).json({ ok: true, mode: 'local-docker', image, containerName: producerContainerName, containerId: (producerInfo?.id || null), consumerId, workspaceId, sessionId: sessionIdForFilter || null, enc_ver: encVer, enc_fp: encFp, sub_req: subReq, sub_resp: subResp, topic });
-        }
-
-        const { id, args } = await runLocalDocker({ image, containerName: producerContainerName, envPairs: producerEnvPairs, extraArgs: Array.isArray(body.localDockerArgs) ? body.localDockerArgs : splitArgs(body.localDockerArgs || '') });
-
-        try {
-          await setConsumerRuntimeInfo({
-            userId,
-            projectId,
-            consumerId,
-            runtime: {
-              mode: 'local-docker',
-              producer: { containerName: producerContainerName, containerId: id },
-              sidecar: null,
-              stopRequested: false,
-              enc_ver: encVer,
-              enc_fp: encFp,
-              sessionId: sessionIdForFilter || null,
-              sub_req: subReq,
-              sub_resp: subResp,
-              topic,
-            },
-          });
-        } catch (e) {
-          console.warn('[jobs/producer:start] failed to persist runtime info', e?.message || e);
-        }
-
-        // No sidecar/consumer -> skip progress overlay
-        return res.status(202).json({ ok: true, mode: 'local-docker', image, containerName: producerContainerName, containerId: id, consumerId, args, workspaceId, sessionId: sessionIdForFilter || null, enc_ver: encVer, enc_fp: encFp, sub_req: subReq, sub_resp: subResp, topic });
-      } catch (e) {
-        console.error('[jobs/producer:start] local docker error', e);
-        await deleteSubscription({ gcpProject, name: subReq }).catch(() => {});
-        await deleteSubscription({ gcpProject, name: subResp }).catch(() => {});
-        await bestEffortRelease({ userId, projectId });
-        // On error, ensure any scheduled progress is cancelled/cleared (best-effort)
-        cancelStartupProgress({ userId, projectId, reason: 'local-docker error' });
-        return res.status(500).json({ error: 'Failed to start local docker container', details: String(e?.message || e) });
-      }
+      return res.status(status).json(bodyOut);
     }
 
-    const consumerJobName = process.env.CONSUMER_CLOUD_RUN_JOB_NAME || '';
-    const producerJobName = process.env.PRODUCER_CLOUD_RUN_JOB_NAME || process.env.CLOUD_RUN_JOB_NAME;
-    const producerContainerName = process.env.PRODUCER_CONTAINER_NAME || process.env.CLOUD_RUN_CONTAINER_NAME || 'producer';
+    // Determine platform: default to GKE
+    const platform = (String(body.platform || process.env.PRODUCER_PLATFORM || 'gke') || 'gke').toLowerCase();
 
-    if (!producerJobName) { await bestEffortRelease({ userId, projectId }); return res.status(500).json({ error: 'Server missing PRODUCER_CLOUD_RUN_JOB_NAME' }); }
-    if (!consumerJobName) { await bestEffortRelease({ userId, projectId }); return res.status(500).json({ error: 'Server missing CONSUMER_CLOUD_RUN_JOB_NAME' }); }
+    // Cloud Run path
+    if (platform === 'cloud-run') {
+      const { status, body: bodyOut } = await startCloudRun({
+        userId,
+        projectId,
+        consumerId,
+        gcpProject,
+        location,
+        requestedConsumerImage,
+        encKeyB64,
+        encVer,
+        encFp,
+        baseCtx,
+        gcsPrefix,
+        sidecarEnabled,
+        topic,
+        subReq,
+        subResp,
+        sessionIdForFilter,
+        githubToken,
+        workspaceId,
+        since_id,
+        since_time,
+        leaseMs,
+        bestEffortRelease,
+        // TODO: wire firebaseIdToken/customToken to Cloud Run consumer when supported
+      });
+      return res.status(status).json(bodyOut);
+    }
 
-    // Build overrides up front so both jobs can be started in parallel
-    const consumerOverrides = [{
-      name: 'consumer',
-      env: [
-        { name: 'SUBSCRIPTION', value: subReq },
-        { name: 'ENC_KEY_B64', value: encKeyB64 },
-        { name: 'ENC_VER', value: encVer },
-        { name: 'REPLY_CHANNEL', value: 'resp' },
-        { name: 'GCS_DEBUG', value: '1' },
-        { name: 'GCS_TRACE', value: '1' },
-        { name: 'CONSUMER_ID', value: consumerId },
-        ...(githubToken ? [{ name: 'GITHUB_TOKEN', value: githubToken }] : []),
-      ],
-    }];
-
-    const producerEnvPairs = buildProducerEnv({
+    // GKE path (default)
+    const { status, body: bodyOut } = await startGke({
       userId,
       projectId,
-      workspaceId,
-      sessionId: sessionIdForFilter || undefined,
-      since_id,
-      since_time,
-      workflowsBaseUrl: baseCtx.workflowsBaseUrl,
-      workflowsAudience: baseCtx.workflowsAudience,
-      serviceAuthToken: baseCtx.serviceAuthToken,
-      leaseMs,
+      consumerId,
+      gcpProject,
+      requestedConsumerImage,
       encKeyB64,
       encVer,
-      eventsHeartbeatMs: baseCtx.eventsHeartbeatMs,
-      reconnectBackoffMs: baseCtx.reconnectBackoffMs,
-      consumerId,
+      encFp,
+      baseCtx,
+      gcsPrefix,
+      topic,
+      subReq,
+      subResp,
+      sessionIdForFilter,
+      githubToken,
+      workspaceId,
+      since_id,
+      since_time,
+      leaseMs,
+      bestEffortRelease,
+      firebaseIdToken,
+      firebaseCustomToken,
+      lockToken,
+      lockId,
     });
-
-    // Pass explicit GCS prefix if provided
-    if (gcsPrefix) producerEnvPairs.push({ name: 'GCS_PREFIX', value: gcsPrefix });
-
-    const producerOverrides = [{ name: producerContainerName, env: [...producerEnvPairs, { name: 'SUBSCRIPTION', value: subResp }] }];
-
-    // Start both Cloud Run Jobs in parallel; handle failures with unified cleanup/cancellation
-    let consumerRun, producerRun;
-    try {
-      [consumerRun, producerRun] = await Promise.all([
-        runCloudRunJob({ gcpProject, location, jobName: consumerJobName, containerOverrides: consumerOverrides }),
-        runCloudRunJob({ gcpProject, location, jobName: producerJobName, containerOverrides: producerOverrides }),
-      ]);
-    } catch (e) {
-      // Transport/runtime fault starting one of the jobs
-      await deleteSubscription({ gcpProject, name: subReq }).catch(() => {});
-      await deleteSubscription({ gcpProject, name: subResp }).catch(() => {});
-      await bestEffortRelease({ userId, projectId });
-      // Best-effort clear/cancel any progress schedule
-      cancelStartupProgress({ userId, projectId, reason: 'cloud-run launch transport error' });
-      return res.status(500).json({ error: 'Transport error starting Cloud Run jobs', details: String(e?.message || e) });
-    }
-
-    if (!consumerRun?.ok || !producerRun?.ok) {
-      // Attempt to cancel any job that did start
-      const cancelOps = [];
-      try {
-        if (consumerRun?.ok && consumerRun?.data?.name) cancelOps.push(cancelOperation({ name: consumerRun.data.name }).catch(() => ({ ok: false })));
-        if (producerRun?.ok && producerRun?.data?.name) cancelOps.push(cancelOperation({ name: producerRun.data.name }).catch(() => ({ ok: false })));
-        await Promise.allSettled(cancelOps);
-      } catch {}
-
-      await deleteSubscription({ gcpProject, name: subReq }).catch(() => {});
-      await deleteSubscription({ gcpProject, name: subResp }).catch(() => {});
-      await bestEffortRelease({ userId, projectId });
-
-      const status = (!consumerRun?.ok ? consumerRun?.status : null) || (!producerRun?.ok ? producerRun?.status : null) || 500;
-      // Best-effort clear/cancel any progress schedule
-      cancelStartupProgress({ userId, projectId, reason: 'cloud-run start failed' });
-      return res.status(status).json({
-        error: 'Failed to start jobs',
-        consumer: consumerRun,
-        producer: producerRun,
-      });
-    }
-
-    try {
-      await setConsumerRuntimeInfo({
-        userId,
-        projectId,
-        consumerId,
-        runtime: {
-          mode: 'cloud-run',
-          jobName: producerJobName,
-          consumerJobName,
-          location,
-          operation: producerRun.data.name || null,
-          consumerOperation: consumerRun.data.name || null,
-          sidecarEnabled,
-          stopRequested: false,
-          enc_ver: encVer,
-          enc_fp: encFp,
-          sessionId: sessionIdForFilter || null,
-          sub_req: subReq,
-          sub_resp: subResp,
-          topic,
-        },
-      });
-    } catch (e) {
-      console.warn('[jobs/producer:start] failed to persist cloud-run runtime info', e?.message || e);
-    }
-
-    // Schedule user-visible startup progress messages (~80s)
-    const sched = scheduleStartupProgress({ userId, projectId });
-    if (!sched?.ok) console.warn('[jobs/producer:start] progress schedule failed', sched);
-    else console.log('[jobs/producer:start] progress scheduled', { userId, projectId });
-
-    // Fire-and-forget readiness monitor that clears as soon as both jobs have started
-    try {
-      void monitorCloudRunStartup({
-        userId,
-        projectId,
-        producerOperationName: producerRun.data.name || null,
-        consumerOperationName: consumerRun.data.name || null,
-        timeoutMs: 90_000,
-      });
-    } catch (e) {
-      console.warn('[jobs/producer:start] readiness monitor failed to start', e?.message || e);
-    }
-
-    return res.status(202).json({ ok: true, mode: 'cloud-run', producerJob: producerJobName, consumerJob: consumerJobName, location, operation: producerRun.data.name || null, consumerOperation: consumerRun.data.name || null, consumerId, lock: lock.lock || null, workspaceId, sidecarEnabled, sessionId: sessionIdForFilter || null, enc_ver: encVer, enc_fp: encFp, sub_req: subReq, sub_resp: subResp, topic });
+    return res.status(status).json(bodyOut);
   } catch (err) {
     console.error('[jobs/producer:start] error', err);
     try {
@@ -417,68 +281,14 @@ router.post('/stop', async (req, res) => {
     if (!userId) return res.status(401).json({ error: 'Unauthorized: missing user context' });
     if (!projectId) return res.status(400).json({ error: 'Missing x-project-id header' });
 
-    // Cancel any in-progress startup overlay immediately
     try { cancelStartupProgress({ userId, projectId, reason: 'stop requested' }); } catch {}
 
     const { ok, lock } = await getConsumerLock({ userId, projectId });
     if (!ok) return res.status(500).json({ error: 'Failed to read lock' });
     if (!lock) return res.status(200).json({ ok: true, message: 'No active lock' });
 
-    const runtime = lock.runtime || null;
-    const results = {};
-
-    const gcpProject = process.env.GCP_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
-
-    if (runtime?.mode === 'local-docker') {
-      try {
-        if (runtime?.sub_req) await deleteSubscription({ gcpProject, name: runtime.sub_req });
-        if (runtime?.sub_resp) await deleteSubscription({ gcpProject, name: runtime.sub_resp });
-      } catch {}
-
-      const prodName = runtime?.producer?.containerName || runtime?.producer?.containerId;
-      const sideName = runtime?.sidecar?.containerName || runtime?.sidecar?.containerId;
-      if (prodName) {
-        try { await stopContainer(prodName); results.producer = 'stopped'; } catch { results.producer = 'error'; }
-      }
-      if (sideName) {
-        try { await stopContainer(sideName); results.sidecar = 'stopped'; } catch { results.sidecar = 'error'; }
-      }
-      const rel = await releaseConsumerLock({ userId, projectId, force: true });
-      return res.status(200).json({ ok: true, mode: 'local-docker', results, released: rel?.released !== false });
-    }
-
-    if (runtime?.mode === 'cloud-run') {
-      try {
-        if (runtime?.sub_req) await deleteSubscription({ gcpProject, name: runtime.sub_req });
-        if (runtime?.sub_resp) await deleteSubscription({ gcpProject, name: runtime.sub_resp });
-      } catch {}
-
-      // Attempt to cancel current operations and any running executions for both producer and consumer jobs
-      const location = runtime?.location || process.env.CLOUD_RUN_LOCATION || process.env.REGION || 'us-central1';
-      const cancelOps = [];
-      if (runtime?.operation) cancelOps.push(cancelOperation({ name: runtime.operation }).catch(() => ({ ok: false })));
-      if (runtime?.consumerOperation) cancelOps.push(cancelOperation({ name: runtime.consumerOperation }).catch(() => ({ ok: false })));
-      const jobCancels = [];
-      if (runtime?.jobName) jobCancels.push(cancelJobExecutions({ gcpProject, location, jobName: runtime.jobName }).catch(() => ({ ok: false })));
-      if (runtime?.consumerJobName) jobCancels.push(cancelJobExecutions({ gcpProject, location, jobName: runtime.consumerJobName }).catch(() => ({ ok: false })));
-      try {
-        const [opRes, jobRes] = await Promise.allSettled([
-          Promise.all(cancelOps),
-          Promise.all(jobCancels),
-        ]);
-        results.operations = opRes.status === 'fulfilled' ? opRes.value : [];
-        results.jobCancels = jobRes.status === 'fulfilled' ? jobRes.value : [];
-      } catch {}
-
-      try {
-        await setConsumerRuntimeInfo({ userId, projectId, consumerId: lock.consumerId, runtime: { ...runtime, stopRequested: true, stopAt: Date.now() } });
-      } catch {}
-      const rel = await releaseConsumerLock({ userId, projectId, force: true });
-      return res.status(200).json({ ok: true, mode: 'cloud-run', message: 'Stop requested. Jobs cancellation attempted. Lock released. Subscriptions deleted (best-effort).', results, released: rel?.released !== false });
-    }
-
-    const rel = await releaseConsumerLock({ userId, projectId, force: true });
-    return res.status(200).json({ ok: true, mode: runtime?.mode || 'unknown', message: 'Lock released', released: rel?.released !== false });
+    const { status, body } = await stopByRuntime({ userId, projectId, lock });
+    return res.status(status).json(body);
   } catch (err) {
     console.error('[jobs/producer:stop] error', err);
     return res.status(500).json({ error: String(err?.message || err) });

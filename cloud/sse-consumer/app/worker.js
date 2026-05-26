@@ -15,7 +15,6 @@ import {
   IDLE_EXIT_MS,
   READ_FILE_MAX_BYTES,
   OUTPUT_MAX_BYTES,
-  RUN_COMMAND_TIMEOUT_SECONDS,
   SYNC_ON_START,
   SYNC_INTERVAL_MS,
 } from './config.js';
@@ -73,7 +72,14 @@ async function handleCallback(ev, { workRoot, gcs }) {
     } else if (tool === 'UPDATE_FILE') {
       result = await doUpdateFile(args, (rel) => resolveWithin(workRoot, rel));
     } else if (tool === 'RUN_COMMAND') {
-      result = await doRunCommand({ ...args, timeoutSeconds: RUN_COMMAND_TIMEOUT_SECONDS }, workRoot, { outputMaxBytes: OUTPUT_MAX_BYTES });
+      // Support top-level timeout_seconds on the event object. null => unlimited
+      let timeoutSecondsArg;
+      if (Object.prototype.hasOwnProperty.call(ev || {}, 'timeout_seconds')) {
+        const t = ev.timeout_seconds;
+        timeoutSecondsArg = (t === null) ? null : Number(t);
+      }
+      const runArgs = (timeoutSecondsArg !== undefined) ? { ...args, timeoutSeconds: timeoutSecondsArg } : args;
+      result = await doRunCommand(runArgs, workRoot);
     } else if (tool === 'GCS_SYNC' || tool === 'SYNC_GCS' || tool === 'GCS.MIRROR') {
       const bucket = String(args.bucket || gcs?.bucket || '');
       const prefix = String(args.prefix || gcs?.prefix || '');

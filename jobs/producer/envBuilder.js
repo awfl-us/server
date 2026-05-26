@@ -85,6 +85,8 @@ export function buildLocalConsumerEnv({
   encVer,
   topic,
   subReq,
+  projectId,
+  consumerType = 'CLOUD',
 }) {
   // Pub/Sub worker env for local consumer. No HTTP sidecar.
   const env = [
@@ -99,6 +101,9 @@ export function buildLocalConsumerEnv({
     { name: 'TOPIC', value: topic },
     { name: 'SUBSCRIPTION', value: subReq },
     { name: 'REPLY_CHANNEL', value: 'resp' },
+    { name: 'AWFL_PROJECT_ID', value: String(projectId || '') },
+    { name: 'AWFL_CONSUMER_TYPE', value: String(consumerType || 'CLOUD') },
+    ...(process.env.API_ORIGIN ? [{ name: 'API_ORIGIN', value: String(process.env.API_ORIGIN) }] : []),
     { name: 'GCS_TRACE', value: '0' },
     { name: 'GCS_DEBUG', value: '0' }
   ];

@@ -176,6 +176,31 @@ Infrastructure (Terraform)
   - project_id is not sensitive; committing terraform.tfvars.example is safe. Keep dev.auto.tfvars local.
   - Do not commit terraform.tfstate; use remote state for teams/CI.
 
+Local Docker consumer: Firebase Admin credentials (.env via Terraform outputs)
+- Purpose
+  - The local sidecar consumer runs server-side Firebase Admin SDK and requires a service account (client email + private key), not the Firebase Web API key.
+- Terraform creates a dedicated local-only service account and key:
+  - google_service_account.awfl_local_consumer
+  - google_service_account_key.awfl_local_consumer_key
+  - Sensitive outputs exposed for .env: FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY (newline-escaped)
+- Steps
+  1) Apply infra (if not already):
+     - cd infra
+     - terraform init (first time)
+     - terraform apply -var="project_id=YOUR_GCP_PROJECT_ID" [other vars as needed]
+  2) Retrieve outputs (newline-escaped for .env):
+     - terraform output -raw FIREBASE_CLIENT_EMAIL
+     - terraform output -raw FIREBASE_PRIVATE_KEY
+  3) Add to your .env at repo root (quotes recommended):
+     - echo "FIREBASE_CLIENT_EMAIL=$(terraform output -raw FIREBASE_CLIENT_EMAIL)" >> .env
+     - echo "FIREBASE_PRIVATE_KEY=$(terraform output -raw FIREBASE_PRIVATE_KEY)" >> .env
+  4) Restart Docker so js-server picks up the new env and passes them to sidecar consumers:
+     - docker compose up -d --build
+- Notes
+  - The PRIVATE_KEY value is pre-escaped with \n sequences for line breaks so it can live in .env safely.
+  - Never commit your .env. Treat these values as secrets.
+  - docker-compose.yml already expects FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY.
+
 DNS verification (simple flag flow)
 - Goal: verify domain ownership via DNS without long blocking applies, using a single flag.
 - How it works

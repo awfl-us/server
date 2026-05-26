@@ -202,7 +202,7 @@ jobs:
               -e "s|__SERVICE_ACCOUNT__|${SA_EMAIL}|g" \
               -e "s|__CONSUMER_IMAGE__|${CONSUMER_IMG}|g" \
               -e "s|__TOPIC__|${PUBSUB_TOPIC}|g" \
-              cloud/consumer/job.yaml > /tmp/consumer.job.rendered.yaml
+              cloud/sse-consumer/job.yaml > /tmp/consumer.job.rendered.yaml
 
           gcloud run jobs replace /tmp/consumer.job.rendered.yaml --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}"
 

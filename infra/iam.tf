@@ -243,3 +243,34 @@ variable "consumer_service_region" {
   type        = string
   default     = ""
 }
+
+# ==============================================================
+# Local Docker consumer: Firebase-capable service account + outputs
+# ==============================================================
+
+# Dedicated SA for local Docker consumers. Scoping/name indicates local-only usage.
+resource "google_service_account" "awfl_local_consumer" {
+  account_id   = "awfl-local-consumer"
+  display_name = "AWFL Local Docker Consumer Service Account"
+  depends_on   = [google_project_service.iam]
+}
+
+# JSON key for the local consumer SA (store state securely; local-only usage)
+resource "google_service_account_key" "awfl_local_consumer_key" {
+  service_account_id = google_service_account.awfl_local_consumer.name
+  depends_on         = [google_service_account.awfl_local_consumer, google_project_service.iamcredentials]
+}
+
+# Outputs for .env usage in local Docker consumers
+# FIREBASE_CLIENT_EMAIL maps to the SA email; FIREBASE_PRIVATE_KEY is the PEM with newlines escaped (\n)
+output "FIREBASE_CLIENT_EMAIL" {
+  description = "Service account client email for Firebase Admin (local Docker consumer)"
+  value       = google_service_account.awfl_local_consumer.email
+  sensitive   = true
+}
+
+output "FIREBASE_PRIVATE_KEY" {
+  description = "Service account private key PEM (with newlines escaped) for .env"
+  value       = replace(jsondecode(base64decode(google_service_account_key.awfl_local_consumer_key.private_key)).private_key, "\n", "\\n")
+  sensitive   = true
+}
