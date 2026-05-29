@@ -10,31 +10,47 @@ import geminiAdapter from './providers/gemini.js';
 import grokAdapter from './providers/grok.js';
 import deepseekAdapter from './providers/deepseek.js';
 import { stripNullsDeep } from './providers/utils.js';
+import { incrementUsage } from './llm/usage.js';
 
 const router = express.Router();
 const db = getFirestore();
 
 // Pricing per 1,000,000 tokens in USD (OpenAI only for now)
+// USD per 1,000,000 tokens
 const PRICING = {
-  'gpt-3.5-turbo': { prompt: 0.50, completion: 1.50 },
-  'gpt-3.5-turbo-16k': { prompt: 3.00, completion: 4.00 },
-  'gpt-4': { prompt: 30.00, completion: 60.00 },
-  'gpt-4-32k': { prompt: 60.00, completion: 120.00 },
-  'gpt-4-turbo': { prompt: 10.00, completion: 30.00 },
-  'gpt-4o': { prompt: 2.50, completion: 10.00 },
-  'chatgpt-4o-latest': { prompt: 5.00, completion: 10.00 },
-  'gpt-4o-mini': { prompt: 0.15, completion: 0.60 },
-  'gpt-4.1': { prompt: 2.00, completion: 8.00 },
-  'gpt-4.1-mini': { prompt: 0.40, completion: 1.60 },
-  'gpt-4.1-nano': { prompt: 0.10, completion: 0.40 },
-  'gpt-4.5': { prompt: 75.00, completion: 150.00 },
-  'o1': { prompt: 15.00, completion: 60.00 },
-  'o3': { prompt: 2.00, completion: 8.00 },
-  'gpt-5': { prompt: 1.25, completion: 10.00 },
-  'gpt-5.1': { prompt: 1.25, completion: 10.00 },
-  'gpt-5.2': { prompt: 1.75, completion: 14.00 },
-  'gpt-5.4': { prompt: 2.5, completion: 15.00 },
-  'gpt-5.5': { prompt: 5.00, completion: 30.00 }
+  // Legacy
+  'gpt-4o': { prompt: 2.50, cached: 1.25, completion: 10.00 },
+  'chatgpt-4o-latest': { prompt: 5.00, cached: 2.50, completion: 10.00 },
+  'gpt-4o-mini': { prompt: 0.15, cached: 0.075, completion: 0.60 },
+
+  'gpt-4.1': { prompt: 2.00, cached: 0.50, completion: 8.00 },
+  'gpt-4.1-mini': { prompt: 0.40, cached: 0.10, completion: 1.60 },
+  'gpt-4.1-nano': { prompt: 0.10, cached: 0.025, completion: 0.40 },
+
+  // GPT-5 family
+  'gpt-5': { prompt: 1.25, cached: 0.125, completion: 10.00 },
+  'gpt-5-mini': { prompt: 0.25, cached: 0.025, completion: 2.00 },
+  'gpt-5-nano': { prompt: 0.05, cached: 0.005, completion: 0.40 },
+
+  'gpt-5.4': { prompt: 2.50, cached: 0.25, completion: 15.00 },
+  'gpt-5.4-mini': { prompt: 0.75, cached: 0.075, completion: 4.50 },
+  'gpt-5.4-nano': { prompt: 0.20, cached: 0.02, completion: 1.25 },
+
+  'gpt-5.5': { prompt: 5.00, cached: 0.50, completion: 30.00 },
+  'gpt-5.5-pro': { prompt: 30.00, cached: 0.00, completion: 180.00 },
+
+  // Reasoning
+  'o4-mini': { prompt: 0.55, cached: 0.14, completion: 2.20 },
+  'o3': { prompt: 2.00, cached: 0.50, completion: 8.00 },
+  'o3-mini': { prompt: 1.10, cached: 0.55, completion: 4.40 },
+  'o3-pro': { prompt: 20.00, cached: 0.00, completion: 80.00 },
+
+  // Historical models (kept for old logs)
+  'gpt-4-turbo': { prompt: 10.00, cached: 0.00, completion: 30.00 },
+  'gpt-4': { prompt: 30.00, cached: 0.00, completion: 60.00 },
+  'gpt-4-32k': { prompt: 60.00, cached: 0.00, completion: 120.00 },
+  'gpt-3.5-turbo': { prompt: 0.50, cached: 0.00, completion: 1.50 },
+  'gpt-3.5-turbo-16k': { prompt: 3.00, cached: 0.00, completion: 4.00 }
 };
 
 // Max completion token defaults per known models/providers
@@ -81,6 +97,7 @@ function estimateCost(model, usage) {
   if (!usage) return null;
   return (
     ((usage.prompt_tokens || 0) / 1_000_000) * (m.prompt || 0) +
+    ((usage.prompt_tokens_details?.cached_tokens || 0) / 1_000_000) * (m.cached || 0) +
     ((usage.completion_tokens || 0) / 1_000_000) * (m.completion || 0)
   );
 }
@@ -169,7 +186,7 @@ router.post('/chat', async (req, res) => {
       return res.status(401).json({ error: 'Unauthorized: missing or invalid user' });
     }
 
-    const { messages, model = 'gpt-4', temperature = 0.7, max_tokens, max_completion_tokens, response_format, tools, tool_choice } = req.body || {};
+    const { messages, model = 'gpt-4', temperature = 0.7, max_tokens, max_completion_tokens, response_format, tools, tool_choice, sessionId, workflow_name } = req.body || {};
 
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: 'Missing or invalid "messages" array in request body.' });
@@ -218,6 +235,22 @@ router.post('/chat', async (req, res) => {
 
     const { message, usage } = result || {};
     const total_cost = provider === 'openai' ? estimateCost(model, usage) : null;
+
+    // Best-effort usage aggregation (graceful no-op if missing context)
+    try {
+      const projectId = req.projectId; // from middleware/header
+      await incrementUsage({
+        userId,
+        projectId,
+        sessionId,
+        workflowName: workflow_name,
+        usage,
+        totalCost: typeof total_cost === 'number' ? total_cost : undefined,
+        timestamp: Date.now()
+      });
+    } catch (e) {
+      console.warn('[llm] incrementUsage failed (non-fatal):', e?.message || e);
+    }
 
     res.status(200).json({ message, usage, total_cost });
   } catch (error) {

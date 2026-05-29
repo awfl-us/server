@@ -3,6 +3,7 @@ import express from 'express';
 // import businessReportWorkerRoutes from './businessReport/index.js';
 import firebaseRoutes from './firebaseDbApi.js';
 import llmRoutes from './llm.js';
+import llmUsageRoutes from './llm/usage.js';
 import loadConvoHistoryRoutes from './loadConvoHistory.js';
 import topicContextYojRouter from '../workflows/context/topicContextYoj.js'
 import collapseIndexerRouter from '../workflows/context/collapseIndexer.js'
@@ -30,6 +31,7 @@ router.use('/projects', projectsRouter);
 // router.use('/business-report', businessReportWorkerRoutes);
 router.use('/firebase', firebaseRoutes);
 router.use('/llm', llmRoutes);
+router.use('/llm/usage', llmUsageRoutes);
 router.use('/convo-history', loadConvoHistoryRoutes);
 
 // Context routes

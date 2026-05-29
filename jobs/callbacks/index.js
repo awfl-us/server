@@ -1,6 +1,6 @@
 import express from 'express';
 import { getFirestore } from 'firebase-admin/firestore';
-import { projectScopedCollectionPath } from '../../workflows/utils.js';
+import { userScopedCollectionPath } from '../../workflows/utils.js';
 
 const db = getFirestore();
 const router = express.Router();
@@ -15,22 +15,20 @@ function isHttpUrl(u) {
   }
 }
 
-// POST /jobs/callbacks — create a callback record
+// POST /jobs/callbacks — create a callback record (user-scoped)
 // Body: { callback_url: string, name?: string, description?: string, metadata?: object }
 router.post('/', async (req, res) => {
   try {
     const userId = req.userId;
-    const projectId = req.projectId;
     const { callback_url, name, description, metadata } = req.body || {};
 
     if (!userId) return res.status(401).json({ error: 'Unauthorized: missing req.userId' });
-    if (!projectId) return res.status(400).json({ error: 'Missing x-project-id header' });
 
     if (!callback_url || typeof callback_url !== 'string' || !isHttpUrl(callback_url)) {
       return res.status(400).json({ error: 'callback_url must be a valid http(s) URL' });
     }
 
-    const colPath = projectScopedCollectionPath(userId, projectId, 'callbacks');
+    const colPath = userScopedCollectionPath(userId, 'callbacks');
     const colRef = db.collection(colPath);
 
     const doc = await colRef.add({

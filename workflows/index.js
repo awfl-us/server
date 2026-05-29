@@ -19,6 +19,7 @@ import credsRoutes from './creds/index.js'
 import producerRoutes from '../jobs/producer/index.js'
 import filesystemRoutes from './services/filesystem.js'
 import llmApiRoutes from './llm.api.js'
+import llmUsageRoutes from '../jobs/llm/usage.js';
 
 const router = express.Router()
 router.use(express.json())
@@ -51,6 +52,7 @@ router.use('/producer', producerRoutes)
 
 // Client-facing LLM info (models list, etc.)
 router.use('/llm', llmApiRoutes)
+router.use('/llm/usage', llmUsageRoutes);
 
 router.use('/', workflows)
 

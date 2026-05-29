@@ -148,7 +148,7 @@ export async function runLocalDocker({ image, containerName, envPairs, extraArgs
     });
   } catch {}
 
-  const { stdout } = await execFileAsync('docker', args, { timeout: 60_000 });
+  const { stdout } = await execFileAsync('docker', args, { timeout: 15 * 60_000 });
   const id = stdout.trim();
 
   // Diagnostics: container id

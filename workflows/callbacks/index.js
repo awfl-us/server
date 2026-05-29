@@ -1,7 +1,7 @@
 import express from 'express';
 import axios from 'axios';
 import { getFirestore } from 'firebase-admin/firestore';
-import { projectScopedCollectionPath } from '../utils.js';
+import { userScopedCollectionPath } from '../utils.js';
 import { GoogleAuth } from 'google-auth-library';
 
 const router = express.Router();
@@ -26,7 +26,7 @@ async function buildForwardHeaders(req) {
   }
 
   h['x-callback-id'] = req.params.id;
-  h['x-callback-project-id'] = req.projectId || '';
+  // h['x-callback-project-id'] = req.projectId || '';
 
   // Add Authorization token for Google Workflows
   const auth = new GoogleAuth({
@@ -43,15 +43,14 @@ async function buildForwardHeaders(req) {
 // Route supports POST for now; can expand to other verbs if needed.
 router.post('/:id', async (req, res) => {
   const userId = req.userId;
-  const projectId = req.projectId;
   const id = String(req.params.id || '').trim();
 
   if (!userId) return res.status(401).json({ error: 'Unauthorized: missing req.userId' });
-  if (!projectId) return res.status(400).json({ error: 'Missing x-project-id header' });
   if (!id) return res.status(400).json({ error: 'Missing callback id' });
 
   try {
-    const docPath = projectScopedCollectionPath(userId, projectId, `callbacks/${id}`);
+    // Store and read callbacks under user-scoped collection only
+    const docPath = userScopedCollectionPath(userId, `callbacks/${id}`);
     const ref = db.doc(docPath);
     const snap = await ref.get();
     if (!snap.exists) return res.status(404).json({ error: 'Callback not found' });
