@@ -23,6 +23,16 @@ data "google_cloud_run_service" "jobs" {
   project  = var.project_id
 }
 
+# Derive effective proxy settings for clients (Cloud Run server, CI, etc.)
+locals {
+  k8s_api_endpoint   = google_container_cluster.awfl.endpoint
+  # Build NO_PROXY with comma-only (no spaces) and trim outer whitespace
+  no_proxy_effective = trimspace(join(",", compact([
+    var.no_proxy,
+    local.k8s_api_endpoint,
+  ])))
+}
+
 resource "local_file" "actions_variables" {
   filename = "${path.module}/../.github/actions-variables.json"
   content  = jsonencode({
@@ -58,6 +68,25 @@ resource "local_file" "actions_variables" {
 
     # CORS allowlist origins (full URL). Comma/space-separated supported; server auto-expands base/www for https root domains.
     CORS_ALLOW_ORIGIN = "https://${var.root_domain}, https://www.${var.root_domain}"
+
+    # Kubernetes/GKE runtime config surfaced to GitHub vars
+    GKE_CLUSTER_NAME     = google_container_cluster.awfl.name
+    GKE_CLUSTER_LOCATION = google_container_cluster.awfl.location
+    K8S_NAMESPACE        = var.k8s_namespace
+    PRODUCER_KSA_NAME    = var.producer_ksa_name
+    CONSUMER_KSA_NAME    = var.consumer_ksa_name
+
+    # Kubernetes API endpoint (host/IP). Server URL is the HTTPS form commonly found in kubeconfigs.
+    K8S_API_ENDPOINT = local.k8s_api_endpoint
+    K8S_API_SERVER   = "https://${local.k8s_api_endpoint}"
+
+    # Network proxy envs for server/clients: NO_PROXY automatically includes the cluster endpoint
+    NO_PROXY   = local.no_proxy_effective
+    HTTP_PROXY = var.http_proxy
+    HTTPS_PROXY= var.https_proxy
+
+    # Optional runtime knobs
+    AWFL_LOCK_NO_REFRESH = var.awfl_lock_no_refresh
   })
   depends_on = [
     google_iam_workload_identity_pool_provider.github,
@@ -69,5 +98,34 @@ resource "local_file" "actions_variables" {
     google_pubsub_topic.shared,
     # Ensure bucket exists before referencing it
     google_storage_bucket.shared,
+    # Include cluster so cluster/namespace/ksa vars are available
+    google_container_cluster.awfl,
   ]
+}
+
+# -----------------
+# Optional variables to surface into Actions Variables JSON
+# -----------------
+variable "no_proxy" {
+  description = "Comma-separated NO_PROXY domains/hosts to exclude from proxies"
+  type        = string
+  default     = ""
+}
+
+variable "http_proxy" {
+  description = "HTTP proxy URL for egress (optional)"
+  type        = string
+  default     = ""
+}
+
+variable "https_proxy" {
+  description = "HTTPS proxy URL for egress (optional)"
+  type        = string
+  default     = ""
+}
+
+variable "awfl_lock_no_refresh" {
+  description = "If set to a non-empty value, instructs the consumer to not auto-refresh external project locks"
+  type        = string
+  default     = ""
 }

@@ -43,7 +43,7 @@ export async function runK8sJob({ namespace, jobName, image, serviceAccountName,
         template: {
           metadata: {
             labels: {
-              'app.kubernetes.io/name': 'awfl-producer-consumer',
+              'app.kubernetes.io/name': 'awfl-consumer',
             },
           },
           spec: {

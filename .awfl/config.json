@@ -2,5 +2,7 @@
   "files": [
     "AGENT.md"
   ],
-  "commands": []
+  "commands": [
+    "pwd"
+  ]
 }

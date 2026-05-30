@@ -214,6 +214,14 @@ resource "google_project_iam_member" "default_compute_sa_pubsub_editor" {
   member  = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
 }
 
+# Allow default Compute Engine SA to mint custom tokens (sign JWT/Blob) for itself
+# This fixes: iam.serviceAccounts.signBlob denied when minting per-request tokens on producer/start
+resource "google_service_account_iam_member" "default_compute_sa_token_creator_self" {
+  service_account_id = "projects/${var.project_id}/serviceAccounts/${data.google_project.project.number}-compute@developer.gserviceaccount.com"
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
+}
+
 # Outputs for SA emails
 output "producer_service_account_email" {
   description = "Email of the AWFL Producer service account"
