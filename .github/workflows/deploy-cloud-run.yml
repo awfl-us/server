@@ -29,6 +29,10 @@ jobs:
       # Optional stable Job names. If omitted, Jobs service/orchestrator can generate per-run/random job ids.
       PRODUCER_CLOUD_RUN_JOB_NAME: ${{ vars.PRODUCER_CLOUD_RUN_JOB_NAME }}
       CONSUMER_CLOUD_RUN_JOB_NAME: ${{ vars.CONSUMER_CLOUD_RUN_JOB_NAME }}
+      # Proxy envs (optional). Also loaded from JSON if present.
+      HTTP_PROXY: ${{ vars.HTTP_PROXY }}
+      HTTPS_PROXY: ${{ vars.HTTPS_PROXY }}
+      NO_PROXY: ${{ vars.NO_PROXY }}
       # Disable any gcloud interactive prompts in CI
       CLOUDSDK_CORE_DISABLE_PROMPTS: '1'
       CLOUDSDK_COMPONENT_MANAGER_DISABLE_UPDATE_CHECK: '1'
@@ -147,7 +151,11 @@ jobs:
           set -euo pipefail
           PRODUCER_IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/app/producer:${GITHUB_SHA}"
           echo "PRODUCER_IMAGE_URI=${PRODUCER_IMAGE_URI}" >> "$GITHUB_OUTPUT"
-          docker build -t "${PRODUCER_IMAGE_URI}" cloud/producer
+          docker build \
+            --build-arg HTTP_PROXY="${HTTP_PROXY}" \
+            --build-arg HTTPS_PROXY="${HTTPS_PROXY}" \
+            --build-arg NO_PROXY="${NO_PROXY}" \
+            -t "${PRODUCER_IMAGE_URI}" cloud/producer
           docker push "${PRODUCER_IMAGE_URI}"
 
       # Build and push Consumer image
@@ -157,7 +165,11 @@ jobs:
           set -euo pipefail
           CONSUMER_IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/app/sse-consumer:${GITHUB_SHA}"
           echo "CONSUMER_IMAGE_URI=${CONSUMER_IMAGE_URI}" >> "$GITHUB_OUTPUT"
-          docker build -t "${CONSUMER_IMAGE_URI}" cloud/sse-consumer
+          docker build \
+            --build-arg HTTP_PROXY="${HTTP_PROXY}" \
+            --build-arg HTTPS_PROXY="${HTTPS_PROXY}" \
+            --build-arg NO_PROXY="${NO_PROXY}" \
+            -t "${CONSUMER_IMAGE_URI}" cloud/sse-consumer
           docker push "${CONSUMER_IMAGE_URI}"
 
       # Create/replace Producer Cloud Run Job (no sidecar)
@@ -213,7 +225,11 @@ jobs:
           set -euo pipefail
           IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/app/api:${GITHUB_SHA}"
           echo "IMAGE_URI=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
-          docker build -t "${IMAGE_URI}" .
+          docker build \
+            --build-arg HTTP_PROXY="${HTTP_PROXY}" \
+            --build-arg HTTPS_PROXY="${HTTPS_PROXY}" \
+            --build-arg NO_PROXY="${NO_PROXY}" \
+            -t "${IMAGE_URI}" .
           docker push "${IMAGE_URI}"
 
       - name: Build common Cloud Run env vars
@@ -222,7 +238,7 @@ jobs:
         run: |
           set -euo pipefail
           # Use an alternate delimiter (;) to avoid escaping commas inside values (e.g., CORS_ALLOW_ORIGIN)
-          BASE_ENV_VARS="NODE_ENV=production;GCP_PROJECT=${GCP_PROJECT_ID};ALLOW_SKIP_AUTH=0;WORKFLOWS_BASE_URL=${WORKFLOWS_BASE_URL};GCS_BUCKET=${GCS_BUCKET};PUBSUB_TOPIC=${PUBSUB_TOPIC};PRODUCER_CLOUD_RUN_JOB_NAME=${PRODUCER_CLOUD_RUN_JOB_NAME};CONSUMER_CLOUD_RUN_JOB_NAME=${CONSUMER_CLOUD_RUN_JOB_NAME};CORS_ALLOW_ORIGIN=${CORS_ALLOW_ORIGIN}"
+          BASE_ENV_VARS="NODE_ENV=production;GCP_PROJECT=${GCP_PROJECT_ID};ALLOW_SKIP_AUTH=0;WORKFLOWS_BASE_URL=${WORKFLOWS_BASE_URL};GCS_BUCKET=${GCS_BUCKET};PUBSUB_TOPIC=${PUBSUB_TOPIC};PRODUCER_CLOUD_RUN_JOB_NAME=${PRODUCER_CLOUD_RUN_JOB_NAME};CONSUMER_CLOUD_RUN_JOB_NAME=${CONSUMER_CLOUD_RUN_JOB_NAME};CORS_ALLOW_ORIGIN=${CORS_ALLOW_ORIGIN};HTTP_PROXY=${HTTP_PROXY};HTTPS_PROXY=${HTTPS_PROXY};NO_PROXY=${NO_PROXY}"
 
           JSON_FILE=".github/actions-variables.json"
           if [[ -f "$JSON_FILE" ]]; then
@@ -254,7 +270,7 @@ jobs:
 
       - name: Deploy Jobs service (auth-required)
         run: |
-          gcloud run deploy "${CLOUD_RUN_JOBS_SERVICE}" \
+          gcloud run deploy "${CLOUD_RUN_JOBS_SERVICE}}" \
             --quiet \
             --region="${GCP_REGION}" \
             --image="${{ steps.image.outputs.IMAGE_URI }}" \

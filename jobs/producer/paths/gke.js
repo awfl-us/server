@@ -50,6 +50,36 @@ export async function startGke({
 
   const consumerJobName = `consumer-${consumerId}`.slice(0, 63);
 
+  // Resolve workflows base URL for the consumer: rewrite localhost -> API_ORIGIN (if provided)
+  const rawWorkflowsBaseUrl = baseCtx?.workflowsBaseUrl || '';
+  let resolvedWorkflowsBaseUrl = rawWorkflowsBaseUrl;
+  let baseWasLocalhost = false;
+  try {
+    const u = new URL(rawWorkflowsBaseUrl);
+    const host = (u.hostname || '').toLowerCase();
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') {
+      baseWasLocalhost = true;
+      if (process.env.API_ORIGIN) {
+        resolvedWorkflowsBaseUrl = String(process.env.API_ORIGIN);
+      }
+    }
+  } catch {}
+
+  // Structured, minimal log for diagnostics (no secrets)
+  try {
+    console.log('[jobs/producer:gke] creating consumer job', {
+      namespace,
+      consumerJobName,
+      image: consumerImage,
+      resolvedWorkflowsBaseUrl,
+      baseWasLocalhost,
+      hasApiOrigin: Boolean(process.env.API_ORIGIN),
+    });
+    if (baseWasLocalhost && !process.env.API_ORIGIN) {
+      console.warn('[jobs/producer:gke] WORKFLOWS_BASE_URL points to localhost but API_ORIGIN is not set; consumer may be unable to reach server');
+    }
+  } catch {}
+
   const consumerEnv = [
     { name: 'NODE_ENV', value: 'production' },
     { name: 'PUBSUB_ENABLE', value: '1' },
@@ -63,12 +93,10 @@ export async function startGke({
     { name: 'AWFL_PROJECT_ID', value: String(projectId) },
     { name: 'AWFL_CONSUMER_TYPE', value: 'CLOUD' },
     ...(githubToken ? [{ name: 'GITHUB_TOKEN', value: githubToken }] : []),
-    ...(baseCtx.workflowsBaseUrl ? [{ name: 'WORKFLOWS_BASE_URL', value: baseCtx.workflowsBaseUrl }] : []),
-    ...(baseCtx.eventsHeartbeatMs ? [{ name: 'EVENTS_HEARTBEAT_MS', value: baseCtx.eventsHeartbeatMs }] : []),
-    ...(baseCtx.reconnectBackoffMs ? [{ name: 'RECONNECT_BACKOFF_MS', value: baseCtx.reconnectBackoffMs }] : []),
+    ...(resolvedWorkflowsBaseUrl ? [{ name: 'WORKFLOWS_BASE_URL', value: resolvedWorkflowsBaseUrl }] : []),
+    ...(baseCtx?.eventsHeartbeatMs ? [{ name: 'EVENTS_HEARTBEAT_MS', value: baseCtx.eventsHeartbeatMs }] : []),
+    ...(baseCtx?.reconnectBackoffMs ? [{ name: 'RECONNECT_BACKOFF_MS', value: baseCtx.reconnectBackoffMs }] : []),
     ...(process.env.API_ORIGIN ? [{ name: 'API_ORIGIN', value: String(process.env.API_ORIGIN) }] : []),
-    { name: 'GCS_TRACE', value: '1' },
-    { name: 'GCS_DEBUG', value: '1' },
   ];
 
   // External project lock envs (awfl CLI will honor these)
@@ -95,11 +123,13 @@ export async function startGke({
     if (process.env.FIREBASE_CUSTOM_TOKEN) consumerEnv.push({ name: 'FIREBASE_CUSTOM_TOKEN', value: String(process.env.FIREBASE_CUSTOM_TOKEN) });
   }
 
-  // Always allow these passthroughs
+  // Allow selected passthroughs (auth/debug) when explicitly set on the server
   const passthroughAuthEnv = {
     SKIP_AUTH: process.env.SKIP_AUTH,
     AWFL_TOKENS_JSON_B64: process.env.AWFL_TOKENS_JSON_B64,
     AWFL_TOKENS_JSON: process.env.AWFL_TOKENS_JSON,
+    GCS_TRACE: process.env.GCS_TRACE,
+    GCS_DEBUG: process.env.GCS_DEBUG,
   };
   for (const [name, value] of Object.entries(passthroughAuthEnv)) {
     if (typeof value !== 'undefined' && value !== null && String(value).length) {

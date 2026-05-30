@@ -1,11 +1,89 @@
 import { KubeConfig, BatchV1Api } from '@kubernetes/client-node';
 
+function buildServerUrl(input) {
+  if (!input) return '';
+  let s = String(input).trim();
+  if (!/^https?:\/\//i.test(s)) s = `https://${s}`;
+  return s;
+}
+
+function isLocalhostHost(h) {
+  const host = String(h || '').toLowerCase();
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+}
+
 function getBatchClient() {
   const kc = new KubeConfig();
-  if (process.env.KUBERNETES_SERVICE_HOST) kc.loadFromCluster();
-  else kc.loadFromDefault();
+  let mode = 'default';
+  const inCloudRun = Boolean(process.env.K_SERVICE || process.env.K_REVISION || process.env.CLOUD_RUN_JOB);
+
+  try {
+    if (process.env.KUBERNETES_SERVICE_HOST) {
+      // Running inside a Kubernetes pod
+      kc.loadFromCluster();
+      mode = 'inCluster';
+    } else if (process.env.K8S_API_SERVER || process.env.K8S_API_ENDPOINT) {
+      // Out-of-cluster: construct config from env
+      const server = buildServerUrl(process.env.K8S_API_SERVER || process.env.K8S_API_ENDPOINT);
+      const skipTls = String(process.env.K8S_INSECURE_SKIP_TLS_VERIFY || process.env.K8S_SKIP_TLS_VERIFY || '') === '1';
+      const caData = process.env.K8S_CA_CERT_B64 || process.env.K8S_CA_DATA_B64 || '';
+      const caFile = process.env.K8S_CA_FILE || '';
+      const token = process.env.K8S_BEARER_TOKEN || '';
+
+      try {
+        const u = new URL(server);
+        if (isLocalhostHost(u.hostname)) {
+          throw new Error('K8S_API_SERVER points to localhost; set it to your GKE API endpoint URL');
+        }
+      } catch (e) {
+        // If server is malformed, let it error later with details
+      }
+
+      const cluster = { name: 'awfl-cluster', server };
+      if (skipTls) cluster['skipTLSVerify'] = true;
+      if (caData) cluster['caData'] = caData;
+      if (caFile) cluster['caFile'] = caFile;
+
+      const user = { name: 'awfl-user' };
+      if (token) user['token'] = token;
+
+      const context = { name: 'awfl-ctx', cluster: cluster.name, user: user.name };
+      kc.loadFromOptions({ clusters: [cluster], users: [user], contexts: [context], currentContext: context.name });
+      mode = 'env';
+
+      try {
+        console.log('[jobs/producer:gke:kubeconfig] configured', {
+          mode,
+          server,
+          skipTls,
+          hasToken: Boolean(token),
+          hasCaData: Boolean(caData || caFile),
+        });
+      } catch {}
+    } else {
+      if (inCloudRun) {
+        // In Cloud Run without explicit config -> fail fast to avoid localhost defaults
+        const help = 'No Kubernetes config detected. Set K8S_API_SERVER (https URL to your cluster endpoint) and K8S_BEARER_TOKEN, and optionally K8S_CA_CERT_B64 or K8S_INSECURE_SKIP_TLS_VERIFY=1.';
+        throw new Error(help);
+      }
+      // Fallback: attempt to use local kubeconfig (~/.kube/config) in dev
+      kc.loadFromDefault();
+      mode = 'default';
+      try {
+        console.warn('[jobs/producer:gke:kubeconfig] using default kubeconfig (dev). In Cloud Run, set K8S_API_SERVER and K8S_BEARER_TOKEN to target your GKE cluster');
+      } catch {}
+    }
+  } catch (e) {
+    // As a last resort, attempt default only in local dev and surface error on API call
+    if (!inCloudRun) {
+      try { kc.loadFromDefault(); mode = 'default-error-fallback'; } catch {}
+    }
+    try { console.warn('[jobs/producer:gke:kubeconfig] error loading config', String(e?.message || e)); } catch {}
+    if (inCloudRun) throw e; // bubble up in Cloud Run so caller can return a clear error
+  }
+
   const batch = kc.makeApiClient(BatchV1Api);
-  return { kc, batch };
+  return { kc, batch, mode };
 }
 
 export async function runK8sJob({ namespace, jobName, image, serviceAccountName, envPairs = [], containerName = 'main', ttlSecondsAfterFinished = 3600, backoffLimit = 0, command, args, shCommand }) {
@@ -13,7 +91,7 @@ export async function runK8sJob({ namespace, jobName, image, serviceAccountName,
   if (!jobName) return { ok: false, status: 400, error: 'Missing jobName' };
   if (!image) return { ok: false, status: 400, error: 'Missing image' };
   try {
-    const { batch } = getBatchClient();
+    const { batch, mode } = getBatchClient();
     const container = {
       name: containerName || 'main',
       image,
@@ -54,6 +132,10 @@ export async function runK8sJob({ namespace, jobName, image, serviceAccountName,
         },
       },
     };
+
+    try {
+      console.log('[jobs/producer:gke] creating K8s Job', { namespace, jobName, image, kubeconfigMode: mode });
+    } catch {}
 
     const resp = await batch.createNamespacedJob(namespace, job);
     return { ok: true, status: resp?.response?.statusCode || 200, data: resp?.body };
