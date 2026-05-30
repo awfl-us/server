@@ -270,7 +270,7 @@ jobs:
 
       - name: Deploy Jobs service (auth-required)
         run: |
-          gcloud run deploy "${CLOUD_RUN_JOBS_SERVICE}}" \
+          gcloud run deploy "${CLOUD_RUN_JOBS_SERVICE}" \
             --quiet \
             --region="${GCP_REGION}" \
             --image="${{ steps.image.outputs.IMAGE_URI }}" \
