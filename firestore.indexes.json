@@ -67,6 +67,15 @@
         { "fieldPath": "sessionId", "order": "ASCENDING" },
         { "fieldPath": "created", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "llm.usage",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "userId", "order": "ASCENDING" },
+        { "fieldPath": "projectId", "order": "ASCENDING" },
+        { "fieldPath": "hour_start", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []
