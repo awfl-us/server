@@ -222,7 +222,22 @@ jobs:
         run: |
           set -euo pipefail
           # Use an alternate delimiter (;) to avoid escaping commas inside values (e.g., CORS_ALLOW_ORIGIN)
-          COMMON_ENV_VARS="NODE_ENV=production;GCP_PROJECT=${GCP_PROJECT_ID};ALLOW_SKIP_AUTH=0;WORKFLOWS_BASE_URL=${WORKFLOWS_BASE_URL};GCS_BUCKET=${GCS_BUCKET};PUBSUB_TOPIC=${PUBSUB_TOPIC};PRODUCER_CLOUD_RUN_JOB_NAME=${PRODUCER_CLOUD_RUN_JOB_NAME};CONSUMER_CLOUD_RUN_JOB_NAME=${CONSUMER_CLOUD_RUN_JOB_NAME};CORS_ALLOW_ORIGIN=${CORS_ALLOW_ORIGIN}"
+          BASE_ENV_VARS="NODE_ENV=production;GCP_PROJECT=${GCP_PROJECT_ID};ALLOW_SKIP_AUTH=0;WORKFLOWS_BASE_URL=${WORKFLOWS_BASE_URL};GCS_BUCKET=${GCS_BUCKET};PUBSUB_TOPIC=${PUBSUB_TOPIC};PRODUCER_CLOUD_RUN_JOB_NAME=${PRODUCER_CLOUD_RUN_JOB_NAME};CONSUMER_CLOUD_RUN_JOB_NAME=${CONSUMER_CLOUD_RUN_JOB_NAME};CORS_ALLOW_ORIGIN=${CORS_ALLOW_ORIGIN}"
+
+          JSON_FILE=".github/actions-variables.json"
+          if [[ -f "$JSON_FILE" ]]; then
+            # Build key=value;key=value ... from JSON. Values are treated as strings.
+            JSON_ENV_VARS=$(jq -r '[to_entries[] | "\(.key)=\(.value|tostring)"] | join(";")' "$JSON_FILE")
+          else
+            JSON_ENV_VARS=""
+          fi
+
+          if [[ -n "$JSON_ENV_VARS" ]]; then
+            COMMON_ENV_VARS="${BASE_ENV_VARS};${JSON_ENV_VARS}"
+          else
+            COMMON_ENV_VARS="${BASE_ENV_VARS}"
+          fi
+
           echo "COMMON_ENV_VARS=${COMMON_ENV_VARS}" >> "$GITHUB_OUTPUT"
 
       - name: Deploy API service (public)
