@@ -130,7 +130,7 @@ export async function incrementUsage({ userId, projectId, sessionId, workflowNam
   }
 }
 
-// Aggregator strictly matches the write shape: totals are under `usage.*` only
+// Aggregator: prefer nested usage.* (current shape), fall back to top-level and flattened keys for legacy/mis-shaped docs
 function addUsageAgg(target, u = {}) {
   const t = target;
   // Aggregate top-level counters
@@ -146,22 +146,36 @@ function addUsageAgg(target, u = {}) {
     completion_tokens_details: { reasoning_tokens: 0, audio_tokens: 0, accepted_prediction_tokens: 0, rejected_prediction_tokens: 0 }
   };
 
-  // Read strictly from nested `u.usage` per current write path
-  const src = (u && typeof u === 'object' && u.usage && typeof u.usage === 'object') ? u.usage : {};
+  // Prefer nested `u.usage`; fall back to top-level fields if not present
+  const src = (u && typeof u === 'object' && u.usage && typeof u.usage === 'object') ? u.usage : u;
 
-  t.usage.total_tokens += toNumber(src.total_tokens);
-  t.usage.prompt_tokens += toNumber(src.prompt_tokens);
-  t.usage.completion_tokens += toNumber(src.completion_tokens);
+  // Also support rare case where flattened field names were stored (e.g., 'usage.total_tokens')
+  const flat = (path) => u && Object.prototype.hasOwnProperty.call(u, path) ? u[path] : undefined;
+
+  const totalTokens = src.total_tokens ?? flat('usage.total_tokens');
+  const promptTokens = src.prompt_tokens ?? flat('usage.prompt_tokens');
+  const completionTokens = src.completion_tokens ?? flat('usage.completion_tokens');
+
+  t.usage.total_tokens += toNumber(totalTokens);
+  t.usage.prompt_tokens += toNumber(promptTokens);
+  t.usage.completion_tokens += toNumber(completionTokens);
 
   const pd = (src && src.prompt_tokens_details) || {};
-  t.usage.prompt_tokens_details.cached_tokens += toNumber(pd.cached_tokens);
-  t.usage.prompt_tokens_details.audio_tokens += toNumber(pd.audio_tokens);
-
   const cd = (src && src.completion_tokens_details) || {};
-  t.usage.completion_tokens_details.reasoning_tokens += toNumber(cd.reasoning_tokens);
-  t.usage.completion_tokens_details.audio_tokens += toNumber(cd.audio_tokens);
-  t.usage.completion_tokens_details.accepted_prediction_tokens += toNumber(cd.accepted_prediction_tokens);
-  t.usage.completion_tokens_details.rejected_prediction_tokens += toNumber(cd.rejected_prediction_tokens);
+
+  const pdCached = pd.cached_tokens ?? flat('usage.prompt_tokens_details.cached_tokens');
+  const pdAudio = pd.audio_tokens ?? flat('usage.prompt_tokens_details.audio_tokens');
+  const cdReasoning = cd.reasoning_tokens ?? flat('usage.completion_tokens_details.reasoning_tokens');
+  const cdAudio = cd.audio_tokens ?? flat('usage.completion_tokens_details.audio_tokens');
+  const cdAccepted = cd.accepted_prediction_tokens ?? flat('usage.completion_tokens_details.accepted_prediction_tokens');
+  const cdRejected = cd.rejected_prediction_tokens ?? flat('usage.completion_tokens_details.rejected_prediction_tokens');
+
+  t.usage.prompt_tokens_details.cached_tokens += toNumber(pdCached);
+  t.usage.prompt_tokens_details.audio_tokens += toNumber(pdAudio);
+  t.usage.completion_tokens_details.reasoning_tokens += toNumber(cdReasoning);
+  t.usage.completion_tokens_details.audio_tokens += toNumber(cdAudio);
+  t.usage.completion_tokens_details.accepted_prediction_tokens += toNumber(cdAccepted);
+  t.usage.completion_tokens_details.rejected_prediction_tokens += toNumber(cdRejected);
 
   return t;
 }
@@ -216,8 +230,20 @@ export async function getProjectHourly({ userId, projectId, start, end }) {
 
   const buckets = {}; // { [hour_key]: { [workflow_name]: agg } }
 
+  if (LLM_USAGE_DEBUG) {
+    dbg('project/hourly docs matched:', snap.size, { start, end, startTs: startTs.toDate().toISOString(), endTs: endTs.toDate().toISOString() });
+  }
+
   for (const doc of snap.docs) {
     const data = doc.data() || {};
+    if (LLM_USAGE_DEBUG) {
+      const usageShape = {
+        hasUsageObj: !!(data && data.usage && typeof data.usage === 'object'),
+        keys: Object.keys(data || {}),
+        usageKeys: data && data.usage && typeof data.usage === 'object' ? Object.keys(data.usage) : [],
+      };
+      dbg('doc usage shape', usageShape);
+    }
     const h = data.hour_key || 'unknown';
     const wf = data.workflow_name || 'unknown';
     buckets[h] = buckets[h] || {};
