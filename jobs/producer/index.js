@@ -103,44 +103,10 @@ router.post('/start', async (req, res) => {
 
     const gcpProject = process.env.GCP_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
     const location = process.env.CLOUD_RUN_LOCATION || process.env.REGION || 'us-central1';
-    const topic = requiredEnv('PUBSUB_TOPIC');
     const producerSa = process.env.PRODUCER_JOB_SA_EMAIL || '';
     const consumerSa = process.env.CONSUMER_JOB_SA_EMAIL || '';
 
     if (!gcpProject) { await bestEffortRelease({ userId, projectId }); return res.status(500).json({ error: 'Server missing GCP project configuration' }); }
-
-    const subSuffix = Math.random().toString(36).slice(2, 8);
-    const baseId = sanitizeId(sessionIdForFilter ? `${projectId}-${sessionIdForFilter}` : `${projectId}`);
-    const subReq = sanitizeId(`${topic}-req-${baseId}-${subSuffix}`, 220);
-    const subResp = sanitizeId(`${topic}-resp-${baseId}-${subSuffix}`, 220);
-
-    const filterBase = [
-      `attributes.user_id = "${userId}"`,
-      `attributes.project_id = "${projectId}"`,
-      ...(sessionIdForFilter ? [`attributes.session_id = "${sessionIdForFilter}"`] : []),
-    ].join(' AND ');
-
-    const reqFilter = filterBase + ' AND attributes.channel = "req"';
-    const respFilter = filterBase + ' AND attributes.channel = "resp"';
-
-    const createdReq = await ensureSubscription({ gcpProject, name: subReq, topic, filter: reqFilter });
-    if (!createdReq.ok) {
-      await bestEffortRelease({ userId, projectId });
-      return res.status(500).json({ error: 'Failed to create req subscription', details: createdReq.data || createdReq });
-    }
-    const createdResp = await ensureSubscription({ gcpProject, name: subResp, topic, filter: respFilter });
-    if (!createdResp.ok) {
-      await deleteSubscription({ gcpProject, name: subReq }).catch(() => {});
-      await bestEffortRelease({ userId, projectId });
-      return res.status(500).json({ error: 'Failed to create resp subscription', details: createdResp.data || createdResp });
-    }
-
-    try {
-      if (consumerSa) await addSubscriberBinding({ gcpProject, subscription: subReq, saEmail: consumerSa });
-      if (producerSa) await addSubscriberBinding({ gcpProject, subscription: subResp, saEmail: producerSa });
-    } catch (e) {
-      console.warn('[jobs/producer:start] IAM binding warning', e?.message || e);
-    }
 
     // Resolve any stored GitHub token (Firestore-backed) so the consumer can perform git ops.
     // IMPORTANT: never log the token.
@@ -174,9 +140,6 @@ router.post('/start', async (req, res) => {
         encKeyB64,
         encVer,
         encFp,
-        topic,
-        subReq,
-        subResp,
         sessionIdForFilter,
         workspaceId,
         sidecarEnabled,
@@ -200,8 +163,43 @@ router.post('/start', async (req, res) => {
     // Determine platform: default to GKE
     const platform = (String(body.platform || process.env.PRODUCER_PLATFORM || 'gke') || 'gke').toLowerCase();
 
-    // Cloud Run path
+    // Cloud Run path (owns Pub/Sub: topic + req/resp subscriptions)
     if (platform === 'cloud-run') {
+      const topic = requiredEnv('PUBSUB_TOPIC');
+
+      const subSuffix = Math.random().toString(36).slice(2, 8);
+      const baseId = sanitizeId(sessionIdForFilter ? `${projectId}-${sessionIdForFilter}` : `${projectId}`);
+      const subReq = sanitizeId(`${topic}-req-${baseId}-${subSuffix}`, 220);
+      const subResp = sanitizeId(`${topic}-resp-${baseId}-${subSuffix}`, 220);
+
+      const filterBase = [
+        `attributes.user_id = "${userId}"`,
+        `attributes.project_id = "${projectId}"`,
+        ...(sessionIdForFilter ? [`attributes.session_id = "${sessionIdForFilter}"`] : []),
+      ].join(' AND ');
+
+      const reqFilter = filterBase + ' AND attributes.channel = "req"';
+      const respFilter = filterBase + ' AND attributes.channel = "resp"';
+
+      const createdReq = await ensureSubscription({ gcpProject, name: subReq, topic, filter: reqFilter });
+      if (!createdReq.ok) {
+        await bestEffortRelease({ userId, projectId });
+        return res.status(500).json({ error: 'Failed to create req subscription', details: createdReq.data || createdReq });
+      }
+      const createdResp = await ensureSubscription({ gcpProject, name: subResp, topic, filter: respFilter });
+      if (!createdResp.ok) {
+        await deleteSubscription({ gcpProject, name: subReq }).catch(() => {});
+        await bestEffortRelease({ userId, projectId });
+        return res.status(500).json({ error: 'Failed to create resp subscription', details: createdResp.data || createdResp });
+      }
+
+      try {
+        if (consumerSa) await addSubscriberBinding({ gcpProject, subscription: subReq, saEmail: consumerSa });
+        if (producerSa) await addSubscriberBinding({ gcpProject, subscription: subResp, saEmail: producerSa });
+      } catch (e) {
+        console.warn('[jobs/producer:start] IAM binding warning', e?.message || e);
+      }
+
       const { status, body: bodyOut } = await startCloudRun({
         userId,
         projectId,
@@ -230,7 +228,7 @@ router.post('/start', async (req, res) => {
       return res.status(status).json(bodyOut);
     }
 
-    // GKE path (default)
+    // GKE path (default) — no Pub/Sub
     const { status, body: bodyOut } = await startGke({
       userId,
       projectId,
@@ -242,9 +240,6 @@ router.post('/start', async (req, res) => {
       encFp,
       baseCtx,
       gcsPrefix,
-      topic,
-      subReq,
-      subResp,
       sessionIdForFilter,
       githubToken,
       workspaceId,

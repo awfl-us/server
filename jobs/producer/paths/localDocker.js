@@ -3,9 +3,8 @@ import { runLocalDocker } from '../docker.js';
 import { setConsumerRuntimeInfo } from '../../../workflows/projects/lock.js';
 import { scheduleStartupProgress, completeStartupProgress, cancelStartupProgress } from '../progress.js';
 import { splitArgs, applyTemplate } from '../utils.js';
-import { deleteSubscription } from '../pubsubAdmin.js';
 
-// Updated Local Docker start path: only start the consumer (CLI), no producer container.
+// Updated Local Docker start path: only start the consumer (CLI), no producer container, no Pub/Sub.
 export async function startLocalDocker({
   userId,
   projectId,
@@ -16,9 +15,6 @@ export async function startLocalDocker({
   encKeyB64,
   encVer,
   encFp,
-  topic,
-  subReq,
-  subResp, // unused in consumer-only mode
   sessionIdForFilter,
   workspaceId,
   sidecarEnabled, // ignored; we always launch the consumer
@@ -45,15 +41,13 @@ export async function startLocalDocker({
     const sched = scheduleStartupProgress({ userId, projectId });
     if (!sched?.ok) console.warn('[jobs/producer:local-docker] progress schedule failed', sched);
 
-    // Build consumer environment
+    // Build consumer environment (HTTP/SSE; no Pub/Sub)
     const consumerEnv = buildLocalConsumerEnv({
       workflowsBaseUrl: baseCtx.workflowsBaseUrl,
       eventsHeartbeatMs: baseCtx.eventsHeartbeatMs,
       reconnectBackoffMs: baseCtx.reconnectBackoffMs,
       encKeyB64,
       encVer,
-      topic,
-      subReq,
       projectId,
       consumerType: 'CLOUD',
     });
@@ -125,9 +119,6 @@ export async function startLocalDocker({
           enc_ver: encVer,
           enc_fp: encFp,
           sessionId: sessionIdForFilter || null,
-          sub_req: subReq,
-          sub_resp: subResp,
-          topic,
         },
       });
     } catch (e) {
@@ -149,15 +140,10 @@ export async function startLocalDocker({
         sessionId: sessionIdForFilter || null,
         enc_ver: encVer,
         enc_fp: encFp,
-        sub_req: subReq,
-        sub_resp: subResp,
-        topic,
       },
     };
   } catch (e) {
     console.error('[jobs/producer:local-docker] start error', e);
-    await deleteSubscription({ gcpProject, name: subReq }).catch(() => {});
-    await deleteSubscription({ gcpProject, name: subResp }).catch(() => {});
     await bestEffortRelease({ userId, projectId });
     cancelStartupProgress({ userId, projectId, reason: 'local-docker error' });
     return { status: 500, body: { error: 'Failed to start local docker consumer', details: String(e?.message || e) } };

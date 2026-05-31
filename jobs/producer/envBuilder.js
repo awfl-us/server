@@ -83,29 +83,20 @@ export function buildLocalConsumerEnv({
   reconnectBackoffMs,
   encKeyB64,
   encVer,
-  topic,
-  subReq,
   projectId,
   consumerType = 'CLOUD',
 }) {
-  // Pub/Sub worker env for local consumer. No HTTP sidecar.
+  // HTTP/SSE consumer env for local development. No Pub/Sub.
   const env = [
     ...(workflowsBaseUrl ? [{ name: 'WORKFLOWS_BASE_URL', value: workflowsBaseUrl }] : []),
     ...(eventsHeartbeatMs ? [{ name: 'EVENTS_HEARTBEAT_MS', value: eventsHeartbeatMs }] : []),
     ...(reconnectBackoffMs ? [{ name: 'RECONNECT_BACKOFF_MS', value: reconnectBackoffMs }] : []),
     { name: 'GCS_BUCKET', value: process.env.GCS_BUCKET },
-    { name: 'GCS_DEBUG', value: '1' },
     { name: 'ENC_KEY_B64', value: encKeyB64 },
     { name: 'ENC_VER', value: encVer },
-    { name: 'PUBSUB_ENABLE', value: '1' },
-    { name: 'TOPIC', value: topic },
-    { name: 'SUBSCRIPTION', value: subReq },
-    { name: 'REPLY_CHANNEL', value: 'resp' },
     { name: 'AWFL_PROJECT_ID', value: String(projectId || '') },
     { name: 'AWFL_CONSUMER_TYPE', value: String(consumerType || 'CLOUD') },
     ...(process.env.API_ORIGIN ? [{ name: 'API_ORIGIN', value: String(process.env.API_ORIGIN) }] : []),
-    { name: 'GCS_TRACE', value: '0' },
-    { name: 'GCS_DEBUG', value: '0' }
   ];
   return env;
 }

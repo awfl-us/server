@@ -1,9 +1,8 @@
-import { runK8sJob, deleteK8sJob } from '../gke.js';
-import { deleteSubscription } from '../pubsubAdmin.js';
+import { runK8sJob } from '../gke.js';
 import { setConsumerRuntimeInfo } from '../../../workflows/projects/lock.js';
 import { scheduleStartupProgress } from '../progress.js';
 
-// Updated GKE start path: only create the consumer Job (awfl CLI), no producer Job.
+// Updated GKE start path: launch only the consumer Job (awfl CLI) via HTTP/SSE. No Pub/Sub.
 export async function startGke({
   userId,
   projectId,
@@ -15,9 +14,6 @@ export async function startGke({
   encFp,
   baseCtx,
   gcsPrefix, // unused in consumer-only mode
-  topic,
-  subReq,
-  subResp, // retained for runtime/stop cleanup only
   sessionIdForFilter,
   githubToken,
   workspaceId,
@@ -42,8 +38,6 @@ export async function startGke({
   const startupSh = process.env.AWFL_STARTUP_SH || defaultStartup;
 
   if (!consumerImage) {
-    await deleteSubscription({ gcpProject, name: subReq }).catch(() => {});
-    await deleteSubscription({ gcpProject, name: subResp }).catch(() => {});
     await bestEffortRelease({ userId, projectId });
     return { status: 500, body: { error: 'Missing CONSUMER_K8S_IMAGE' } };
   }
@@ -80,14 +74,11 @@ export async function startGke({
     }
   } catch {}
 
+  // HTTP/SSE consumer environment (no Pub/Sub)
   const consumerEnv = [
     { name: 'NODE_ENV', value: 'production' },
-    { name: 'PUBSUB_ENABLE', value: '1' },
-    { name: 'TOPIC', value: String(topic) },
-    { name: 'SUBSCRIPTION', value: String(subReq) },
     { name: 'ENC_KEY_B64', value: encKeyB64 },
     { name: 'ENC_VER', value: encVer },
-    { name: 'REPLY_CHANNEL', value: 'resp' },
     { name: 'CONSUMER_ID', value: consumerId },
     { name: 'AWFL_CONSUMER_ID', value: consumerId },
     { name: 'AWFL_PROJECT_ID', value: String(projectId) },
@@ -141,15 +132,11 @@ export async function startGke({
   try {
     cRun = await runK8sJob({ namespace, jobName: consumerJobName, image: consumerImage, serviceAccountName: consumerKsa, envPairs: consumerEnv, containerName: 'consumer', shCommand: startupSh });
   } catch (e) {
-    await deleteSubscription({ gcpProject, name: subReq }).catch(() => {});
-    await deleteSubscription({ gcpProject, name: subResp }).catch(() => {});
     await bestEffortRelease({ userId, projectId });
     return { status: 500, body: { error: 'Transport error creating consumer K8s Job', details: String(e?.message || e) } };
   }
 
   if (!cRun?.ok) {
-    await deleteSubscription({ gcpProject, name: subReq }).catch(() => {});
-    await deleteSubscription({ gcpProject, name: subResp }).catch(() => {});
     await bestEffortRelease({ userId, projectId });
     return { status: 500, body: { error: 'Failed to create consumer Kubernetes Job', consumer: cRun } };
   }
@@ -168,9 +155,6 @@ export async function startGke({
         enc_ver: encVer,
         enc_fp: encFp,
         sessionId: sessionIdForFilter || null,
-        sub_req: subReq,
-        sub_resp: subResp,
-        topic,
       },
     });
   } catch (e) {
@@ -193,9 +177,6 @@ export async function startGke({
       sessionId: sessionIdForFilter || null,
       enc_ver: encVer,
       enc_fp: encFp,
-      sub_req: subReq,
-      sub_resp: subResp,
-      topic,
       consumerImage,
     },
   };
