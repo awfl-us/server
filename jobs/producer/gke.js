@@ -63,14 +63,14 @@ function getBatchClient() {
     } else {
       if (inCloudRun) {
         // In Cloud Run without explicit config -> fail fast to avoid localhost defaults
-        const help = 'No Kubernetes config detected. Set K8S_API_SERVER (https URL to your cluster endpoint) and K8S_BEARER_TOKEN, and optionally K8S_CA_CERT_B64 or K8S_INSECURE_SKIP_TLS_VERIFY=1.';
+        const help = 'No Kubernetes config detected. Set K8S_API_SERVER (https URL to your cluster endpoint) and optionally K8S_CA_CERT_B64 or K8S_INSECURE_SKIP_TLS_VERIFY=1.';
         throw new Error(help);
       }
       // Fallback: attempt to use local kubeconfig (~/.kube/config) in dev
       kc.loadFromDefault();
       mode = 'default';
       try {
-        console.warn('[jobs/producer:gke:kubeconfig] using default kubeconfig (dev). In Cloud Run, set K8S_API_SERVER and K8S_BEARER_TOKEN to target your GKE cluster');
+        console.warn('[jobs/producer:gke:kubeconfig] using default kubeconfig (dev). In Cloud Run, set K8S_API_SERVER to target your GKE cluster');
       } catch {}
     }
   } catch (e) {
@@ -86,11 +86,40 @@ function getBatchClient() {
   return { kc, batch, mode };
 }
 
+async function fetchMetadataAccessToken({ timeoutMs = 1500 } = {}) {
+  // Cloud Run/Compute/GKE metadata server token endpoint. Returns { access_token, expires_in, token_type }
+  const url = 'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token';
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), Math.max(500, timeoutMs));
+  try {
+    const res = await fetch(url, { headers: { 'Metadata-Flavor': 'Google' }, signal: ctrl.signal });
+    if (!res.ok) throw new Error(`metadata token HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data?.access_token) throw new Error('metadata token missing access_token');
+    return { token: String(data.access_token), expiresIn: Number(data.expires_in || 0) };
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 export async function runK8sJob({ namespace, jobName, image, serviceAccountName, envPairs = [], containerName = 'main', ttlSecondsAfterFinished = 3600, backoffLimit = 0, command, args, shCommand }) {
   if (!namespace) return { ok: false, status: 400, error: 'Missing namespace' };
   if (!jobName) return { ok: false, status: 400, error: 'Missing jobName' };
   if (!image) return { ok: false, status: 400, error: 'Missing image' };
   try {
+    // If running in Cloud Run and talking to an external K8s API without a provided token, fetch a Google access token
+    const inCloudRun = Boolean(process.env.K_SERVICE || process.env.K_REVISION || process.env.CLOUD_RUN_JOB);
+    const hasExtApi = Boolean(process.env.K8S_API_SERVER || process.env.K8S_API_ENDPOINT);
+    if (inCloudRun && hasExtApi && !process.env.K8S_BEARER_TOKEN) {
+      try {
+        const { token } = await fetchMetadataAccessToken({ timeoutMs: 1500 });
+        if (token) process.env.K8S_BEARER_TOKEN = token;
+        try { console.log('[jobs/producer:gke] acquired access token from metadata server for K8s API'); } catch {}
+      } catch (e) {
+        try { console.warn('[jobs/producer:gke] failed to get metadata access token; ensure Cloud Run SA has default access and metadata server is reachable', String(e?.message || e)); } catch {}
+      }
+    }
+
     const { batch, mode } = getBatchClient();
     const container = {
       name: containerName || 'main',
