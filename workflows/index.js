@@ -18,6 +18,7 @@ import callbacksRoutes from './callbacks/index.js'
 import credsRoutes from './creds/index.js'
 import apiKeysRoutes from './apiKeys/index.js'
 import githubAppRoutes from './githubApp/index.js'
+import googleCloudRoutes from './googleCloud/index.js'
 import producerRoutes from '../jobs/producer/index.js'
 import filesystemRoutes from './services/filesystem.js'
 import llmApiRoutes from './llm.api.js'
@@ -33,6 +34,7 @@ router.use(clientAuth)
 router.use('/api-keys', apiKeysRoutes)
 // GitHub App setup is user/project scoped; it does not rely on x-project-id.
 router.use('/github-app', githubAppRoutes)
+router.use('/google-cloud', googleCloudRoutes)
 
 // Add the projectId middleware after projects
 router.use('/projects', projectsRoutes)
