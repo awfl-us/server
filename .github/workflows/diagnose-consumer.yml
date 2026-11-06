@@ -1,0 +1,65 @@
+name: Read-only AWFL consumer diagnostics
+on:
+  pull_request:
+    paths: [".github/workflows/diagnose-consumer.yml"]
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/323709301334/locations/global/workloadIdentityPools/github-oidc/providers/github
+          service_account: github-deployer@awfl-us.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: awfl-us
+      - name: Read existing Cloud Logging and Kubernetes status
+        shell: bash
+        run: |
+          set -u
+          set +e
+          gcloud logging read 'resource.type="k8s_container" AND resource.labels.namespace_name="awfl" AND resource.labels.pod_name:"consumer-mw57j0p3-c6bu0lxb" AND timestamp>="2026-11-06T16:40:00Z"' --project=awfl-us --limit=150 --format=json >/tmp/consumer.json 2>/tmp/consumer.err
+          echo "GKE_CONSUMER_LOG_READ_EXIT=$?"
+          gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="api" AND timestamp>="2026-11-06T16:40:00Z" AND (textPayload:"consumer" OR textPayload:"mcp" OR textPayload:"events/stream" OR severity>=ERROR)' --project=awfl-us --limit=150 --format=json >/tmp/api.json 2>/tmp/api.err
+          echo "API_LOG_READ_EXIT=$?"
+          gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="jobs" AND timestamp>="2026-11-06T16:40:00Z" AND (textPayload:"consumer" OR severity>=ERROR)' --project=awfl-us --limit=80 --format=json >/tmp/jobs.json 2>/tmp/jobs.err
+          echo "JOBS_LOG_READ_EXIT=$?"
+          python3 - <<'PY'
+          import json,collections,pathlib,re
+          def scrub(s):
+              s=re.sub(r'(?i)(bearer\\s+)[\\w.\\-]+',r'\\1[redacted]',s)
+              s=re.sub(r'gh[psu]_[a-zA-Z0-9]+','[redacted-token]',s)
+              s=re.sub(r'(?i)(token|secret|password|authorization|cookie)\\s*[:=]\\s*[^,;\\s}]+',r'\\1=[redacted]',s)
+              s=re.sub(r'https?://\\S+','[url]',s)
+              return s[:320]
+          for name in ('consumer','api','jobs'):
+              p=pathlib.Path('/tmp/'+name+'.json')
+              try: items=json.loads(p.read_text())
+              except Exception: items=[]
+              print('SOURCE',name,'COUNT',len(items),'SEVERITIES',dict(collections.Counter(x.get('severity','DEFAULT') for x in items)))
+              for x in sorted(items,key=lambda a:a.get('timestamp',''))[-45:]:
+                  msg=x.get('textPayload') or (x.get('jsonPayload') or {}).get('message') or ''
+                  if not isinstance(msg,str): msg=str(msg)
+                  # Only print strongly diagnostic lines; avoid raw user/tool content.
+                  if re.search(r'error|fail|exception|lock|stream|connect|startup|unauthor|permission|consumer|mcp|backoff|exit|terminated|forbidden|not found',msg,re.I):
+                      resource=x.get('resource') or {}
+                      print('LOG',name,x.get('timestamp',''),x.get('severity','DEFAULT'),scrub(msg))
+              err=pathlib.Path('/tmp/'+name+'.err').read_text()
+              if err.strip(): print('READ_ERROR',name,scrub(err))
+          PY
+          gcloud container clusters get-credentials awfl-gke --location us-central1 --project awfl-us >/tmp/kube-auth.out 2>/tmp/kube-auth.err
+          echo "KUBE_AUTH_EXIT=$?"
+          if [ -s /tmp/kube-auth.err ]; then sed -E 's/(token|secret|password)[^ ]*/[redacted]/Ig' /tmp/kube-auth.err | head -c 600; fi
+          kubectl get job -n awfl consumer-mw57j0p3-c6bu0lxb -o json >/tmp/job.json 2>/tmp/job.err
+          echo "KUBE_JOB_READ_EXIT=$?"
+          python3 - <<'PY'
+          import json,pathlib
+          try:
+              j=json.loads(pathlib.Path('/tmp/job.json').read_text())
+              print('JOB',j.get('metadata',{}).get('name'), 'status',j.get('status'))
+          except: print('JOB_ERROR',pathlib.Path('/tmp/job.err').read_text()[:380])
+          PY
