@@ -12,6 +12,7 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PATH="/home/awfl/.local/bin:${PATH}" \
     HOME="/home/awfl" \
+    PLAYWRIGHT_BROWSERS_PATH="/ms-playwright" \
     WORKDIR="/workspace"
 
 WORKDIR /app
@@ -47,7 +48,8 @@ RUN mkdir -p /etc/apt/keyrings \
 # Browser support lives in the existing AWFL consumer image, not a separate MCP image.
 # Install browser system dependencies while still root.
 RUN python -m pip install --no-cache-dir playwright==1.64.1 \
-    && python -m playwright install --with-deps chromium
+    && python -m playwright install --with-deps chromium \
+    && chmod -R a+rX /ms-playwright
 
 # Non-root user for tool execution.
 RUN useradd -m -s /bin/bash awfl \
