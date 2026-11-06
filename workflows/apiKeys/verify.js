@@ -1,5 +1,5 @@
 import { getFirestore } from 'firebase-admin/firestore';
-import { MCP_SCOPE, matchesApiKeyHash, parseApiKey } from './core.js';
+import { MCP_SCOPE, isActiveApiKeyRecord, parseApiKey } from './core.js';
 
 // Reusable verifier for the future MCP transport. Deliberately separate from
 // Firebase ID-token auth used by the AWFL web application.
@@ -12,13 +12,7 @@ export async function verifyAwflApiKey(token, { db = getFirestore(), requiredSco
   if (!snap.exists) return null;
 
   const data = snap.data() || {};
-  if (typeof data.userId !== 'string' || !data.userId ||
-      data.id !== parsed.id ||
-      !matchesApiKeyHash(token, data.hash) ||
-      !Array.isArray(data.scopes) || !data.scopes.includes(requiredScope) ||
-      !Number.isSafeInteger(data.expiresAt) || data.expiresAt <= now) {
-    return null;
-  }
+  if (!isActiveApiKeyRecord(token, data, { requiredScope, now })) return null;
 
   return { userId: data.userId, keyId: parsed.id, scopes: [...data.scopes] };
 }
