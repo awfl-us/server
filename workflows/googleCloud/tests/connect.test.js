@@ -55,6 +55,7 @@ test('OAuth uses single-use project-bound state, PKCE, encrypted offline refresh
         return response({ access_token: 'access-two', expires_in: 3600 });
       }
       if (url.includes('/userinfo')) return response({ email: 'example@example.com' });
+      if (url.endsWith('/revoke')) return response({});
       if (url.includes('secretmanager.googleapis.com')) return response({});
       throw new Error('Unexpected URL ' + url);
     };
@@ -70,7 +71,7 @@ test('OAuth uses single-use project-bound state, PKCE, encrypted offline refresh
     assert.deepEqual(cred, { accessToken: 'access-two', cloudProjectId: 'topaigents' });
     const testResult = await testGoogleCloud({ userId: 'testuser', projectId: 'project1', db, fetcher });
     assert.deepEqual(testResult, { cloudProjectId: 'topaigents', access: 'ok' });
-    await disconnectGoogleCloud({ userId: 'testuser', projectId: 'project1', db });
+    await disconnectGoogleCloud({ userId: 'testuser', projectId: 'project1', db, fetcher });
     assert.equal((await googleCloudStatus({ userId: 'testuser', projectId: 'project1', db })).connected, false);
     assert.equal(await resolveGoogleCloudAccessToken({ userId: 'testuser', projectId: 'project1', db, fetcher }), null);
     assert.equal(requests.some(q => q.url.includes('secretmanager.googleapis.com')), true);
