@@ -1,0 +1,25 @@
+name: API key unit tests
+
+on:
+  pull_request:
+    paths:
+      - 'workflows/apiKeys/**'
+      - '.github/workflows/api-keys-test.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'workflows/apiKeys/**'
+      - '.github/workflows/api-keys-test.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test API key generation and verification rules
+        run: node --test workflows/apiKeys/__tests__/core.test.mjs

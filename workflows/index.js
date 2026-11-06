@@ -16,6 +16,7 @@ import { projectIdMiddleware } from './projects/util.js'
 import gitFilesRouter from './gitFiles.js';
 import callbacksRoutes from './callbacks/index.js'
 import credsRoutes from './creds/index.js'
+import apiKeysRoutes from './apiKeys/index.js'
 import producerRoutes from '../jobs/producer/index.js'
 import filesystemRoutes from './services/filesystem.js'
 import llmApiRoutes from './llm.api.js'
@@ -26,6 +27,9 @@ router.use(express.json())
 
 // Client-facing workflows endpoints (protected by clientAuth)
 router.use(clientAuth)
+
+// API keys belong to a user, not a project. Firebase clientAuth still applies.
+router.use('/api-keys', apiKeysRoutes)
 
 // Add the projectId middleware after projects
 router.use('/projects', projectsRoutes)
