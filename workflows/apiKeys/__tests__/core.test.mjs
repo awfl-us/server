@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  apiKeyMetadata, generateApiKey, hashApiKey, matchesApiKeyHash, parseApiKey,
+  apiKeyMetadata, generateApiKey, hashApiKey, matchesApiKeyHash, parseApiKey, isActiveApiKeyRecord,
   API_KEY_LIFETIME_MS, MCP_SCOPE,
 } from '../core.js';
 
@@ -44,4 +44,21 @@ describe('AWFL API keys', () => {
     assert.equal(meta.hash, undefined);
     assert.equal(meta.userId, undefined);
   });
+
+  it('rejects expired, revoked, and out-of-scope keys', () => {
+    const key = generateApiKey();
+    const now = Date.now();
+    const active = {
+      id: key.id, userId: 'owner', name: 'MCP', hash: key.hash,
+      scopes: [MCP_SCOPE], expiresAt: now + 1000,
+    };
+    assert.equal(isActiveApiKeyRecord(key.token, active, { now }), true);
+    assert.equal(isActiveApiKeyRecord(key.token, { ...active, expiresAt: now }, { now }), false);
+    assert.equal(isActiveApiKeyRecord(key.token, { ...active, userId: '' }, { now }), false);
+    assert.equal(isActiveApiKeyRecord(key.token, { ...active, scopes: [] }, { now }), false);
+    assert.equal(isActiveApiKeyRecord(key.token, { ...active, hash: '0'.repeat(64) }, { now }), false);
+    assert.equal(isActiveApiKeyRecord(key.token, null, { now }), false);
+    assert.equal(isActiveApiKeyRecord(key.token, active, { now, requiredScope: 'admin' }), false);
+  });
+
 });
