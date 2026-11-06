@@ -93,3 +93,15 @@ retroactively kill already-running shell commands; stop the workspace first when
 needed. No API key belongs in source, HTML, tool definitions, logs, or chat.
 
 Phase 2 (private Site/plugin) must not begin until the live acceptance test passes.
+
+### One-time access bootstrap
+
+The existing GitHub deployment identity had Cloud Run deployment/index-management
+access but its Firestore data read failed during the first live deployment attempt.
+Run `bash scripts/bootstrap-mcp-access.sh` once from this repository in Google Cloud
+Shell as the project/cluster administrator, then re-run the latest deployment.
+The script grants the deployer Firestore data access (needed to resolve the owner
+and create/delete ephemeral smoke-test keys), cluster metadata/connection access,
+and Kubernetes permissions limited to the `awfl-execution` namespace. It does not
+grant GKE administrator, project owner, or any IAM permissions to execution pods.
+The two project IAM bindings are also recorded in `infra/mcp_execution.tf`.
