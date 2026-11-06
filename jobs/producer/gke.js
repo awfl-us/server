@@ -189,3 +189,26 @@ export async function deleteK8sJob({ namespace, jobName, propagationPolicy = 'Ba
     return { ok: false, status: code || 500, error: e?.response?.body || e?.message || String(e) };
   }
 }
+
+/**
+ * Read the existing project consumer Job status without creating a second Job.
+ * For diagnostics only; never expose Kubernetes configuration or credentials.
+ */
+export async function inspectK8sJob({ namespace, jobName }) {
+  if (!namespace || !jobName) return { state: 'unknown' };
+  try {
+    const { batch } = getBatchClient();
+    const response = await batch.readNamespacedJob(jobName, namespace);
+    const status = response?.body?.status || {};
+    const conditions = Array.isArray(status.conditions) ? status.conditions : [];
+    return {
+      state: status.succeeded ? 'completed' : status.failed ? 'failed' : status.active ? 'active' : 'pending',
+      active: Number(status.active || 0),
+      failed: Number(status.failed || 0),
+      succeeded: Number(status.succeeded || 0),
+      conditions: conditions.map(c => ({ type: c.type, status: c.status, reason: c.reason || null })).slice(-5),
+    };
+  } catch (error) {
+    return { state: error?.response?.statusCode === 404 ? 'not_found' : 'unavailable' };
+  }
+}
