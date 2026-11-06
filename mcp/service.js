@@ -1,7 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { consumerNames } from './tools.js';
-import { ensureProjectConsumer } from '../jobs/producer/index.js';
-import { getConsumerLock } from '../workflows/projects/lock.js';
+// Defer loading the producer API modules until startup. The same project
+// lifecycle is used by both MCP and regular /producer/start requests.
+const ensureProjectConsumer = async args => (await import('../jobs/producer/start.js')).ensureProjectConsumer(args);
+const getConsumerLock = async args => (await import('../workflows/projects/lock.js')).getConsumerLock(args);
 import { pickBackend, normalizeEnvelope } from '../workflows/events/model.js';
 
 export const digest = value => createHash('sha256').update(value).digest('hex');
