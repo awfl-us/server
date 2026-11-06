@@ -118,7 +118,9 @@ async function findAccessibleInstallation(userToken, targetFullName, { fetcher =
         const repos = await githubRequest('/user/installations/' + installation.id +
           '/repositories?per_page=100&page=' + reposPage, userToken, { fetcher });
         const match = (repos.repositories || []).find(r => r.full_name?.toLowerCase() === targetFullName.toLowerCase());
-        if (match) return { installationId: installation.id, repositoryId: match.id,
+        // Installation tokens can write as the app. Do not let a read-only
+        // collaborator link an installation with greater privileges.
+        if (match && (match.permissions?.push === true || match.permissions?.admin === true)) return { installationId: installation.id, repositoryId: match.id,
           fullName: match.full_name, owner: match.owner.login, repo: match.name,
           defaultBranch: match.default_branch || 'main' };
         if ((repos.repositories || []).length < 100) break;
@@ -161,7 +163,7 @@ export async function disconnectGithubApp({ userId, projectId, db = getFirestore
   return { ok: true };
 }
 
-export async function resolveGithubAppCredential({ userId, projectId, db = getFirestore() }) {
+export async function resolveGithubAppCredential({ userId, projectId, db = getFirestore(), fetcher = fetch }) {
   if (!userId || !projectId) return null;
   const snap = await linkRef(db, userId, projectId).get();
   if (!snap.exists) return null;
@@ -183,7 +185,7 @@ export async function resolveGithubAppCredential({ userId, projectId, db = getFi
   }
   const jwt = appJwt({ appId: process.env.GITHUB_APP_ID, privateKeyB64: process.env.GITHUB_APP_PRIVATE_KEY_B64 });
   const result = await githubRequest('/app/installations/' + data.installationId + '/access_tokens',
-    jwt, { method: 'POST', body: { repository_ids: [data.repositoryId] } });
+    jwt, { method: 'POST', body: { repository_ids: [data.repositoryId] }, fetcher });
   if (!result.token || !result.expires_at) throw new Error('GitHub App token response invalid');
   tokenCache.set(key, { token: result.token, expiresAt: Date.parse(result.expires_at) });
   return { token: result.token, owner: data.owner, repo: data.repo, defaultBranch: data.defaultBranch };
