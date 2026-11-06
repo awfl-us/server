@@ -1,18 +1,19 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { consumerNames } from './tools.js';
+import { ensureProjectConsumer } from '../jobs/producer/index.js';
+import { getConsumerLock } from '../workflows/projects/lock.js';
+import { pickBackend, normalizeEnvelope } from '../workflows/events/model.js';
 
 export const digest = value => createHash('sha256').update(value).digest('hex');
 export function fail(message) { throw Object.assign(new Error(message), { publicMessage: message }); }
 export const validId = value => typeof value === 'string' && /^[a-f0-9]{32}$/.test(value);
 
+// An MCP workspace is now an attachment to a project consumer, NOT a GKE Job.
+// Multiple sessions/clients can share one project environment and consumer lock.
 export class ExecutionService {
-  constructor({ db, runtime, ownerId = process.env.MCP_OWNER_UID, origin = process.env.API_ORIGIN }) {
-    Object.assign(this, { db, runtime, ownerId, origin });
+  constructor({ db, ownerId = process.env.MCP_OWNER_UID }) {
+    Object.assign(this, { db, ownerId });
   }
-  // Explicit owner takes precedence. For an initial personal deployment with
-  // no configured UID, allow only the sole owner of active MCP-scoped API keys.
-  // Resolve at request time using the API runtime's existing Firestore access,
-  // not the GitHub deployer's IAM identity.
   async isOwner(userId) {
     if (this.ownerId) return userId === this.ownerId;
     if (!userId) return false;
@@ -22,7 +23,10 @@ export class ExecutionService {
     ).map(k => k.userId));
     return owners.size === 1 && owners.has(userId);
   }
-  ref(id) { if (!validId(id)) fail('Invalid workspace ID'); return this.db.collection('mcpWorkspaces').doc(id); }
+  ref(id) {
+    if (!validId(id)) fail('Invalid workspace ID');
+    return this.db.collection('mcpWorkspaces').doc(id);
+  }
   async owned(userId, id, { allowStopped = false } = {}) {
     const snap = await this.ref(id).get();
     const ws = snap.data();
@@ -30,99 +34,137 @@ export class ExecutionService {
     if (!allowStopped && (ws.stopped || ws.expiresAt <= Date.now())) fail('Workspace stopped or expired');
     return ws;
   }
-  async consumer(id, token) {
-    if (!validId(id) || typeof token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(token)) return null;
-    const snap = await this.ref(id).get();
-    const ws = snap.data();
-    if (!ws || ws.stopped || ws.expiresAt <= Date.now()) return null;
-    if (!timingSafeEqual(Buffer.from(digest(token), 'hex'), Buffer.from(ws.capabilityHash, 'hex'))) return null;
-    return ws;
+  async status(userId, ws) {
+    const { lock } = await getConsumerLock({ userId, projectId: ws.projectId });
+    const running = Boolean(lock && lock.expiresAt > Date.now());
+    return {
+      state: running ? 'attached' : 'consumer_unavailable',
+      project_id: ws.projectId, session_id: ws.sessionId,
+      consumer_id: running ? lock.consumerId : null,
+      shared: true,
+    };
   }
-  async invoke(userId, name, args) {
+  async invoke(userId, name, args = {}) {
     if (!await this.isOwner(userId)) fail('Owner access required');
     if (name === 'environment_status' && !args.workspace_id) return {
-      state: 'control_plane_ready', transport: 'SSE tool calls to Python AWFL consumer; HTTP callbacks',
-      execution: 'isolated GKE Job with one-hour lifetime', limits: { workspaces: 1, concurrent_commands: 4, command_seconds: 900 },
-      configured: this.runtime.configured(), connectivity: 'Use workspace environment_status and run_command to verify live connectivity',
+      state: 'control_plane_ready', transport: 'Shared project event stream and callbacks',
+      execution: 'Existing project-scoped consumer; one GKE Job/lock per project',
+      configured: true,
     };
     if (name === 'workspace_create') return this.create(userId, args);
     const ws = await this.owned(userId, args.workspace_id, { allowStopped: name === 'workspace_stop' });
+    if (name === 'workspace_stop') {
+      // Detach only. The consumer is shared with other clients/sessions.
+      await this.ref(args.workspace_id).update({ stopped: true });
+      return { workspace_id: args.workspace_id, state: 'detached', consumer_stopped: false };
+    }
+    if (name === 'environment_status') return this.status(userId, ws);
     if (name === 'request_result') {
       const snap = await this.ref(args.workspace_id).collection('mcpRequests').doc(String(args.request_id).padStart(8, '0')).get();
       if (!snap.exists) fail('Request not found');
       return snap.data().result ?? { state: 'pending', request_id: args.request_id };
     }
-    if (name === 'workspace_stop') {
-      await this.ref(args.workspace_id).update({ stopped: true }); // revoke capability before deleting pod
-      await this.runtime.stop(ws.jobName);
-      return { workspace_id: args.workspace_id, state: 'stopped' };
-    }
+    if (!consumerNames[name]) fail('Unsupported MCP tool');
+
+    // The normal project consumer receives these events. It is the only
+    // executor, regardless of whether the caller is a browser, CLI, or MCP.
+    const { lock } = await getConsumerLock({ userId, projectId: ws.projectId });
+    if (!lock || lock.expiresAt <= Date.now()) fail('Project consumer not running; reattach workspace to start it');
     const ref = this.ref(args.workspace_id);
     const seq = await this.db.runTransaction(async tx => {
       const fresh = (await tx.get(ref)).data();
       if (fresh.stopped || fresh.expiresAt <= Date.now()) fail('Workspace stopped or expired');
-      if (fresh.nextSeq >= 2000) fail('Workspace request limit reached; stop and recreate');
-      if (fresh.nextSeq - (fresh.ackSeq || 0) >= 8) fail('Consumer queue full or not ready; retry after startup');
+      if (fresh.nextSeq >= 2000) fail('Workspace request limit reached');
       const next = fresh.nextSeq + 1;
       const { workspace_id, ...parameters } = args;
       tx.update(ref, { nextSeq: next });
       tx.create(ref.collection('mcpRequests').doc(String(next).padStart(8, '0')), {
-        seq: next, expires_at: new Date(ws.expiresAt + 86400000),
-        data: { callback_id: String(next), tool_call: { function: { name: consumerNames[name], arguments: parameters } } },
+        seq: next, state: 'queued', toolName: name, createdAt: Date.now(),
+        expires_at: new Date(ws.expiresAt + 86400000),
+        args: parameters,
       });
       return next;
     });
-    const responseRef = ref.collection('mcpRequests').doc(String(seq).padStart(8, '0'));
-    // Bounded request; execution itself remains in the consumer after this HTTP response.
+    const request = ref.collection('mcpRequests').doc(String(seq).padStart(8, '0'));
+    const { workspace_id, ...parameters } = args;
+    try {
+      await pickBackend(userId, ws.projectId).append(normalizeEnvelope({
+        projectId: ws.projectId, sessionId: ws.sessionId, type: 'mcp_tool_call',
+        source: 'mcp',
+        data: {
+          mcp: { workspace_id: args.workspace_id, request_id: seq },
+          tool_call: { function: { name: consumerNames[name], arguments: parameters } },
+        },
+      }));
+    } catch (e) {
+      await request.update({ state: 'delivery_failed', result: { error: 'MCP command could not be delivered' } });
+      fail('MCP command could not be delivered');
+    }
     return new Promise((resolve, reject) => {
       let unsubscribe = () => {};
-      const timer = setTimeout(() => { unsubscribe(); resolve({ state: 'pending', request_id: seq,
-        workspace_id: args.workspace_id, message: 'Consumer has not acknowledged in 15s. Use request_result with request_id; do not retry a mutating call blindly.' }); }, 15000);
-      unsubscribe = responseRef.onSnapshot(snap => {
-        if (snap.data()?.result !== undefined) { clearTimeout(timer); unsubscribe(); resolve(snap.data().result); }
-      }, () => { clearTimeout(timer); unsubscribe(); reject(new Error('Response unavailable')); });
+      const timer = setTimeout(() => {
+        unsubscribe();
+        resolve({ state: 'pending', request_id: seq, workspace_id: args.workspace_id,
+          message: 'Command not acknowledged within 15s; use request_result (do not repeat side effects).' });
+      }, 15000);
+      unsubscribe = request.onSnapshot(snap => {
+        if (snap.data()?.result !== undefined) {
+          clearTimeout(timer); unsubscribe(); resolve(snap.data().result);
+        }
+      }, () => {
+        clearTimeout(timer); unsubscribe(); reject(new Error('Response unavailable'));
+      });
     });
   }
   async create(userId, args = {}) {
-    if (!this.runtime.configured()) fail('Cloud execution is not configured');
-    const projects = this.db.collection('users').doc(userId).collection('projects');
-    let projectId = null;
-    if (args.project_id) {
-      const project = await projects.doc(args.project_id).get();
-      if (!project.exists) fail('Project not found');
-      projectId = project.id;
-    } else {
-      const existing = await projects.limit(1).get();
-      projectId = existing.docs[0]?.id || null;
-    }
+    // Do not silently select a random project as the earlier MCP implementation did.
+    const projectId = typeof args.project_id === 'string' ? args.project_id.trim() : '';
+    if (!projectId) fail('project_id is required');
+    const project = await this.db.collection('users').doc(userId).collection('projects').doc(projectId).get();
+    if (!project.exists) fail('Project not found');
+    const consumer = await ensureProjectConsumer({ userId, projectId });
     const id = randomBytes(16).toString('hex');
-    const token = randomBytes(32).toString('base64url');
-    const ref = this.ref(id);
-    const slot = this.db.collection('mcpOwners').doc(digest(userId));
+    const sessionId = (typeof args.session_id === 'string' && args.session_id.trim()) || 'mcp-' + id;
     const expiresAt = Date.now() + 3600000;
-    const result = await this.db.runTransaction(async tx => {
-      const current = (await tx.get(slot)).data();
-      if (current?.id) {
-        const existing = (await tx.get(this.ref(current.id))).data();
-        if (existing && !existing.stopped && existing.expiresAt > Date.now()) {
-          if (args.project_id && existing.projectId !== args.project_id) fail('Stop existing workspace before switching projects');
-          return { workspace_id: current.id, state: existing.state, expires_at: existing.expiresAt, attached: true };
-        }
-      }
-      tx.set(slot, { id });
-      tx.create(ref, { userId, projectId, jobName: `mcp-${id}`, capabilityHash: digest(token), expiresAt,
-        expires_at: new Date(expiresAt + 86400000), nextSeq: 0, ackSeq: 0, stopped: false, state: 'starting' });
-      return null;
+    await this.ref(id).set({
+      userId, projectId, sessionId, nextSeq: 0, expiresAt,
+      expires_at: new Date(expiresAt + 86400000), stopped: false,
     });
-    if (result) return result;
-    try {
-      await this.runtime.start({ id, token, expiresAt, origin: this.origin, userId, projectId });
-      return { workspace_id: id, state: 'starting', expires_at: expiresAt, cwd: '/workspace' };
-    } catch {
-      await ref.update({ stopped: true, state: 'failed' });
-      // Deletion is idempotent, including an uncertain create response.
-      await this.runtime.stop(`mcp-${id}`).catch(() => {});
-      fail('Cloud workspace could not start; inspect deployment permissions and GKE configuration');
+    return { workspace_id: id, project_id: projectId, session_id: sessionId,
+      state: consumer.state, consumer_id: consumer.consumerId,
+      shared: true, expires_at: expiresAt };
+  }
+  async claim(userId, projectId, id, seq) {
+    const ws = await this.owned(userId, id);
+    if (ws.projectId !== projectId) fail('Project mismatch');
+    const request = this.ref(id).collection('mcpRequests').doc(String(seq).padStart(8, '0'));
+    return this.db.runTransaction(async tx => {
+      const snap = await tx.get(request);
+      if (!snap.exists || snap.data().state !== 'queued') return { claimed: false };
+      tx.update(request, { state: 'running', claimedAt: Date.now() });
+      return { claimed: true };
+    });
+  }
+  async complete(userId, projectId, id, seq, result) {
+    const ws = await this.owned(userId, id);
+    if (ws.projectId !== projectId) fail('Project mismatch');
+    const request = this.ref(id).collection('mcpRequests').doc(String(seq).padStart(8, '0'));
+    const done = await this.db.runTransaction(async tx => {
+      const snap = await tx.get(request);
+      if (!snap.exists || snap.data().state !== 'running') return null;
+      tx.update(request, { state: 'completed', result, completedAt: Date.now() });
+      return snap.data().toolName;
+    });
+    if (done) {
+      // Session-scoped history uses the same relay as every other AWFL client.
+      // Do not persist raw command output or credentials in the conversation.
+      await pickBackend(userId, projectId).append(normalizeEnvelope({
+        projectId, sessionId: ws.sessionId, type: 'mcp_tool_result', source: 'mcp',
+        data: { mcp: { workspace_id: id, request_id: seq },
+          content: 'MCP ' + done + ' ' + (result?.error ? 'failed' : 'completed'),
+          exit_code: result?.exit_code ?? null },
+      })).catch(() => {});
     }
+    return { ok: Boolean(done) };
   }
 }
