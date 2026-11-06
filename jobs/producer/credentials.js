@@ -1,4 +1,4 @@
-import { resolveStoredGithubToken } from '../../workflows/gitFiles.js';
+import { resolveGithubCredential } from '../../workflows/gitFiles.js';
 import { mintUserTokens } from './auth/firebaseTokens.js';
 
 // Shared by the normal cloud consumer and the MCP consumer. Fetch credentials
@@ -6,9 +6,9 @@ import { mintUserTokens } from './auth/firebaseTokens.js';
 export async function loadConsumerCredentials({ userId, projectId }) {
   let githubToken = null;
   try {
-    githubToken = await resolveStoredGithubToken({ userId, projectId });
-  } catch {
-    githubToken = process.env.GITHUB_TOKEN || null;
+    githubToken = await resolveGithubCredential({ userId, projectId });
+  } catch (error) {
+    console.warn('[producer] GitHub credential lookup unavailable', error?.name || 'Error');
   }
 
   let firebaseIdToken = '';

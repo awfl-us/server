@@ -5,6 +5,7 @@ import { ExecutionService } from './mcp/service.js'
 import { ExistingConsumerRuntime } from './jobs/producer/mcpRunner.js'
 import { createMcpRouter } from './mcp/index.js'
 import { createConsumerRouter } from './mcp/consumer.js'
+import { githubAppCallback } from './workflows/githubApp/index.js'
 
 const app = express()
 app.use(express.json({ limit: '1mb' }))
@@ -98,9 +99,10 @@ const cors = (req, res, next) => {
 app.use(cors)
 
 const logging = (req, _res, next) => {
-  const { method, url } = req
-  if (!url.includes('health')) {
-    console.log(`[API] ${method} ${url}`)
+  const { method, path } = req
+  // Do not log OAuth codes, state, or other query-string credentials.
+  if (!path.includes('health')) {
+    console.log(`[API] ${method} ${path}`)
   }
   next()
 }
@@ -108,6 +110,9 @@ app.use(logging)
 
 // Health checks (support both /health and /api/health for compatibility)
 app.get('/health', (_req, res) => res.status(200).send('OK'))
+// GitHub OAuth redirects cannot carry the Firebase Authorization header.
+// Binding is secured by the authenticated, single-use state created at /workflows/github-app/start.
+app.get('/github-app/callback', githubAppCallback)
 
 // Separate API-key and workspace-capability paths; never enter Firebase middleware.
 const execution = new ExecutionService({ db: getFirestore(), runtime: new ExistingConsumerRuntime() })

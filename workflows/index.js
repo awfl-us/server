@@ -17,6 +17,7 @@ import gitFilesRouter from './gitFiles.js';
 import callbacksRoutes from './callbacks/index.js'
 import credsRoutes from './creds/index.js'
 import apiKeysRoutes from './apiKeys/index.js'
+import githubAppRoutes from './githubApp/index.js'
 import producerRoutes from '../jobs/producer/index.js'
 import filesystemRoutes from './services/filesystem.js'
 import llmApiRoutes from './llm.api.js'
@@ -30,6 +31,8 @@ router.use(clientAuth)
 
 // API keys belong to a user, not a project. Firebase clientAuth still applies.
 router.use('/api-keys', apiKeysRoutes)
+// GitHub App setup is user/project scoped; it does not rely on x-project-id.
+router.use('/github-app', githubAppRoutes)
 
 // Add the projectId middleware after projects
 router.use('/projects', projectsRoutes)
