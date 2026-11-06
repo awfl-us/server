@@ -97,10 +97,14 @@ test('MCP attaches to existing project consumer without starting an independent 
   const db = memoryDb();
   const userId = 'owner', projectId = 'repo-1';
   await db.collection('users').doc(userId).collection('projects').doc(projectId).set({ name: 'TopAigents' });
-  const launches = [];
+  const launches = [], stops = [];
   const service = new ExecutionService({
     db, ownerId: userId,
     startConsumer: async ctx => { launches.push(ctx); return { state: 'attached', consumerId: 'existing-consumer' }; },
+    stopConsumer: async ctx => {
+      stops.push(ctx);
+      return { status: 200, body: { ok: true, consumerStopped: true } };
+    },
     getLock: async () => ({ lock: { consumerId: 'existing-consumer', expiresAt: Date.now() + 40000 } }),
     backend: () => ({ append: async () => {} }),
   });
@@ -113,12 +117,35 @@ test('MCP attaches to existing project consumer without starting an independent 
   assert.equal(first.consumer_id, 'existing-consumer');
   assert.equal(launches.length, 2);
   assert.deepEqual(launches, [{ userId, projectId }, { userId, projectId }]);
-  // Detach one session without deleting the other session or the project consumer.
+  // Stopping from MCP invokes the same project shutdown as /producer/stop.
   assert.deepEqual(await service.invoke(userId, 'workspace_stop', { workspace_id: first.workspace_id, confirm: true }),
-    { workspace_id: first.workspace_id, state: 'detached', consumer_stopped: false });
+    { workspace_id: first.workspace_id, state: 'stopped', consumer_stopped: true, shared: true });
+  assert.deepEqual(stops, [{ userId, projectId }]);
   const ws2 = await service.owned(userId, second.workspace_id);
   assert.equal(ws2.sessionId, 'second-conversation');
   await assert.rejects(service.owned(userId, first.workspace_id), /Workspace stopped/);
+});
+
+test('MCP stop retains its workspace after consumer shutdown failure and requires explicit confirmation', async () => {
+  const db = memoryDb();
+  await db.collection('users').doc('owner').collection('projects').doc('repo-1').set({});
+  let calls = 0;
+  const service = new ExecutionService({
+    db, ownerId: 'owner',
+    startConsumer: async () => ({ state: 'attached', consumerId: 'shared' }),
+    stopConsumer: async () => {
+      calls++;
+      return { status: 503, body: { ok: false, error: 'Kubernetes consumer shutdown failed; project lock retained' } };
+    },
+  });
+  const ws = await service.invoke('owner', 'workspace_create', { project_id: 'repo-1' });
+  await assert.rejects(service.invoke('owner', 'workspace_stop', { workspace_id: ws.workspace_id }),
+    /Confirm stopping/);
+  assert.equal(calls, 0);
+  await assert.rejects(service.invoke('owner', 'workspace_stop',
+    { workspace_id: ws.workspace_id, confirm: true }), /lock retained/);
+  assert.equal(calls, 1);
+  assert.equal((await service.owned('owner', ws.workspace_id)).stopped, false);
 });
 
 test('MCP emits standard AWFL tool calls and correlates the normal callback result', async () => {
