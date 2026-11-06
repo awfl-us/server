@@ -33,8 +33,9 @@ export async function startGke({
   const consumerKsa = process.env.CONSUMER_KSA_NAME || 'consumer';
 
   // Default startup script for the consumer
-  const defaultStartup = 'set -e; '
-    + 'python -m pip install --user awfl && "$HOME/.local/bin/awfl" run';
+  // Execute the AWFL CLI version baked into the existing consumer image.
+  // Reinstalling from PyPI on every startup could replace the pinned version.
+  const defaultStartup = 'awfl run';
   const startupSh = process.env.AWFL_STARTUP_SH || defaultStartup;
 
   if (!consumerImage) {
