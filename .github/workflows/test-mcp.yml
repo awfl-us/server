@@ -5,6 +5,8 @@ on:
     paths:
       - 'mcp/**'
       - 'jobs/producer/**'
+      - 'workflows/events/**'
+      - 'workflows/index.js'
       - 'cloud/sse-consumer/Dockerfile'
       - 'api.server.js'
       - '.github/workflows/test-mcp.yml'
@@ -14,6 +16,8 @@ on:
     paths:
       - 'mcp/**'
       - 'jobs/producer/**'
+      - 'workflows/events/**'
+      - 'workflows/index.js'
       - 'cloud/sse-consumer/Dockerfile'
       - 'api.server.js'
       - '.github/workflows/test-mcp.yml'
@@ -32,5 +36,7 @@ jobs:
       - run: npm install --ignore-scripts
       - run: node --test mcp/tests/*.test.js
       - run: node --check api.server.js
-      - run: node --check jobs/producer/mcpRunner.js
+      - run: node --check jobs/producer/start.js
       - run: node --check mcp/index.js
+      - run: node --check mcp/service.js
+      - run: node --check mcp/results.js
