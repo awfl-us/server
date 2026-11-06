@@ -68,6 +68,12 @@ try {
   assert.equal(command.exitCode, 0);
   assert.match(command.output, /shared-project-consumer/);
   assert.ok(command.output.includes(project));
+  const file = 'mcp-smoke-' + Date.now() + '.txt';
+  const expected = 'AWFL standard callback READ_FILE test';
+  await call('write_file', { workspace_id: workspace, path: file, content: expected });
+  const read = await call('read_file', { workspace_id: workspace, path: file });
+  assert.equal(read.text, expected);
+  assert.equal(Object.hasOwn(read, 'content'), false);
   console.log('PASS: MCP shared project consumer and session', {
     project_id: project, session_id: session, workspace_id: workspace,
   });
