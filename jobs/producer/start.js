@@ -220,8 +220,6 @@ export async function startProjectConsumer({ userId, projectId, body = {} }) {
   } catch (err) {
     console.error('[jobs/producer:start] error', err);
     try {
-      const userId = userId;
-      const projectId = projectId;
       if (userId && projectId && consumerId) {
         await releaseConsumerLock({ userId, projectId, consumerId });
       }
