@@ -128,7 +128,7 @@ export class ExecutionService {
       tool_call: { function: { name: consumerNames[name], arguments: toolArgs } },
     };
     if (name === 'run_command') {
-      eventData.timeout_seconds = parameters.timeout;
+      eventData.timeout_seconds = parameters.timeout ?? 120;
       if (parameters.cwd) eventData.workdir = parameters.cwd;
     }
     try {
