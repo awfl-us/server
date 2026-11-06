@@ -73,7 +73,16 @@ export class ExecutionService {
     if (name === 'request_result') {
       const snap = await this.ref(args.workspace_id).collection('mcpRequests').doc(String(args.request_id).padStart(8, '0')).get();
       if (!snap.exists) fail('Request not found');
-      return snap.data().result ?? { state: 'pending', request_id: args.request_id };
+      const request = snap.data() || {};
+      // Keep the existing pending protocol while exposing the persisted lifecycle.
+      // This distinguishes an undelivered/unclaimed request from an executing one.
+      return request.result ?? {
+        state: 'pending',
+        request_id: args.request_id,
+        request_state: request.state || 'unknown',
+        created_at: request.createdAt ?? null,
+        claimed_at: request.claimedAt ?? null,
+      };
     }
     if (!consumerNames[name]) fail('Unsupported MCP tool');
 
