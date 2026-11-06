@@ -2,7 +2,7 @@ import express from 'express'
 import workflowsRoutes from './workflows/index.js'
 import { getFirestore } from 'firebase-admin/firestore'
 import { ExecutionService } from './mcp/service.js'
-import { GkeRuntime } from './mcp/gke.js'
+import { ExistingConsumerRuntime } from './jobs/producer/mcpRunner.js'
 import { createMcpRouter } from './mcp/index.js'
 import { createConsumerRouter } from './mcp/consumer.js'
 
@@ -110,7 +110,7 @@ app.use(logging)
 app.get('/health', (_req, res) => res.status(200).send('OK'))
 
 // Separate API-key and workspace-capability paths; never enter Firebase middleware.
-const execution = new ExecutionService({ db: getFirestore(), runtime: new GkeRuntime() })
+const execution = new ExecutionService({ db: getFirestore(), runtime: new ExistingConsumerRuntime() })
 app.use('/mcp', createMcpRouter(execution))
 app.use('/mcp-consumer', createConsumerRouter(execution))
 
