@@ -3,6 +3,7 @@ import axios from 'axios';
 import { getFirestore } from 'firebase-admin/firestore';
 import { userScopedCollectionPath } from '../utils.js';
 import { GoogleAuth } from 'google-auth-library';
+import { ExecutionService } from '../../mcp/service.js';
 
 const router = express.Router();
 const db = getFirestore();
@@ -56,6 +57,26 @@ router.post('/:id', async (req, res) => {
     if (!snap.exists) return res.status(404).json({ error: 'Callback not found' });
 
     const data = snap.data() || {};
+    // A local callback sink for MCP. The request uses the same callback_id as
+    // every other AWFL tool call; unlike external callback URLs, this result
+    // stays inside the API process and never needs a second HTTP credential.
+    // Only server-created callback records have kind='mcp_request'.
+    if (data.kind === 'mcp_request') {
+      const mcp = data.mcp || {};
+      if (!req.projectId || req.projectId !== mcp.projectId) {
+        return res.status(403).json({ error: 'Project mismatch' });
+      }
+      if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+        return res.status(400).json({ error: 'Invalid result' });
+      }
+      try {
+        const service = new ExecutionService({ db });
+        const result = await service.complete(userId, req.projectId, mcp.workspaceId, mcp.requestId, req.body);
+        return res.status(result.ok ? 200 : 409).json(result);
+      } catch (error) {
+        return res.status(403).json({ error: error.publicMessage || 'Request inaccessible' });
+      }
+    }
     const url = data.callback_url;
     if (!isHttpUrl(url)) return res.status(400).json({ error: 'Stored callback_url is invalid' });
 

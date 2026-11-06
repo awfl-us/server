@@ -31,30 +31,34 @@ project consumer, use the existing `/workflows/producer/stop` lifecycle.
 
 ## Requests and sessions
 
-The API writes an MCP tool invocation to the project's existing
-`relayEvents` stream as an `mcp_tool_call` with a `sessionId`.
-The same project-scoped AWFL CLI consumer that processes normal workflow
-events receives the invocation. Its shared `Runtime` executes commands,
-reads/writes files, and tracks command output and cancellation.
+MCP adapts `run_command`, `read_file`, and `write_file` into the
+same `RUN_COMMAND`, `READ_FILE`, and `UPDATE_FILE` tool calls emitted
+by the normal web client. The relay event type is `message`, and the
+payload carries the standard `tool_call` and `callback_id` fields.
 
-Before executing, the consumer atomically claims the MCP request using
-`POST /workflows/mcp-tools/:workspaceId/:requestId/claim`. Replayed SSE
-events cannot claim an already-started request and cannot repeat side
-effects. After execution it reports the result via the matching
-`/result` endpoint, which stores the result for MCP polling and posts
-a short `mcp_tool_result` event to the same project/session stream.
-The endpoints use ordinary Firebase authentication and the current
-`x-project-id` header, as do regular AWFL callbacks.
+The existing project-wide AWFL consumer executes these operations with
+`handle_response()` unchanged. It posts the result to the usual
+`/workflows/callbacks/:callbackId` endpoint using Firebase user auth.
+A server-created callback record routes that result directly to the MCP
+request in Firestore; it does not forward the result over another HTTP
+connection. No second command implementation or SSE event handler is needed.
 
-The request/result records in `mcpWorkspaces` are correlation metadata,
-not a second work queue or a second SSE transport. Commands can return
-`state=pending` after 15s; call `request_result` without resubmitting
-the side effect. Long commands return `execution_id`; retrieve output
-through `command_output`.
+MCP calls wait up to 15s for the result. For longer commands, the API
+returns `state=pending`; poll `request_result` using the same workspace
+and request ID, without resubmitting the command. `run_command` reports
+the standard AWFL `output`, `error` and `exitCode` fields.
 
-Session event history is separate from any application-specific GCS/Yoj
-conversation index; clients may need to use the existing session/message
-ingestion workflow for UI visibility beyond the relay's TTL.
+Streaming and cancellation are deliberately not exposed: the ordinary
+AWFL handler currently returns a completed result, not a persistent
+execution ID. Any future streaming implementation should extend the
+*shared* AWFL execution system rather than create a separate MCP runtime.
+
+AWFL relay event delivery uses the same reconnect/replay semantics for
+MCP and web-originated tool calls. Results are de-duplicated in Firestore,
+but the standard consumer does not currently atomically claim events
+before executing them. A replay before callback completion can therefore
+repeat a command, just as with existing web tool calls. Do not assume
+exactly-once shell side effects; use idempotent commands where needed.
 
 ## Safety and deployment
 

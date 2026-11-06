@@ -48,7 +48,7 @@ try {
   await client.connect(new StreamableHTTPClientTransport(url, {
     requestInit: { headers: { Authorization: 'Bearer ' + credential.token } },
   }));
-  assert.equal((await client.listTools()).tools.length, 9);
+  assert.equal((await client.listTools()).tools.length, 7);
   const health = await call('environment_status');
   assert.equal(health.configured, true);
   const attached = await call('workspace_create', { project_id: project, session_id: session });
@@ -65,20 +65,9 @@ try {
     command: 'printf shared-project-consumer; printf " %s" "$AWFL_PROJECT_ID"',
     timeout: 30,
   });
-  let state = command, chunks = [...(state.chunks || [])];
-  for (let attempt = 0; attempt < 40 && (state.state === 'running' || state.has_more); attempt++) {
-    await pause(500);
-    state = await call('command_output', {
-      workspace_id: workspace, execution_id: command.execution_id,
-      cursor: state.next_cursor,
-    });
-    chunks.push(...(state.chunks || []));
-  }
-  assert.equal(state.state, 'completed');
-  assert.equal(state.exit_code, 0);
-  const stdout = chunks.filter(x => x.stream === 'stdout').map(x => x.text).join('');
-  assert.match(stdout, /shared-project-consumer/);
-  assert.match(stdout, new RegExp(project));
+  assert.equal(command.exitCode, 0);
+  assert.match(command.output, /shared-project-consumer/);
+  assert.ok(command.output.includes(project));
   console.log('PASS: MCP shared project consumer and session', {
     project_id: project, session_id: session, workspace_id: workspace,
   });

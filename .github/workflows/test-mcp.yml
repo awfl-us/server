@@ -7,6 +7,7 @@ on:
       - 'jobs/producer/**'
       - 'workflows/events/**'
       - 'workflows/index.js'
+      - 'workflows/callbacks/**'
       - 'cloud/sse-consumer/Dockerfile'
       - 'api.server.js'
       - 'scripts/mcp-smoke.js'
@@ -19,6 +20,7 @@ on:
       - 'jobs/producer/**'
       - 'workflows/events/**'
       - 'workflows/index.js'
+      - 'workflows/callbacks/**'
       - 'cloud/sse-consumer/Dockerfile'
       - 'api.server.js'
       - 'scripts/mcp-smoke.js'
@@ -41,5 +43,5 @@ jobs:
       - run: node --check jobs/producer/start.js
       - run: node --check mcp/index.js
       - run: node --check mcp/service.js
-      - run: node --check mcp/results.js
+      - run: node --check workflows/callbacks/index.js
       - run: node --check scripts/mcp-smoke.js
