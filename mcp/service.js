@@ -107,17 +107,38 @@ export class ExecutionService {
     });
     const request = ref.collection('mcpRequests').doc(String(seq).padStart(8, '0'));
     const { workspace_id, ...parameters } = args;
+    // MCP is a client of the *normal* AWFL tool protocol. In particular, the
+    // existing Python handle_response() executes tool_call and posts callback_id.
+    // There is no separate MCP executor, command runtime, or SSE event type.
+    const callbackId = randomBytes(16).toString('hex');
+    const callback = this.db.collection('users').doc(userId).collection('callbacks').doc(callbackId);
+    await callback.set({
+      kind: 'mcp_request',
+      mcp: { projectId: ws.projectId, workspaceId: workspace_id, requestId: seq },
+      created_at: Date.now(),
+      expires_at: new Date(ws.expiresAt + 86400000),
+    });
+    const toolArgs = name === 'run_command'
+      ? { command: parameters.command }
+      : name === 'read_file'
+        ? { filepath: parameters.path }
+        : { filepath: parameters.path, content: parameters.content };
+    const eventData = {
+      callback_id: callbackId,
+      tool_call: { function: { name: consumerNames[name], arguments: toolArgs } },
+    };
+    if (name === 'run_command') {
+      eventData.timeout_seconds = parameters.timeout;
+      if (parameters.cwd) eventData.workdir = parameters.cwd;
+    }
     try {
       await this.backend(userId, ws.projectId).append(normalizeEnvelope({
-        projectId: ws.projectId, sessionId: ws.sessionId, type: 'mcp_tool_call',
-        source: 'mcp',
-        data: {
-          mcp: { workspace_id: args.workspace_id, request_id: seq },
-          tool_call: { function: { name: consumerNames[name], arguments: parameters } },
-        },
+        projectId: ws.projectId, sessionId: ws.sessionId,
+        type: 'message', source: 'mcp', data: eventData,
       }));
     } catch (e) {
       await request.update({ state: 'delivery_failed', result: { error: 'MCP command could not be delivered' } });
+      await callback.delete?.().catch(() => {});
       fail('MCP command could not be delivered');
     }
     return new Promise((resolve, reject) => {
@@ -154,24 +175,13 @@ export class ExecutionService {
       state: consumer.state, consumer_id: consumer.consumerId,
       shared: true, expires_at: expiresAt };
   }
-  async claim(userId, projectId, id, seq) {
-    const ws = await this.owned(userId, id);
-    if (ws.projectId !== projectId) fail('Project mismatch');
-    const request = this.ref(id).collection('mcpRequests').doc(String(seq).padStart(8, '0'));
-    return this.db.runTransaction(async tx => {
-      const snap = await tx.get(request);
-      if (!snap.exists || snap.data().state !== 'queued') return { claimed: false };
-      tx.update(request, { state: 'running', claimedAt: Date.now() });
-      return { claimed: true };
-    });
-  }
   async complete(userId, projectId, id, seq, result) {
     const ws = await this.owned(userId, id);
     if (ws.projectId !== projectId) fail('Project mismatch');
     const request = this.ref(id).collection('mcpRequests').doc(String(seq).padStart(8, '0'));
     const done = await this.db.runTransaction(async tx => {
       const snap = await tx.get(request);
-      if (!snap.exists || snap.data().state !== 'running') return null;
+      if (!snap.exists || !['queued', 'running'].includes(snap.data().state)) return null;
       tx.update(request, { state: 'completed', result, completedAt: Date.now() });
       return snap.data().toolName;
     });
@@ -179,7 +189,7 @@ export class ExecutionService {
       // Session-scoped history uses the same relay as every other AWFL client.
       // Do not persist raw command output or credentials in the conversation.
       await this.backend(userId, projectId).append(normalizeEnvelope({
-        projectId, sessionId: ws.sessionId, type: 'mcp_tool_result', source: 'mcp',
+        projectId, sessionId: ws.sessionId, type: 'message', source: 'mcp',
         data: { mcp: { workspace_id: id, request_id: seq },
           content: 'MCP ' + done + ' ' + (result?.error ? 'failed' : 'completed'),
           exit_code: result?.exit_code ?? null },
