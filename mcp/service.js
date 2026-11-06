@@ -192,7 +192,7 @@ export class ExecutionService {
         projectId, sessionId: ws.sessionId, type: 'message', source: 'mcp',
         data: { mcp: { workspace_id: id, request_id: seq },
           content: 'MCP ' + done + ' ' + (result?.error ? 'failed' : 'completed'),
-          exit_code: result?.exit_code ?? null },
+          exit_code: result?.exitCode ?? null },
       })).catch(() => {});
     }
     return { ok: Boolean(done) };
