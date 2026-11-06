@@ -174,3 +174,21 @@ test('without configured owner only sole active MCP key owner can invoke', async
   docs.push({ data: () => ({ userId: 'another', expiresAt: Date.now() + 100000, scopes: ['mcp:invoke'] }) });
   assert.equal(await service.isOwner('owner'), false);
 });
+
+test('workspace health checks the existing consumer Job rather than trusting a lease alone', async () => {
+  const service = new ExecutionService({
+    db: {}, ownerId: 'owner',
+    getLock: async () => ({ lock: {
+      consumerId: 'consumer-shared', expiresAt: Date.now() + 60000,
+      runtime: { mode: 'gke', namespace: 'awfl', consumerJobName: 'consumer-shared' },
+    } }),
+    inspectJob: async ({namespace,jobName}) => {
+      assert.equal(namespace, 'awfl'); assert.equal(jobName, 'consumer-shared');
+      return { state: 'failed', failed: 1, active: 0, succeeded: 0 };
+    },
+  });
+  const status = await service.status('owner', { projectId: 'project-1', sessionId: 'session-1' });
+  assert.equal(status.consumer_id, 'consumer-shared');
+  assert.equal(status.state, 'consumer_unavailable');
+  assert.equal(status.consumer_job.failed, 1);
+});
