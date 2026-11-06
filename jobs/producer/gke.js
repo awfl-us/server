@@ -147,6 +147,10 @@ export async function runK8sJob({ namespace, jobName, image, serviceAccountName,
           spec: {
             serviceAccountName: serviceAccountName || undefined,
             restartPolicy: 'Never',
+            // MCP and /producer/stop wait for foreground Job deletion.
+            // Keep graceful shutdown within the request deadline; the
+            // Kubernetes default (30s) exceeded the MCP client timeout.
+            terminationGracePeriodSeconds: 5,
             containers: [container],
           },
         },
