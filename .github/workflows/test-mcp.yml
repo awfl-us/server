@@ -9,6 +9,7 @@ on:
       - 'workflows/index.js'
       - 'cloud/sse-consumer/Dockerfile'
       - 'api.server.js'
+      - 'scripts/mcp-smoke.js'
       - '.github/workflows/test-mcp.yml'
       - '.github/workflows/deploy-cloud-run.yml'
   push:
@@ -20,6 +21,7 @@ on:
       - 'workflows/index.js'
       - 'cloud/sse-consumer/Dockerfile'
       - 'api.server.js'
+      - 'scripts/mcp-smoke.js'
       - '.github/workflows/test-mcp.yml'
       - '.github/workflows/deploy-cloud-run.yml'
 
@@ -40,3 +42,4 @@ jobs:
       - run: node --check mcp/index.js
       - run: node --check mcp/service.js
       - run: node --check mcp/results.js
+      - run: node --check scripts/mcp-smoke.js
