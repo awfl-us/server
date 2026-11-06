@@ -38,6 +38,7 @@ export class ExistingConsumerRuntime {
       serviceAccountName: process.env.CONSUMER_KSA_NAME || 'consumer',
       containerName: 'consumer',
       ttlSecondsAfterFinished: 60,
+      activeDeadlineSeconds: Math.max(1, Math.floor((expiresAt - Date.now()) / 1000)),
       backoffLimit: 0,
       // Use the CLI version baked into the regular consumer image, never a
       // runtime pip install that could silently downgrade its MCP support.
