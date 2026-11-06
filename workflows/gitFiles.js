@@ -261,21 +261,24 @@ async function resolveRequestConfig(req) {
   // Project can be provided via query, body, or header
   const projectId = req.query?.projectId || req.body?.projectId || req.headers['x-project-id'];
   let cfg = null;
+  let app = null;
   if (req.userId && projectId) {
-    cfg = await loadGithubConfig(String(req.userId), String(projectId));
+    app = await resolveGithubAppCredential({ userId: String(req.userId), projectId: String(projectId) });
+    if (!app) cfg = await loadGithubConfig(String(req.userId), String(projectId));
   }
 
-  // Fallback to env token and defaults
+  // Repository-scoped GitHub App installation tokens take precedence. If an
+  // installation is linked but unavailable, fail rather than falling back.
   const envToken = process.env.GITHUB_TOKEN || null;
   const resolved = {
-    owner: cfg?.owner || DEFAULT_OWNER,
-    repo: cfg?.repo || DEFAULT_REPO,
-    token: cfg?.token || envToken,
-    defaultBranch: cfg?.defaultBranch || DEFAULT_BRANCH,
+    owner: app?.owner || cfg?.owner || DEFAULT_OWNER,
+    repo: app?.repo || cfg?.repo || DEFAULT_REPO,
+    token: app?.token || cfg?.token || envToken,
+    defaultBranch: app?.defaultBranch || cfg?.defaultBranch || DEFAULT_BRANCH,
     projectId: projectId || null,
-    hasUserScopedToken: !!cfg?.token,
+    hasUserScopedToken: !!(app?.token || cfg?.token),
   };
-  const tokenSource = cfg?.token ? 'firestore' : envToken ? 'env' : 'none';
+  const tokenSource = app ? 'github-app' : cfg?.token ? 'firestore' : envToken ? 'env' : 'none';
   logGit('config.resolve', {
     userIdPresent: !!req.userId,
     projectId: resolved.projectId,
