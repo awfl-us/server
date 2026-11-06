@@ -52,8 +52,10 @@ RUN python -m pip install --no-cache-dir playwright==1.64.1 \
     && chmod -R a+rX /ms-playwright
 
 # Include gcloud for project-scoped Google Cloud testing. OAuth refresh tokens never enter the image or Job.
-RUN curl -fsSL https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-592.0.0-linux-x86_64.tar.gz \
-    | tar -xz -C /opt
+RUN curl -fsSL https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-x86_64.tar.gz -o /tmp/gcloud.tar.gz \
+    && echo '16fda6058d66e4ec29e8575e2b6e19b0d03cea7b091e6730f7e8361209e6955f  /tmp/gcloud.tar.gz' | sha256sum -c - \
+    && tar -xzf /tmp/gcloud.tar.gz -C /opt \
+    && rm /tmp/gcloud.tar.gz
 ENV PATH="/opt/google-cloud-sdk/bin:${PATH}"
 
 # Non-root user for tool execution.
