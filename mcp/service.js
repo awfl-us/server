@@ -3,6 +3,7 @@ import { consumerNames } from './tools.js';
 // Defer loading the producer API modules until startup. The same project
 // lifecycle is used by both MCP and regular /producer/start requests.
 const ensureProjectConsumer = async args => (await import('../jobs/producer/start.js')).ensureProjectConsumer(args);
+const stopProjectConsumer = async args => (await import('../jobs/producer/stop.js')).stopProjectConsumer(args);
 const getConsumerLock = async args => (await import('../workflows/projects/lock.js')).getConsumerLock(args);
 const inspectK8sJob = async args => (await import('../jobs/producer/gke.js')).inspectK8sJob(args);
 import { pickBackend, normalizeEnvelope } from '../workflows/events/model.js';
@@ -14,8 +15,8 @@ export const validId = value => typeof value === 'string' && /^[a-f0-9]{32}$/.te
 // An MCP workspace is now an attachment to a project consumer, NOT a GKE Job.
 // Multiple sessions/clients can share one project environment and consumer lock.
 export class ExecutionService {
-  constructor({ db, ownerId = process.env.MCP_OWNER_UID, startConsumer = ensureProjectConsumer, getLock = getConsumerLock, backend = pickBackend, inspectJob = inspectK8sJob }) {
-    Object.assign(this, { db, ownerId, startConsumer, getLock, backend, inspectJob });
+  constructor({ db, ownerId = process.env.MCP_OWNER_UID, startConsumer = ensureProjectConsumer, stopConsumer = stopProjectConsumer, getLock = getConsumerLock, backend = pickBackend, inspectJob = inspectK8sJob }) {
+    Object.assign(this, { db, ownerId, startConsumer, stopConsumer, getLock, backend, inspectJob });
   }
   async isOwner(userId) {
     if (this.ownerId) return userId === this.ownerId;
@@ -65,9 +66,17 @@ export class ExecutionService {
     if (name === 'workspace_create') return this.create(userId, args);
     const ws = await this.owned(userId, args.workspace_id, { allowStopped: name === 'workspace_stop' });
     if (name === 'workspace_stop') {
-      // Detach only. The consumer is shared with other clients/sessions.
+      if (args.confirm !== true) fail('Confirm stopping the shared project consumer');
+      // Use exactly the same shutdown + lock release sequence as /producer/stop.
+      // The consumer is shared: this intentionally interrupts other clients.
+      const outcome = await this.stopConsumer({ userId, projectId: ws.projectId });
+      if (!outcome?.body?.ok || outcome.status >= 300) {
+        fail(outcome?.body?.error || 'Project consumer stop failed; project lock retained');
+      }
+      // Only retire this MCP attachment AFTER the shared shutdown succeeded.
       await this.ref(args.workspace_id).update({ stopped: true });
-      return { workspace_id: args.workspace_id, state: 'detached', consumer_stopped: false };
+      return { workspace_id: args.workspace_id, state: 'stopped',
+        consumer_stopped: Boolean(outcome.body.consumerStopped), shared: true };
     }
     if (name === 'environment_status') return this.status(userId, ws);
     if (name === 'request_result') {
