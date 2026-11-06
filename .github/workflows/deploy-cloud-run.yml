@@ -14,7 +14,7 @@ jobs:
 
     env:
       MCP_OWNER_UID: ${{ vars.MCP_OWNER_UID }}
-      AWFL_CLI_REF: 'f22b338a667b7260b9259bf6dde94cda6111bbd6'
+      AWFL_CLI_REF: '7bcd5b42994dee4d402191f67da6d7b74f20bfc7'
       CORS_ALLOW_ORIGIN: ${{ vars.CORS_ALLOW_ORIGIN }}
       # Default to repository variables; will be overridden by JSON if present
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
