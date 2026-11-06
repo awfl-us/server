@@ -1,5 +1,6 @@
 import { resolveGithubCredential } from '../../workflows/gitFiles.js';
 import { mintUserTokens } from './auth/firebaseTokens.js';
+import { resolveGoogleCloudAccessToken } from '../../workflows/googleCloud/service.js';
 
 // Shared by the normal cloud consumer and the MCP consumer. Fetch credentials
 // server-side, for the authenticated user and optionally a selected project.
@@ -20,5 +21,13 @@ export async function loadConsumerCredentials({ userId, projectId }) {
   } catch (error) {
     console.warn('[producer] could not mint user tokens', error?.name || 'Error');
   }
-  return { githubToken, firebaseIdToken, firebaseCustomToken };
+  let googleCloud = null;
+  try {
+    googleCloud = await resolveGoogleCloudAccessToken({ userId, projectId });
+  } catch (error) {
+    // Do not log credentials. An unavailable optional Google connection
+    // must not prevent normal project consumer startup.
+    console.warn('[producer] Google Cloud connection unavailable', error?.name || 'Error');
+  }
+  return { githubToken, firebaseIdToken, firebaseCustomToken, googleCloud };
 }
