@@ -2,9 +2,7 @@ import express from 'express'
 import workflowsRoutes from './workflows/index.js'
 import { getFirestore } from 'firebase-admin/firestore'
 import { ExecutionService } from './mcp/service.js'
-import { ExistingConsumerRuntime } from './jobs/producer/mcpRunner.js'
 import { createMcpRouter } from './mcp/index.js'
-import { createConsumerRouter } from './mcp/consumer.js'
 import { githubAppCallback } from './workflows/githubApp/index.js'
 
 const app = express()
@@ -114,10 +112,9 @@ app.get('/health', (_req, res) => res.status(200).send('OK'))
 // Binding is secured by the authenticated, single-use state created at /workflows/github-app/start.
 app.get('/github-app/callback', githubAppCallback)
 
-// Separate API-key and workspace-capability paths; never enter Firebase middleware.
-const execution = new ExecutionService({ db: getFirestore(), runtime: new ExistingConsumerRuntime() })
+// MCP tool calls use an API key; consumer results use the regular Firebase-authenticated workflows API.
+const execution = new ExecutionService({ db: getFirestore() })
 app.use('/mcp', createMcpRouter(execution))
-app.use('/mcp-consumer', createConsumerRouter(execution))
 
 // Workflows (primary mount)
 app.use('/workflows', workflowsRoutes)

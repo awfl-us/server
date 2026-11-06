@@ -19,6 +19,7 @@ import credsRoutes from './creds/index.js'
 import apiKeysRoutes from './apiKeys/index.js'
 import githubAppRoutes from './githubApp/index.js'
 import producerRoutes from '../jobs/producer/index.js'
+import { createMcpResultsRouter } from '../mcp/results.js'
 import filesystemRoutes from './services/filesystem.js'
 import llmApiRoutes from './llm.api.js'
 import llmUsageRoutes from '../jobs/llm/usage.js';
@@ -41,6 +42,8 @@ router.use(projectIdMiddleware);
 
 // Events relay under /workflows/events (auth via shared clientAuth + SKIP_AUTH support)
 router.use('/events', eventsRoutes)
+// The shared project consumer posts claimed MCP command results using normal Firebase auth.
+router.use('/mcp-tools', createMcpResultsRouter())
 
 router.use('/context', contextRoutes)
 router.use('/exec', execRoutes)

@@ -5,8 +5,11 @@ on:
     paths:
       - 'mcp/**'
       - 'jobs/producer/**'
+      - 'workflows/events/**'
+      - 'workflows/index.js'
       - 'cloud/sse-consumer/Dockerfile'
       - 'api.server.js'
+      - 'scripts/mcp-smoke.js'
       - '.github/workflows/test-mcp.yml'
       - '.github/workflows/deploy-cloud-run.yml'
   push:
@@ -14,8 +17,11 @@ on:
     paths:
       - 'mcp/**'
       - 'jobs/producer/**'
+      - 'workflows/events/**'
+      - 'workflows/index.js'
       - 'cloud/sse-consumer/Dockerfile'
       - 'api.server.js'
+      - 'scripts/mcp-smoke.js'
       - '.github/workflows/test-mcp.yml'
       - '.github/workflows/deploy-cloud-run.yml'
 
@@ -30,7 +36,10 @@ jobs:
         with:
           node-version: '22'
       - run: npm install --ignore-scripts
-      - run: node --test mcp/tests/*.test.js
+      - run: node --test mcp/tests/*.test.js jobs/producer/tests/*.test.js
       - run: node --check api.server.js
-      - run: node --check jobs/producer/mcpRunner.js
+      - run: node --check jobs/producer/start.js
       - run: node --check mcp/index.js
+      - run: node --check mcp/service.js
+      - run: node --check mcp/results.js
+      - run: node --check scripts/mcp-smoke.js
