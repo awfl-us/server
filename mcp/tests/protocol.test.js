@@ -172,11 +172,15 @@ test('MCP normal file tool mapping uses filepath in standard AWFL events', async
     db, ownerId: userId,
     startConsumer: async () => ({ state: 'attached', consumerId: 'shared' }),
     getLock: async () => ({ lock: { consumerId: 'shared', expiresAt: Date.now() + 40000 } }),
-    backend: () => ({ append: async e => { events.push(e); } }),
+    backend: () => ({ append: async e => {
+      events.push(e);
+      if (e.data.tool_call) await service.complete(userId, projectId, ws.workspace_id, 1,
+        { filepath: 'README.md', content: 'test file' });
+    } }),
   });
   const ws = await service.invoke(userId, 'workspace_create', { project_id: projectId });
   const result = await service.invoke(userId, 'read_file', { workspace_id: ws.workspace_id, path: 'README.md' });
-  assert.equal(result.state, 'pending');
+  assert.equal(result.content, 'test file');
   assert.equal(events[0].data.tool_call.function.name, 'READ_FILE');
   assert.deepEqual(events[0].data.tool_call.function.arguments, { filepath: 'README.md' });
 });
