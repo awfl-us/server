@@ -1,0 +1,34 @@
+name: MCP protocol and consumer tests
+
+on:
+  pull_request:
+    paths:
+      - 'mcp/**'
+      - 'jobs/producer/**'
+      - 'cloud/sse-consumer/Dockerfile'
+      - 'api.server.js'
+      - '.github/workflows/test-mcp.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'mcp/**'
+      - 'jobs/producer/**'
+      - 'cloud/sse-consumer/Dockerfile'
+      - 'api.server.js'
+      - '.github/workflows/test-mcp.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --ignore-scripts
+      - run: node --test mcp/tests/*.test.js
+      - run: node --check api.server.js
+      - run: node --check jobs/producer/mcpRunner.js
+      - run: node --check mcp/index.js
