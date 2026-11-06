@@ -91,13 +91,13 @@ async function consumeState(state, db) {
 async function oauthToken(code, { fetcher = fetch } = {}) {
   const response = await fetcher('https://github.com/login/oauth/access_token', {
     method: 'POST',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+    headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
       client_id: process.env.GITHUB_APP_CLIENT_ID,
       client_secret: process.env.GITHUB_APP_CLIENT_SECRET,
       redirect_uri: process.env.GITHUB_APP_CALLBACK_URL || 'https://api.awfl.us/github-app/callback',
       code,
-    }),
+    }).toString(),
     signal: AbortSignal.timeout(15000),
   });
   if (!response.ok) throw new Error('GitHub authorization exchange failed');
