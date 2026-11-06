@@ -51,6 +51,11 @@ RUN python -m pip install --no-cache-dir playwright==1.64.1 \
     && python -m playwright install --with-deps chromium \
     && chmod -R a+rX /ms-playwright
 
+# Include gcloud for project-scoped Google Cloud testing. OAuth refresh tokens never enter the image or Job.
+RUN curl -fsSL https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-592.0.0-linux-x86_64.tar.gz \
+    | tar -xz -C /opt
+ENV PATH="/opt/google-cloud-sdk/bin:${PATH}"
+
 # Non-root user for tool execution.
 RUN useradd -m -s /bin/bash awfl \
     && mkdir -p /workspace /app \
