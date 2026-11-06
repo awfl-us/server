@@ -52,7 +52,7 @@ function memoryDb() {
   };
 }
 
-test('MCP SDK exposes nine tools and enforces owner auth', async () => {
+test('MCP SDK exposes seven tools and enforces owner auth', async () => {
   const app = express(); app.use(express.json());
   const service = { isOwner: async user => user === 'owner', invoke: async (user, name, args) => ({ user, name, args }) };
   app.use('/mcp', createMcpRouter(service, (req, res, next) => {
@@ -71,7 +71,7 @@ test('MCP SDK exposes nine tools and enforces owner auth', async () => {
     }
     await client.connect(new StreamableHTTPClientTransport(url, { requestInit: { headers: { Authorization: 'Bearer valid' } } }));
     const listed = await client.listTools();
-    assert.equal(listed.tools.length, 9);
+    assert.equal(listed.tools.length, 7);
     assert.equal(listed.tools.find(t => t.name === 'run_command').annotations.destructiveHint, true);
     assert.equal(listed.tools.find(t => t.name === 'workspace_create').inputSchema.required.includes('project_id'), true);
     const result = await client.callTool({ name: 'environment_status', arguments: {} });
@@ -121,39 +121,64 @@ test('MCP attaches to existing project consumer without starting an independent 
   await assert.rejects(service.owned(userId, first.workspace_id), /Workspace stopped/);
 });
 
-test('MCP writes normal project/session events, atomically claims once and correlates result', async () => {
+test('MCP emits standard AWFL tool calls and correlates the normal callback result', async () => {
   const db = memoryDb();
   const userId = 'owner', projectId = 'repo-1';
   const events = [];
   await db.collection('users').doc(userId).collection('projects').doc(projectId).set({ name: 'TopAigents' });
-  let service;
+  let service, ws;
   service = new ExecutionService({
     db, ownerId: userId,
     startConsumer: async () => ({ state: 'attached', consumerId: 'existing-consumer' }),
     getLock: async () => ({ lock: { consumerId: 'existing-consumer', expiresAt: Date.now() + 40000 } }),
     backend: () => ({ append: async event => {
       events.push(event);
-      if (event.type === 'mcp_tool_call') {
-        const { workspace_id, request_id } = event.data.mcp;
-        assert.deepEqual(await service.claim(userId, projectId, workspace_id, request_id), { claimed: true });
-        assert.deepEqual(await service.claim(userId, projectId, workspace_id, request_id), { claimed: false });
-        assert.deepEqual(await service.complete(userId, projectId, workspace_id, request_id,
-          { execution_id: '123abc', state: 'running' }), { ok: true });
+      if (event.data.tool_call) {
+        assert.equal(event.type, 'message');
+        assert.equal(event.data.tool_call.function.name, 'RUN_COMMAND');
+        assert.deepEqual(event.data.tool_call.function.arguments, { command: 'echo hello' });
+        assert.equal(event.data.timeout_seconds, 120);
+        const callback = await db.collection('users').doc(userId).collection('callbacks')
+          .doc(event.data.callback_id).get();
+        assert.equal(callback.data().kind, 'mcp_request');
+        assert.deepEqual(callback.data().mcp, {
+          projectId, workspaceId: ws.workspace_id, requestId: 1,
+        });
+        const result = { sessionId: 'session-A', command: 'echo hello', output: 'hello', error: '', exitCode: 0 };
+        assert.deepEqual(await service.complete(userId, projectId, ws.workspace_id, 1, result), { ok: true });
+        assert.deepEqual(await service.complete(userId, projectId, ws.workspace_id, 1, result), { ok: false });
       }
     } }),
   });
-  const ws = await service.invoke(userId, 'workspace_create', { project_id: projectId, session_id: 'session-A' });
+  ws = await service.invoke(userId, 'workspace_create', { project_id: projectId, session_id: 'session-A' });
   const response = await service.invoke(userId, 'run_command', { workspace_id: ws.workspace_id, command: 'echo hello' });
-  assert.deepEqual(response, { execution_id: '123abc', state: 'running' });
+  assert.equal(response.output, 'hello');
+  assert.equal(response.exitCode, 0);
   assert.equal(events.length, 2);
   assert.equal(events[0].projectId, projectId);
   assert.equal(events[0].sessionId, 'session-A');
-  assert.equal(events[0].type, 'mcp_tool_call');
-  assert.equal(events[0].data.tool_call.function.arguments.command, 'echo hello');
-  assert.equal(events[1].type, 'mcp_tool_result');
+  assert.equal(events[0].type, 'message');
+  assert.equal(events[1].type, 'message');
   assert.equal(events[1].sessionId, 'session-A');
   assert.equal(events[1].data.content, 'MCP run_command completed');
   await assert.rejects(service.invoke('other', 'workspace_stop', { workspace_id: ws.workspace_id, confirm: true }), /Owner access required/);
+});
+
+test('MCP normal file tool mapping uses filepath in standard AWFL events', async () => {
+  const db = memoryDb(), userId = 'owner', projectId = 'repo-1';
+  await db.collection('users').doc(userId).collection('projects').doc(projectId).set({ name: 'Test' });
+  const events = [];
+  const service = new ExecutionService({
+    db, ownerId: userId,
+    startConsumer: async () => ({ state: 'attached', consumerId: 'shared' }),
+    getLock: async () => ({ lock: { consumerId: 'shared', expiresAt: Date.now() + 40000 } }),
+    backend: () => ({ append: async e => { events.push(e); } }),
+  });
+  const ws = await service.invoke(userId, 'workspace_create', { project_id: projectId });
+  const result = await service.invoke(userId, 'read_file', { workspace_id: ws.workspace_id, path: 'README.md' });
+  assert.equal(result.state, 'pending');
+  assert.equal(events[0].data.tool_call.function.name, 'READ_FILE');
+  assert.deepEqual(events[0].data.tool_call.function.arguments, { filepath: 'README.md' });
 });
 
 test('workspace ownership rejects other accounts before inspecting project resources', async () => {
