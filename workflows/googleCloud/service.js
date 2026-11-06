@@ -191,9 +191,23 @@ export async function testGoogleCloud({ userId, projectId, db = getFirestore(), 
     access: response.ok ? 'ok' : response.status === 403 ? 'permission_denied' : 'unavailable' };
 }
 
-export async function disconnectGoogleCloud({ userId, projectId, db = getFirestore() }) {
+export async function disconnectGoogleCloud({ userId, projectId, db = getFirestore(), fetcher = fetch }) {
   await assertProject(db, userId, projectId);
+  const ref = integrationRef(db, userId, projectId);
+  const snap = await ref.get();
   cache.delete(userId + ':' + projectId);
-  await integrationRef(db, userId, projectId).delete();
+  // Removing the link must succeed even if Google's revoke endpoint is offline.
+  // Never log or return the refresh token.
+  if (snap.exists && snap.data()?.refreshTokenEnc) {
+    try {
+      await fetcher('https://oauth2.googleapis.com/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ token: decryptString(snap.data().refreshTokenEnc) }).toString(),
+        signal: AbortSignal.timeout(10000),
+      });
+    } catch { /* Revocation best-effort; deletion is authoritative in AWFL. */ }
+  }
+  await ref.delete();
   return { ok: true };
 }
