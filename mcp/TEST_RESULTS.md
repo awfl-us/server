@@ -1,47 +1,42 @@
-# Execution MCP verification record
+# MCP verification record
 
-Recorded November 5, 2026 (America/New_York).
+## Historical initial implementation (November 5, 2026)
 
-## Passed locally
+Initial server PRs #10–#12 and CLI PRs #1–#2 passed five Node
+protocol/security tests and six Python execution tests locally.
+However, the first three merged server deployments failed during the newly
+introduced pre-deployment Kubernetes/Firestore configuration step:
 
-- `node --test mcp/tests/*.test.js`: 5 tests passed. Real MCP SDK client initialization,
-  discovery, schema validation, invocation, authentication rejection; user ownership;
-  API-key expiry/revocation semantics; GKE container restrictions; workspace capability
-  mismatch/stop/expiry rejection.
-- `python -m unittest discover -s tests -v` in awfl-us/cli: 6 tests passed. Real shell
-  subprocesses, stdout/stderr and exit codes, polling, cancellation, workspace reuse,
-  bounded reads, path traversal/symlink rejection, timeouts/output limits, concurrency,
-  credential environment scrubbing, and a full `awfl run` subprocess consuming an
-  authenticated SSE tool envelope and returning its authenticated HTTP callback.
+- https://github.com/awfl-us/server/actions/runs/42160965943
+  — Firestore `PERMISSION_DENIED` for the GitHub deployer.
+- https://github.com/awfl-us/server/actions/runs/42161255939
+  — missing `container.clusters.get` permission.
+- https://github.com/awfl-us/server/actions/runs/42161596215
+  — missing `container.clusters.get` permission again.
 
-## Actual deployment attempts
+The new API image was not deployed by those runs, so the live `/mcp`
+endpoint, actual commands, Chromium/TintWiz and ChatGPT plugin were
+not verified.
 
-- Server PR #10 merged as `3fe0804ce8bf15e46fbf24c3304072c4abdfe043`.
-- CLI PR #1 merged as `1ba827eb99075b107c6a9aafd91b85d04134a93e`.
-- CLI PR #2 merged as `487604afbbbaadc3a76386de81630bfc0e7cc197`.
-- Server PR #11 merged as `45981c97fd04c889c23970f0376714ab272c8def`.
-- [Run 42160965943](https://github.com/awfl-us/server/actions/runs/42160965943):
-  protocol tests passed and Google authentication succeeded; failed in private
-  execution infrastructure setup. `scripts/mcp-owner.js` received Firestore
-  `7 PERMISSION_DENIED: Missing or insufficient permissions` as the GitHub deployer.
-  No new Cloud Run revision or execution workload was deployed by this attempt.
-- [Run 42161255939](https://github.com/awfl-us/server/actions/runs/42161255939):
-  five protocol/security tests passed; GKE setup failed with HTTP 403, missing
-  `container.clusters.get` on `projects/awfl-us/locations/us-central1/clusters/awfl-gke`.
-  This attempt also stopped before building/deploying a new revision.
+## Cleanup refactor
 
-## Not yet verified
+The new MCP-specific GKE wrapper, namespace, permissions, container image
+and administrator bootstrap script have been removed. MCP now reuses the
+existing AWFL GKE launcher and Python consumer image. Firebase and GitHub
+tokens are forwarded exactly as for existing cloud consumers. The separate
+MCP callback capability is *not* exported to shell subprocesses.
 
-The deployed `/mcp` endpoint, real GKE workspace creation, real authenticated command
-execution, live output polling/cancellation, public HTTPS access from the workspace,
-Chromium/TintWiz rendering, and deployed resource cleanup have **not** passed yet.
-No private ChatGPT Site/plugin has been created or installed. Phase 2 remains gated
-on successful Phase 1 live verification. Local tests do not establish cloud success.
+The existing merge-to-main workflow builds and deploys the API and consumer
+without asking the GitHub deployment identity to configure new GKE IAM or
+query Firestore directly. A deployment check verifies that `/mcp` returns
+401 for anonymous requests rather than 404.
 
-## Next gate
+The original local unit test results are historical, not evidence that the
+refactored deployment works. Verify the new GitHub Actions tests and
+post-merge deployment run. Afterward, use the manually invoked
+`scripts/mcp-smoke.js` under an authorized administrator identity for
+real authenticated GKE execution, command polling and cancellation,
+Chromium/TintWiz, and cleanup.
 
-A project/cluster administrator must run `scripts/bootstrap-mcp-access.sh` (or apply
-the equivalent Terraform IAM bindings and namespace RBAC manifests). The available
-GitHub deployment identity cannot grant itself missing permissions. After access is
-configured, rerun deployment and inspect `mcp-smoke-results` for real acceptance
-results before beginning the private Site integration.
+Phase 2 (the private ChatGPT Site and plugin) remains separate and must
+not be reported as complete without an actual end-to-end test.
