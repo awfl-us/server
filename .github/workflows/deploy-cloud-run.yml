@@ -154,13 +154,28 @@ jobs:
         run: |
           gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
 
-      # Build and push Producer image
-      - name: Build and push Producer image
+      # Reuse source-addressed images across API-only deploys.
+      # A missing tag (including the first run of this scheme) triggers a build.
+      - name: Resolve Producer image
         id: producer_image
         run: |
           set -euo pipefail
-          PRODUCER_IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/app/producer:${GITHUB_SHA}"
+          SOURCE_SHA=$(git rev-parse HEAD:cloud/producer)
+          PRODUCER_IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/app/producer:source-${SOURCE_SHA}"
           echo "PRODUCER_IMAGE_URI=${PRODUCER_IMAGE_URI}" >> "$GITHUB_OUTPUT"
+          if docker manifest inspect "${PRODUCER_IMAGE_URI}" >/dev/null 2>&1; then
+            echo "build_required=false" >> "$GITHUB_OUTPUT"
+            echo "Reusing unchanged producer image: ${PRODUCER_IMAGE_URI}"
+          else
+            echo "build_required=true" >> "$GITHUB_OUTPUT"
+            echo "Producer image missing or cannot be inspected; building: ${PRODUCER_IMAGE_URI}"
+          fi
+
+      - name: Build and push Producer image
+        if: ${{ steps.producer_image.outputs.build_required == 'true' }}
+        run: |
+          set -euo pipefail
+          PRODUCER_IMAGE_URI="${{ steps.producer_image.outputs.PRODUCER_IMAGE_URI }}"
           docker build \
             --build-arg HTTP_PROXY="${HTTP_PROXY}" \
             --build-arg HTTPS_PROXY="${HTTPS_PROXY}" \
@@ -168,13 +183,28 @@ jobs:
             -t "${PRODUCER_IMAGE_URI}" cloud/producer
           docker push "${PRODUCER_IMAGE_URI}"
 
-      # Build and push Consumer image
-      - name: Build and push Consumer image
+      # The consumer fingerprint includes the pinned AWFL CLI revision, even
+      # when only that revision changes in this deployment workflow.
+      - name: Resolve Consumer image
         id: consumer_image
         run: |
           set -euo pipefail
-          CONSUMER_IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/app/sse-consumer:${GITHUB_SHA}"
+          SOURCE_SHA=$(printf '%s\n%s\n' "$(git rev-parse HEAD:cloud/sse-consumer)" "${AWFL_CLI_REF}" | sha256sum | cut -d' ' -f1)
+          CONSUMER_IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/app/sse-consumer:source-${SOURCE_SHA}"
           echo "CONSUMER_IMAGE_URI=${CONSUMER_IMAGE_URI}" >> "$GITHUB_OUTPUT"
+          if docker manifest inspect "${CONSUMER_IMAGE_URI}" >/dev/null 2>&1; then
+            echo "build_required=false" >> "$GITHUB_OUTPUT"
+            echo "Reusing unchanged consumer image: ${CONSUMER_IMAGE_URI}"
+          else
+            echo "build_required=true" >> "$GITHUB_OUTPUT"
+            echo "Consumer image missing or cannot be inspected; building: ${CONSUMER_IMAGE_URI}"
+          fi
+
+      - name: Build and push Consumer image
+        if: ${{ steps.consumer_image.outputs.build_required == 'true' }}
+        run: |
+          set -euo pipefail
+          CONSUMER_IMAGE_URI="${{ steps.consumer_image.outputs.CONSUMER_IMAGE_URI }}"
           docker build \
             --build-arg HTTP_PROXY="${HTTP_PROXY}" \
             --build-arg HTTPS_PROXY="${HTTPS_PROXY}" \
