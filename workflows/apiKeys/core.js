@@ -32,6 +32,17 @@ export function matchesApiKeyHash(token, storedHash) {
   return timingSafeEqual(candidate, expected);
 }
 
+
+export function isActiveApiKeyRecord(token, record, { requiredScope = MCP_SCOPE, now = Date.now() } = {}) {
+  const parsed = parseApiKey(token);
+  return Boolean(parsed && record &&
+    record.id === parsed.id &&
+    typeof record.userId === 'string' && record.userId &&
+    matchesApiKeyHash(token, record.hash) &&
+    Array.isArray(record.scopes) && record.scopes.includes(requiredScope) &&
+    Number.isSafeInteger(record.expiresAt) && record.expiresAt > now);
+}
+
 // Explicit allowlist; never accidentally expose the token digest or owner UID.
 export function apiKeyMetadata(record) {
   return {
