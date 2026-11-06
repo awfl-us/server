@@ -91,13 +91,13 @@ jobs:
       - name: Configure private execution infrastructure
         run: |
           set -euo pipefail
-          node scripts/mcp-owner.js
           gcloud container clusters get-credentials "${GKE_CLUSTER_NAME}" --region "${GKE_CLUSTER_LOCATION}" --project "${GCP_PROJECT_ID}"
           CA=$(gcloud container clusters describe "${GKE_CLUSTER_NAME}" --region "${GKE_CLUSTER_LOCATION}" --format='value(masterAuth.clusterCaCertificate)')
           echo "K8S_CA_CERT_B64=${CA}" >> "$GITHUB_ENV"
           sed "s|__RUNTIME_SA__|${CLOUD_RUN_RUNTIME_SA}|g" cloud/execution/policy.yaml | kubectl apply -f -
           gcloud firestore fields ttls update expires_at --collection-group=mcpRequests --enable-ttl --quiet
           gcloud firestore fields ttls update expires_at --collection-group=mcpWorkspaces --enable-ttl --quiet
+          node scripts/mcp-owner.js
 
       # Deploy Firestore composite indexes using gcloud (WIF auth)
       - name: Deploy Firestore indexes (from firestore.indexes.json)

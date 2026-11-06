@@ -61,3 +61,17 @@ test('GKE workload has no cloud/Kubernetes credentials and bounded lifetime/reso
   assert.ok(job.spec.activeDeadlineSeconds <= 3600);
   assert.equal(pod.containers[0].env.some(e => /FIREBASE|API_KEY|GOOGLE_APPLICATION/.test(e.name)), false);
 });
+
+test('workspace capabilities are bounded to one workspace and expire immediately', async () => {
+  const { digest } = await import('../service.js');
+  const token = 'a'.repeat(43);
+  let record = { userId: 'owner', capabilityHash: digest(token), expiresAt: Date.now() + 10000, stopped: false };
+  const db = { collection: () => ({ doc: () => ({ get: async () => ({ exists: true, data: () => record }) }) }) };
+  const service = new ExecutionService({ db, runtime: {}, ownerId: 'owner' });
+  assert.ok(await service.consumer('a'.repeat(32), token));
+  assert.equal(await service.consumer('a'.repeat(32), 'b'.repeat(43)), null);
+  record.stopped = true;
+  assert.equal(await service.consumer('a'.repeat(32), token), null);
+  record.stopped = false; record.expiresAt = Date.now() - 1;
+  assert.equal(await service.consumer('a'.repeat(32), token), null);
+});
