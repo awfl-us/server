@@ -43,6 +43,6 @@ export function createMcpRouter(service, authenticate = requireAwflApiKey()) {
       if (!res.headersSent) res.status(500).json({ error: 'MCP transport unavailable' });
     }
   });
-  router.all('/', (_req, res) => res.status(405).set('Allow', 'POST').json({ error: 'Stateless Streamable HTTP: use POST; incremental output is available through command_output' }));
+  router.all('/', (_req, res) => res.status(405).set('Allow', 'POST').json({ error: 'Stateless Streamable HTTP: use POST; poll request_result for pending commands' }));
   return router;
 }
