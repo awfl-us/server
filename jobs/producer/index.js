@@ -13,9 +13,8 @@ import { startCloudRun } from './paths/cloudRun.js';
 import { startGke } from './paths/gke.js';
 import { startLocalDocker } from './paths/localDocker.js';
 import { stopByRuntime } from './paths/stop.js';
-import { resolveStoredGithubToken } from '../../workflows/gitFiles.js';
+import { loadConsumerCredentials } from './credentials.js';
 import { cancelStartupProgress } from './progress.js';
-import { mintUserTokens } from './auth/firebaseTokens.js';
 
 const router = express.Router();
 router.use(express.json());
@@ -108,25 +107,8 @@ router.post('/start', async (req, res) => {
 
     if (!gcpProject) { await bestEffortRelease({ userId, projectId }); return res.status(500).json({ error: 'Server missing GCP project configuration' }); }
 
-    // Resolve any stored GitHub token (Firestore-backed) so the consumer can perform git ops.
-    // IMPORTANT: never log the token.
-    let githubToken = null;
-    try {
-      githubToken = await resolveStoredGithubToken({ userId, projectId });
-    } catch {
-      githubToken = null;
-    }
-
-    // Mint per-request Firebase auth tokens for the calling user
-    let firebaseIdToken = '';
-    let firebaseCustomToken = '';
-    try {
-      const minted = await mintUserTokens({ uid: userId });
-      firebaseIdToken = minted?.idToken || '';
-      firebaseCustomToken = minted?.customToken || '';
-    } catch (e) {
-      console.warn('[jobs/producer:start] token mint failed; continuing without per-request token', e?.message || e);
-    }
+    // Resolve Firebase and GitHub credentials using the shared cloud-consumer helper.
+    const { githubToken, firebaseIdToken, firebaseCustomToken } = await loadConsumerCredentials({ userId, projectId });
 
     // Local Docker path
     if (localDocker) {
