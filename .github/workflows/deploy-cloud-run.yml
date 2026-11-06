@@ -144,13 +144,13 @@ jobs:
             secret_list=''
           fi
 
-          # OAuth is optional until the client ID and secret are provisioned.
+          # Only enable Google OAuth when a client ID has been configured.
+          # Let Cloud Run validate the Secret Manager reference and permissions.
+          # Do not silently skip the secret on a failed "describe" lookup: the
+          # deployer may lack secret metadata access even when the secret exists.
           if [[ -n "${GOOGLE_CLOUD_OAUTH_CLIENT_ID:-}" ]]; then
-            if gcloud secrets describe GOOGLE_CLOUD_OAUTH_CLIENT_SECRET --project="${GCP_PROJECT_ID}" --quiet >/dev/null 2>&1; then
-              secret_list="${secret_list}${secret_list:+,}GOOGLE_CLOUD_OAUTH_CLIENT_SECRET=GOOGLE_CLOUD_OAUTH_CLIENT_SECRET:latest"
-            else
-              echo 'Google OAuth client secret is missing; Google Cloud connection remains disabled'
-            fi
+            secret_list="${secret_list}${secret_list:+,}GOOGLE_CLOUD_OAUTH_CLIENT_SECRET=GOOGLE_CLOUD_OAUTH_CLIENT_SECRET:latest"
+            echo 'Google Cloud OAuth is enabled; Cloud Run will validate its client secret binding'
           fi
 
           if [[ -n "${secret_list}" ]]; then
