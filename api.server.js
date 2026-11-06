@@ -4,6 +4,7 @@ import { getFirestore } from 'firebase-admin/firestore'
 import { ExecutionService } from './mcp/service.js'
 import { createMcpRouter } from './mcp/index.js'
 import { githubAppCallback } from './workflows/githubApp/index.js'
+import { googleCloudCallback } from './workflows/googleCloud/index.js'
 
 const app = express()
 app.use(express.json({ limit: '1mb' }))
@@ -111,6 +112,7 @@ app.get('/health', (_req, res) => res.status(200).send('OK'))
 // GitHub OAuth redirects cannot carry the Firebase Authorization header.
 // Binding is secured by the authenticated, single-use state created at /workflows/github-app/start.
 app.get('/github-app/callback', githubAppCallback)
+app.get('/google-cloud/callback', googleCloudCallback)
 
 // MCP tool calls use an API key; consumer results use the regular Firebase-authenticated workflows API.
 const execution = new ExecutionService({ db: getFirestore() })
