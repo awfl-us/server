@@ -11,8 +11,8 @@ export const validId = value => typeof value === 'string' && /^[a-f0-9]{32}$/.te
 // An MCP workspace is now an attachment to a project consumer, NOT a GKE Job.
 // Multiple sessions/clients can share one project environment and consumer lock.
 export class ExecutionService {
-  constructor({ db, ownerId = process.env.MCP_OWNER_UID }) {
-    Object.assign(this, { db, ownerId });
+  constructor({ db, ownerId = process.env.MCP_OWNER_UID, startConsumer = ensureProjectConsumer, getLock = getConsumerLock, backend = pickBackend }) {
+    Object.assign(this, { db, ownerId, startConsumer, getLock, backend });
   }
   async isOwner(userId) {
     if (this.ownerId) return userId === this.ownerId;
@@ -35,7 +35,7 @@ export class ExecutionService {
     return ws;
   }
   async status(userId, ws) {
-    const { lock } = await getConsumerLock({ userId, projectId: ws.projectId });
+    const { lock } = await this.getLock({ userId, projectId: ws.projectId });
     const running = Boolean(lock && lock.expiresAt > Date.now());
     return {
       state: running ? 'attached' : 'consumer_unavailable',
@@ -68,7 +68,7 @@ export class ExecutionService {
 
     // The normal project consumer receives these events. It is the only
     // executor, regardless of whether the caller is a browser, CLI, or MCP.
-    const { lock } = await getConsumerLock({ userId, projectId: ws.projectId });
+    const { lock } = await this.getLock({ userId, projectId: ws.projectId });
     if (!lock || lock.expiresAt <= Date.now()) fail('Project consumer not running; reattach workspace to start it');
     const ref = this.ref(args.workspace_id);
     const seq = await this.db.runTransaction(async tx => {
@@ -88,7 +88,7 @@ export class ExecutionService {
     const request = ref.collection('mcpRequests').doc(String(seq).padStart(8, '0'));
     const { workspace_id, ...parameters } = args;
     try {
-      await pickBackend(userId, ws.projectId).append(normalizeEnvelope({
+      await this.backend(userId, ws.projectId).append(normalizeEnvelope({
         projectId: ws.projectId, sessionId: ws.sessionId, type: 'mcp_tool_call',
         source: 'mcp',
         data: {
@@ -122,7 +122,7 @@ export class ExecutionService {
     if (!projectId) fail('project_id is required');
     const project = await this.db.collection('users').doc(userId).collection('projects').doc(projectId).get();
     if (!project.exists) fail('Project not found');
-    const consumer = await ensureProjectConsumer({ userId, projectId });
+    const consumer = await this.startConsumer({ userId, projectId });
     const id = randomBytes(16).toString('hex');
     const sessionId = (typeof args.session_id === 'string' && args.session_id.trim()) || 'mcp-' + id;
     const expiresAt = Date.now() + 3600000;
@@ -158,7 +158,7 @@ export class ExecutionService {
     if (done) {
       // Session-scoped history uses the same relay as every other AWFL client.
       // Do not persist raw command output or credentials in the conversation.
-      await pickBackend(userId, projectId).append(normalizeEnvelope({
+      await this.backend(userId, projectId).append(normalizeEnvelope({
         projectId, sessionId: ws.sessionId, type: 'mcp_tool_result', source: 'mcp',
         data: { mcp: { workspace_id: id, request_id: seq },
           content: 'MCP ' + done + ' ' + (result?.error ? 'failed' : 'completed'),
