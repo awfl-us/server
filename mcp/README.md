@@ -1,107 +1,110 @@
-# AWFL Cloud Execution MCP
+# AWFL MCP cloud execution
 
-Endpoint: `https://api.awfl.us/mcp` (Streamable HTTP, POST). Every request verifies
-`Authorization: Bearer <AWFL API key>` through `requireAwflApiKey`, including fresh
-Firestore expiry/revocation checks. This route is separate from Firebase web auth.
-Only the configured `MCP_OWNER_UID` can invoke tools; unset configuration fails closed.
+The existing AWFL API service exposes Streamable HTTP MCP at
+`https://api.awfl.us/mcp` (POST). Requests require
+`Authorization: Bearer <AWFL API key>`, verified against Firestore on every
+request by `requireAwflApiKey()`. Firebase web authorization is separate.
 
-## Execution path
+The endpoint is initially private to one AWFL account. Configure
+`MCP_OWNER_UID` with the account's Firebase UID to pin ownership. If unset,
+the API's existing Firestore access identifies the sole owner of active
+`mcp:invoke` keys at request time. No owner or multiple owners fails closed.
+The GitHub deployer does not need Firestore data permissions.
 
-MCP SDK → Firestore workspace request → AWFL SSE stream → existing Python
-`awfl run` consumer → `forward_event` → `handle_response` → execution runtime →
-AWFL callback sender → stored result → MCP tool response.
+## Reuse existing AWFL cloud execution
 
-The API process never executes client commands. The Python consumer understands
-AWFL's existing `tool_call.function.name/arguments` envelope. Cloud mode adds
-asynchronous subprocesses and scoped transport; ordinary workflow consumers are
-unchanged. A workspace is one long-lived GKE Job, not one Job per command. It lasts
-at most one hour, uses the same writable `/workspace` for all commands, and never
-restarts/replays commands after pod loss. A new workspace does not recover files
-from an expired/deleted workspace.
+**No new cloud service, cluster, namespace, job controller, IAM role, or
+execution image.** The MCP control plane runs in the existing Cloud Run API
+service. `jobs/producer/mcpRunner.js` is a small adapter around the existing
+`jobs/producer/gke.js` functions `runK8sJob` and `deleteK8sJob`.
 
-Tools: `environment_status`, `workspace_create`, `run_command`, `command_output`,
-`command_cancel`, `read_file`, `write_file`, `workspace_stop`, `request_result`.
-`run_command` returns initial output after up to 0.5s. Poll `command_output` with
-`next_cursor` while `state=running` or `has_more=true`. If a tool call returns
-`state=pending`, recover using `request_result`; do not repeat mutating commands.
-Explicit `cwd` persists between commands; shell-local `cd` and `export` do not.
+It uses the existing:
+- GKE cluster `awfl-gke`
+- namespace `K8S_NAMESPACE` (default `awfl`)
+- Kubernetes service account `CONSUMER_KSA_NAME` (default `consumer`)
+- `CONSUMER_K8S_IMAGE` built from `cloud/sse-consumer/Dockerfile`
+- Python `awfl run` consumer and AWFL tool-call dispatch
+- Per-user Firebase token minting and project-specific GitHub credential resolution
 
-## Isolation and limits
+The regular AWFL consumer image now includes Python, Git, the GitHub CLI,
+Node.js, Playwright and Chromium; the CI pipeline pins the Python CLI revision.
+The default GKE producer path runs the baked-in AWFL CLI rather than replacing
+it with an older PyPI version at startup.
 
-One workspace per owner; four concurrent commands; 128 executions and 2,000 tool
-requests per workspace; eight queued requests. Command timeout is 1–900 seconds.
-Each command retains at most 1 MiB of output and is killed if it exceeds the limit;
-poll responses return at most four 8 KiB chunks. All stdout and stderr cursors share
-one ordered stream. Cancel/timeout kill the process group. Shell background
-children are also killed when the foreground shell exits. Run foreground servers
-as asynchronous commands instead of shell-daemonizing them.
+`workspace_create` takes an optional `project_id`. When supplied, the
+project must belong to the authenticated user, and its existing GitHub
+integration credentials are used. Without it, the first existing user project
+is selected if available; otherwise the global GitHub token fallback is used.
+The consumer also receives the same Firebase tokens as ordinary AWFL cloud
+consumers. In MCP execution mode, child shell commands inherit the consumer's
+credentials (including GitHub and Firebase) but not `AWFL_EXECUTION_*`
+capabilities. Do not run untrusted shell commands.
 
-Containers run as uid 1000, drop Linux capabilities, deny privilege escalation,
-use a read-only root filesystem, and have bounded CPU, RAM and ephemeral volumes.
-They use a dedicated KSA with no Workload Identity grant and no mounted Kubernetes
-token. Child processes exclude transport credentials from their environments.
-The consumer's capability authorizes only its own command stream and callbacks,
-expires with the workspace, and is stored hashed in Firestore. Arbitrary code in
-a workspace must be considered able to impersonate that workspace's consumer;
-this capability confers no other user's access or GCP privileges.
+The MCP request/result bridge (`mcp/consumer.js`, `mcp/service.js`) remains
+because it correlates each tool invocation with an output and supports
+retrieving pending results without replaying commands. It reuses the existing
+AWFL SSE framing, Python parser, callback sender and tool-handler envelope.
+Workspace metadata and the command queue are stored in Firestore and scoped
+to the authenticated owner.
 
-NetworkPolicy denies ingress and limits egress to DNS plus public TCP/443. Private,
-loopback, link-local and metadata networks are excluded. Other network ports,
-including SSH git clones, are intentionally unavailable; clone over HTTPS.
-Chromium runs with `--no-sandbox` inside the restricted container; the container
-and network policy provide the execution isolation. This is private single-user
-execution, not a hardened public hostile multi-tenant hosting service.
+## MCP tools
 
-File tools reject paths outside the workspace and traverse directory components
-using no-follow directory descriptors. Shell commands can access their container's
-non-secret system files. Process counts, file sizes, and open descriptors are
-bounded. MCP mutating tools carry destructive annotations; clients must obtain
-approval for destructive operations. `workspace_stop` requires `confirm=true`.
+`environment_status`, `workspace_create`, `run_command`,
+`command_output`, `command_cancel`, `read_file`, `write_file`,
+`workspace_stop`, `request_result`.
 
-## Deployment
+A workspace is one consumer Job lasting up to one hour. Repeated commands
+reuse `/workspace`. The Python runtime enforces four simultaneous commands,
+128 executions per workspace, per-command timeout/output limits, and bounded
+file operations. The existing Kubernetes Job launcher now accepts an optional
+active deadline to enforce the one-hour limit.
 
-The existing Cloud Run workflow builds a separate execution image from the pinned
-Python CLI commit, applies `cloud/execution/policy.yaml` to the existing GKE cluster,
-configures CA-verified Kubernetes access, deploys the API, and runs
-`scripts/mcp-smoke.js`. The deployment identity must be able to apply namespace,
-NetworkPolicy, quota and RBAC resources. The API identity gets a namespace-scoped
-Job controller role. The execution KSA gets no cloud IAM roles.
+If a tool invocation returns `state=pending`, call `request_result`
+using its `request_id`; do not repeat a mutating call. Use
+`command_output` with `next_cursor` to poll stdout/stderr. Stopping a
+workspace invalidates its callback capability before stopping the existing
+Kubernetes Job.
 
-Set repository variable `MCP_OWNER_UID` to the AWFL Firebase UID. For the initial
-personal deployment only, if unset, deployment will select the sole distinct owner
-of existing unexpired API keys. Zero/multiple owners abort deployment. This never
-uses first-request claiming. `MCP_EXECUTION_IMAGE` and `K8S_CA_CERT_B64` are set by CI.
+## Security
 
-CI creates temporary 15-minute API keys for acceptance checks, never prints tokens,
-and deletes their records in finally. It tests the actual HTTPS MCP transport,
-revocation/expiry/other-user rejection, GKE execution, persistent reuse, incremental
-output, cancellation, public HTTPS, Chromium/TintWiz, metadata denial and cleanup.
-Actual results are uploaded as `mcp-smoke-results`. A passing unit suite is not
-proof of a working deployment.
+The service remains **private/single-user**, not an untrusted multi-tenant
+execution platform. Each request verifies the API key and user owner, and each
+workspace verifies ownership. Bearer keys are never stored in plaintext.
+The bridge capability is stored hashed in Firestore, expires with the
+workspace, and is removed from shell subprocess environments.
+
+This implementation deliberately retains the existing consumer's Firebase,
+GitHub and cloud credential access, as requested. Commands are granted those
+credentials, so treat MCP command execution as trusted administrative access
+to the user's AWFL resources; the previous extra locked-down execution
+namespace and credential restrictions no longer apply.
+
+## Deployment and testing
+
+Merges to `main` trigger the existing
+`.github/workflows/deploy-cloud-run.yml`. It builds the existing consumer
+image with the pinned AWFL CLI revision, deploys the existing API and Jobs
+services, and verifies that `/mcp` rejects anonymous access (HTTP 401).
+
+This workflow **does not** configure Kubernetes or read Firestore as the
+GitHub deployer. Those earlier additions blocked API deployment due to
+missing `container.clusters.get` and Firestore permissions, and were removed.
+
+Unit tests: `node --test mcp/tests/*.test.js`.
+Python execution tests: `python -m unittest discover -s tests -v` in
+`awfl-us/cli`. Live authenticated execution can be verified separately with
+`node scripts/mcp-smoke.js` under a trusted administrator identity with
+Firestore data access. The script creates and deletes temporary test keys;
+do not put your personal AWFL API key into GitHub Actions or logs.
+
+The public endpoint may return 401 even when the GKE runtime is unavailable;
+an authenticated `workspace_create`, `run_command`, Chromium launch,
+and cleanup must pass before claiming end-to-end completion.
 
 ## Stop and rotate
 
-Call `workspace_stop` with its workspace ID and `confirm=true`. It revokes the
-consumer capability before deleting the Job; Kubernetes TTL removes completed
-Jobs and the one-hour active deadline is a backstop. Firestore TTL removes request
-and workspace records after one day. Failed Job deletion can be retried safely.
-
-Manage user API keys at https://awfl.us → Settings. Create a replacement, update
-`AWFL_API_KEY` in the future private Site's server-side secret settings, then revoke
-the old key. Revocation prevents further MCP requests immediately. It does not
-retroactively kill already-running shell commands; stop the workspace first when
-needed. No API key belongs in source, HTML, tool definitions, logs, or chat.
-
-Phase 2 (private Site/plugin) must not begin until the live acceptance test passes.
-
-### One-time access bootstrap
-
-The existing GitHub deployment identity had Cloud Run deployment/index-management
-access but its Firestore data read failed during the first live deployment attempt.
-Run `bash scripts/bootstrap-mcp-access.sh` once from this repository in Google Cloud
-Shell as the project/cluster administrator, then re-run the latest deployment.
-The script grants the deployer Firestore data access (needed to resolve the owner
-and create/delete ephemeral smoke-test keys), cluster metadata/connection access,
-and Kubernetes permissions limited to the `awfl-execution` namespace. It does not
-grant GKE administrator, project owner, or any IAM permissions to execution pods.
-The two project IAM bindings are also recorded in `infra/mcp_execution.tf`.
+Call `workspace_stop` with `workspace_id` and `confirm=true`.
+Manage API keys at https://awfl.us → Settings. Create a replacement, change
+`AWFL_API_KEY` in the private ChatGPT Site secret settings, then revoke the
+previous key. Revocation blocks future MCP requests but does not kill
+already-running commands; stop the workspace when rotating credentials.
