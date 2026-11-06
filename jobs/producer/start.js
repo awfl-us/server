@@ -90,7 +90,7 @@ export async function startProjectConsumer({ userId, projectId, body = {} }) {
     if (!gcpProject) { await bestEffortRelease({ userId, projectId }); return { status: 500, body: { error: 'Server missing GCP project configuration' } }; }
 
     // Resolve Firebase and GitHub credentials using the shared cloud-consumer helper.
-    const { githubToken, firebaseIdToken, firebaseCustomToken } = await loadConsumerCredentials({ userId, projectId });
+    const { githubToken, firebaseIdToken, firebaseCustomToken, googleCloud } = await loadConsumerCredentials({ userId, projectId });
 
     // Local Docker path
     if (localDocker) {
@@ -206,6 +206,7 @@ export async function startProjectConsumer({ userId, projectId, body = {} }) {
       gcsPrefix,
       sessionIdForFilter,
       githubToken,
+      googleCloud,
       workspaceId,
       since_id,
       since_time,

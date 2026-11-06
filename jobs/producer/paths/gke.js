@@ -16,6 +16,7 @@ export async function startGke({
   gcsPrefix, // unused in consumer-only mode
   sessionIdForFilter,
   githubToken,
+  googleCloud,
   workspaceId,
   since_id, // unused in consumer-only mode
   since_time, // unused in consumer-only mode
@@ -88,6 +89,12 @@ export async function startGke({
     { name: 'AWFL_PROJECT_ID', value: String(projectId) },
     { name: 'AWFL_CONSUMER_TYPE', value: 'CLOUD' },
     ...(githubToken ? [{ name: 'GITHUB_TOKEN', value: githubToken }] : []),
+    // Never pass the Google OAuth refresh token to a shared consumer.
+    // This access token is short-lived; reattaching after expiry refreshes it.
+    ...(googleCloud?.accessToken ? [
+      { name: 'CLOUDSDK_AUTH_ACCESS_TOKEN', value: googleCloud.accessToken },
+      { name: 'CLOUDSDK_CORE_PROJECT', value: googleCloud.cloudProjectId },
+    ] : []),
     ...(resolvedWorkflowsBaseUrl ? [{ name: 'WORKFLOWS_BASE_URL', value: resolvedWorkflowsBaseUrl }] : []),
     ...(baseCtx?.eventsHeartbeatMs ? [{ name: 'EVENTS_HEARTBEAT_MS', value: baseCtx.eventsHeartbeatMs }] : []),
     ...(baseCtx?.reconnectBackoffMs ? [{ name: 'RECONNECT_BACKOFF_MS', value: baseCtx.reconnectBackoffMs }] : []),
