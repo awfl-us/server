@@ -40,6 +40,10 @@ jobs:
         with:
           node-version: '22'
       - run: npm install --ignore-scripts
+      - name: Validate Cloud Run deployment YAML
+        run: |
+          python3 -m pip install --quiet PyYAML==6.0.3
+          python3 -c "import yaml; doc=yaml.safe_load(open('.github/workflows/deploy-cloud-run.yml')); assert 'build_and_deploy' in doc['jobs']"
       - run: node --test mcp/tests/*.test.js jobs/producer/tests/*.test.js workflows/googleCloud/tests/*.test.js
       - run: node --check api.server.js
       - run: node --check jobs/producer/start.js
