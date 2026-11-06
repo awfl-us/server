@@ -234,12 +234,12 @@ export async function startProjectConsumer({ userId, projectId, body = {} }) {
 
 // Both the browser and MCP use this launcher; an existing project lock means
 // we attach to the current consumer rather than creating another GKE Job.
-export async function ensureProjectConsumer({ userId, projectId }) {
-  const { lock } = await getConsumerLock({ userId, projectId });
+export async function ensureProjectConsumer({ userId, projectId }, { getLock = getConsumerLock, start = startProjectConsumer } = {}) {
+  const { lock } = await getLock({ userId, projectId });
   if (lock && lock.expiresAt > Date.now()) {
     return { state: 'attached', consumerId: lock.consumerId };
   }
-  const result = await startProjectConsumer({ userId, projectId });
+  const result = await start({ userId, projectId });
   if (result.status === 202 && result.body?.message === 'Lock held by another consumer') {
     return { state: 'attached', consumerId: result.body.details?.holder?.consumerId };
   }
