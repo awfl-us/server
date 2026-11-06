@@ -121,6 +121,10 @@ test('MCP attaches to existing project consumer without starting an independent 
   assert.deepEqual(await service.invoke(userId, 'workspace_stop', { workspace_id: first.workspace_id, confirm: true }),
     { workspace_id: first.workspace_id, state: 'stopped', consumer_stopped: true, shared: true });
   assert.deepEqual(stops, [{ userId, projectId }]);
+  // Retrying a previous stop must not affect a newly started consumer.
+  assert.deepEqual(await service.invoke(userId, 'workspace_stop', { workspace_id: first.workspace_id, confirm: true }),
+    { workspace_id: first.workspace_id, state: 'stopped', consumer_stopped: false, shared: true });
+  assert.equal(stops.length, 1);
   const ws2 = await service.owned(userId, second.workspace_id);
   assert.equal(ws2.sessionId, 'second-conversation');
   await assert.rejects(service.owned(userId, first.workspace_id), /Workspace stopped/);
