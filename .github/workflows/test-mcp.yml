@@ -8,6 +8,7 @@ on:
       - 'cloud/sse-consumer/Dockerfile'
       - 'api.server.js'
       - '.github/workflows/test-mcp.yml'
+      - '.github/workflows/deploy-cloud-run.yml'
   push:
     branches: [main]
     paths:
@@ -16,6 +17,7 @@ on:
       - 'cloud/sse-consumer/Dockerfile'
       - 'api.server.js'
       - '.github/workflows/test-mcp.yml'
+      - '.github/workflows/deploy-cloud-run.yml'
 
 jobs:
   test:
