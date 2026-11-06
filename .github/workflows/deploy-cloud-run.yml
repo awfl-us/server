@@ -144,15 +144,6 @@ jobs:
             secret_list=''
           fi
 
-          # OAuth is optional until the client ID and secret are provisioned.
-          if [[ -n "${GOOGLE_CLOUD_OAUTH_CLIENT_ID:-}" ]]; then
-            if gcloud secrets describe GOOGLE_CLOUD_OAUTH_CLIENT_SECRET --project="${GCP_PROJECT_ID}" --quiet >/dev/null 2>&1; then
-              secret_list="${secret_list}${secret_list:+,}GOOGLE_CLOUD_OAUTH_CLIENT_SECRET=GOOGLE_CLOUD_OAUTH_CLIENT_SECRET:latest"
-            else
-              echo 'Google OAuth client secret is missing; Google Cloud connection remains disabled'
-            fi
-          fi
-
           if [[ -n "${secret_list}" ]]; then
             echo "SECRET_FLAGS=--set-secrets=${secret_list}" >> "$GITHUB_OUTPUT"
           else
