@@ -13,6 +13,8 @@ jobs:
       id-token: write
 
     env:
+      MCP_OWNER_UID: ${{ vars.MCP_OWNER_UID }}
+      AWFL_CLI_REF: '70e2b976b0a740ddde30942182072bb7d3e30c26'
       CORS_ALLOW_ORIGIN: ${{ vars.CORS_ALLOW_ORIGIN }}
       # Default to repository variables; will be overridden by JSON if present
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
@@ -53,6 +55,14 @@ jobs:
             echo "No $FILE found; using repository Variables"
           fi
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate MCP protocol and authorization
+        run: |
+          npm install --ignore-scripts
+          node --test mcp/tests/*.test.js
+
       - name: Authenticate to Google Cloud (WIF/OIDC)
         uses: google-github-actions/auth@v2
         with:
@@ -64,7 +74,7 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ env.GCP_PROJECT_ID }}
-          install_components: beta
+          install_components: beta,gke-gcloud-auth-plugin,kubectl
 
       - name: Ensure gcloud beta component is installed (non-interactive)
         run: |
@@ -77,6 +87,17 @@ jobs:
         run: |
           gcloud config set project "${GCP_PROJECT_ID}"
           gcloud config set run/region "${GCP_REGION}"
+
+      - name: Configure private execution infrastructure
+        run: |
+          set -euo pipefail
+          node scripts/mcp-owner.js
+          gcloud container clusters get-credentials "${GKE_CLUSTER_NAME}" --region "${GKE_CLUSTER_LOCATION}" --project "${GCP_PROJECT_ID}"
+          CA=$(gcloud container clusters describe "${GKE_CLUSTER_NAME}" --region "${GKE_CLUSTER_LOCATION}" --format='value(masterAuth.clusterCaCertificate)')
+          echo "K8S_CA_CERT_B64=${CA}" >> "$GITHUB_ENV"
+          sed "s|__RUNTIME_SA__|${CLOUD_RUN_RUNTIME_SA}|g" cloud/execution/policy.yaml | kubectl apply -f -
+          gcloud firestore fields ttls update expires_at --collection-group=mcpRequests --enable-ttl --quiet
+          gcloud firestore fields ttls update expires_at --collection-group=mcpWorkspaces --enable-ttl --quiet
 
       # Deploy Firestore composite indexes using gcloud (WIF auth)
       - name: Deploy Firestore indexes (from firestore.indexes.json)
@@ -143,6 +164,15 @@ jobs:
       - name: Configure Docker auth for Artifact Registry
         run: |
           gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+
+      - name: Build isolated Python execution image
+        id: execution_image
+        run: |
+          set -euo pipefail
+          IMAGE="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/app/execution:${GITHUB_SHA}"
+          docker build --build-arg "AWFL_CLI_REF=${AWFL_CLI_REF}" -t "$IMAGE" cloud/execution
+          docker push "$IMAGE"
+          echo "MCP_EXECUTION_IMAGE=${IMAGE}" >> "$GITHUB_ENV"
 
       # Build and push Producer image
       - name: Build and push Producer image
@@ -256,6 +286,7 @@ jobs:
             COMMON_ENV_VARS="${BASE_ENV_VARS}"
           fi
 
+          COMMON_ENV_VARS="${COMMON_ENV_VARS};MCP_OWNER_UID=${MCP_OWNER_UID};MCP_EXECUTION_IMAGE=${MCP_EXECUTION_IMAGE};K8S_CA_CERT_B64=${K8S_CA_CERT_B64}"
           echo "COMMON_ENV_VARS=${COMMON_ENV_VARS}" >> "$GITHUB_OUTPUT"
 
       - name: Deploy API service (public)
@@ -281,6 +312,18 @@ jobs:
             --timeout=3600 \
             --set-env-vars="^;^${{ steps.common_env.outputs.COMMON_ENV_VARS }};SERVICE_TARGET=start:jobs;CLOUD_RUN_LOCATION=${GCP_REGION}" \
             ${{ steps.secrets.outputs.SECRET_FLAGS }}
+
+      - name: Verify deployed MCP and isolated Chromium execution
+        timeout-minutes: 15
+        run: node scripts/mcp-smoke.js
+
+      - name: Save actual deployment test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-smoke-results
+          path: mcp-smoke-results.json
+          if-no-files-found: ignore
 
 # Notes:
 # - Producer and Consumer can run as Cloud Run Jobs with their own service accounts.

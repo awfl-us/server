@@ -21,6 +21,7 @@
     "@google-cloud/workflows": "^4.1.0",
     "@kubernetes/client-node": "^0.21.0",
     "@langchain/openai": "^0.5.7",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "@sendgrid/mail": "^8.1.4",
     "axios": "^1.7.8",
     "busboy": "^1.6.0",
@@ -37,7 +38,8 @@
     "openai": "^4.73.1",
     "sinon": "^19.0.2",
     "supertest": "^7.0.0",
-    "twilio": "^5.4.4"
+    "twilio": "^5.4.4",
+    "zod": "3.25.76"
   },
   "devDependencies": {
     "jest": "^29.7.0",
