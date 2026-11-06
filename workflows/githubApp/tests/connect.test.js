@@ -10,7 +10,7 @@ function fakeFirestore(remote = 'github.com/awfl-us/server.git') {
   const ref = path => ({
     id: path.split('/').at(-1),
     collection: name => ({ doc: id => ref(path + '/' + name + '/' + id) }),
-    get: async () => ({ exists: store.has(path), data: () => store.get(path) }),
+    get: async () => { const snapshot = store.get(path); return { exists: snapshot !== undefined, data: () => snapshot } },
     set: async data => { store.set(path, data) },
     create: async data => {
       if (store.has(path)) throw new Error('Already exists');
