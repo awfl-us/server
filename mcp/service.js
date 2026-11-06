@@ -9,6 +9,19 @@ export class ExecutionService {
   constructor({ db, runtime, ownerId = process.env.MCP_OWNER_UID, origin = process.env.API_ORIGIN }) {
     Object.assign(this, { db, runtime, ownerId, origin });
   }
+  // Explicit owner takes precedence. For an initial personal deployment with
+  // no configured UID, allow only the sole owner of active MCP-scoped API keys.
+  // Resolve at request time using the API runtime's existing Firestore access,
+  // not the GitHub deployer's IAM identity.
+  async isOwner(userId) {
+    if (this.ownerId) return userId === this.ownerId;
+    if (!userId) return false;
+    const snap = await this.db.collection('apiKeys').get();
+    const owners = new Set(snap.docs.map(d => d.data()).filter(k =>
+      k.expiresAt > Date.now() && Array.isArray(k.scopes) && k.scopes.includes('mcp:invoke')
+    ).map(k => k.userId));
+    return owners.size === 1 && owners.has(userId);
+  }
   ref(id) { if (!validId(id)) fail('Invalid workspace ID'); return this.db.collection('mcpWorkspaces').doc(id); }
   async owned(userId, id, { allowStopped = false } = {}) {
     const snap = await this.ref(id).get();
@@ -26,13 +39,13 @@ export class ExecutionService {
     return ws;
   }
   async invoke(userId, name, args) {
-    if (!this.ownerId || userId !== this.ownerId) fail('Owner access required');
+    if (!await this.isOwner(userId)) fail('Owner access required');
     if (name === 'environment_status' && !args.workspace_id) return {
       state: 'control_plane_ready', transport: 'SSE tool calls to Python AWFL consumer; HTTP callbacks',
       execution: 'isolated GKE Job with one-hour lifetime', limits: { workspaces: 1, concurrent_commands: 4, command_seconds: 900 },
       configured: this.runtime.configured(), connectivity: 'Use workspace environment_status and run_command to verify live connectivity',
     };
-    if (name === 'workspace_create') return this.create(userId);
+    if (name === 'workspace_create') return this.create(userId, args);
     const ws = await this.owned(userId, args.workspace_id, { allowStopped: name === 'workspace_stop' });
     if (name === 'request_result') {
       const snap = await this.ref(args.workspace_id).collection('mcpRequests').doc(String(args.request_id).padStart(8, '0')).get();
@@ -70,8 +83,18 @@ export class ExecutionService {
       }, () => { clearTimeout(timer); unsubscribe(); reject(new Error('Response unavailable')); });
     });
   }
-  async create(userId) {
+  async create(userId, args = {}) {
     if (!this.runtime.configured()) fail('Cloud execution is not configured');
+    const projects = this.db.collection('users').doc(userId).collection('projects');
+    let projectId = null;
+    if (args.project_id) {
+      const project = await projects.doc(args.project_id).get();
+      if (!project.exists) fail('Project not found');
+      projectId = project.id;
+    } else {
+      const existing = await projects.limit(1).get();
+      projectId = existing.docs[0]?.id || null;
+    }
     const id = randomBytes(16).toString('hex');
     const token = randomBytes(32).toString('base64url');
     const ref = this.ref(id);
@@ -81,16 +104,19 @@ export class ExecutionService {
       const current = (await tx.get(slot)).data();
       if (current?.id) {
         const existing = (await tx.get(this.ref(current.id))).data();
-        if (existing && !existing.stopped && existing.expiresAt > Date.now()) return { workspace_id: current.id, state: existing.state, expires_at: existing.expiresAt, attached: true };
+        if (existing && !existing.stopped && existing.expiresAt > Date.now()) {
+          if (args.project_id && existing.projectId !== args.project_id) fail('Stop existing workspace before switching projects');
+          return { workspace_id: current.id, state: existing.state, expires_at: existing.expiresAt, attached: true };
+        }
       }
       tx.set(slot, { id });
-      tx.create(ref, { userId, jobName: `mcp-${id}`, capabilityHash: digest(token), expiresAt,
+      tx.create(ref, { userId, projectId, jobName: `mcp-${id}`, capabilityHash: digest(token), expiresAt,
         expires_at: new Date(expiresAt + 86400000), nextSeq: 0, ackSeq: 0, stopped: false, state: 'starting' });
       return null;
     });
     if (result) return result;
     try {
-      await this.runtime.start({ id, token, expiresAt, origin: this.origin });
+      await this.runtime.start({ id, token, expiresAt, origin: this.origin, userId, projectId });
       return { workspace_id: id, state: 'starting', expires_at: expiresAt, cwd: '/workspace' };
     } catch {
       await ref.update({ stopped: true, state: 'failed' });
