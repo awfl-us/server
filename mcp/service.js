@@ -67,6 +67,9 @@ export class ExecutionService {
     const ws = await this.owned(userId, args.workspace_id, { allowStopped: name === 'workspace_stop' });
     if (name === 'workspace_stop') {
       if (args.confirm !== true) fail('Confirm stopping the shared project consumer');
+      // Idempotent: never let a stopped workspace shut down a later consumer.
+      if (ws.stopped) return { workspace_id: args.workspace_id, state: 'stopped',
+        consumer_stopped: false, shared: true };
       // Use exactly the same shutdown + lock release sequence as /producer/stop.
       // The consumer is shared: this intentionally interrupts other clients.
       const outcome = await this.stopConsumer({ userId, projectId: ws.projectId });
