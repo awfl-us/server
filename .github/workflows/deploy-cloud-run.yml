@@ -144,15 +144,6 @@ jobs:
             secret_list=''
           fi
 
-          # Only enable Google OAuth when a client ID has been configured.
-          # Let Cloud Run validate the Secret Manager reference and permissions.
-          # Do not silently skip the secret on a failed "describe" lookup: the
-          # deployer may lack secret metadata access even when the secret exists.
-          if [[ -n "${GOOGLE_CLOUD_OAUTH_CLIENT_ID:-}" ]]; then
-            secret_list="${secret_list}${secret_list:+,}GOOGLE_CLOUD_OAUTH_CLIENT_SECRET=GOOGLE_CLOUD_OAUTH_CLIENT_SECRET:latest"
-            echo 'Google Cloud OAuth is enabled; Cloud Run will validate its client secret binding'
-          fi
-
           if [[ -n "${secret_list}" ]]; then
             echo "SECRET_FLAGS=--set-secrets=${secret_list}" >> "$GITHUB_OUTPUT"
           else
