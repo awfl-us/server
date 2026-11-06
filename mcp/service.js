@@ -64,7 +64,7 @@ export class ExecutionService {
     return new Promise((resolve, reject) => {
       let unsubscribe = () => {};
       const timer = setTimeout(() => { unsubscribe(); resolve({ state: 'pending', request_id: seq,
-        workspace_id: args.workspace_id, error: 'Consumer has not acknowledged in 15s. Use request_result with request_id; do not retry a mutating call blindly.' }); }, 15000);
+        workspace_id: args.workspace_id, message: 'Consumer has not acknowledged in 15s. Use request_result with request_id; do not retry a mutating call blindly.' }); }, 15000);
       unsubscribe = responseRef.onSnapshot(snap => {
         if (snap.data()?.result !== undefined) { clearTimeout(timer); unsubscribe(); resolve(snap.data().result); }
       }, () => { clearTimeout(timer); unsubscribe(); reject(new Error('Response unavailable')); });

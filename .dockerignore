@@ -1,0 +1,8 @@
+node_modules
+.git
+gha-creds-*.json
+.env
+serviceAccountKey.json
+infra/.terraform
+infra/*.tfstate*
+mcp-smoke-results.json
