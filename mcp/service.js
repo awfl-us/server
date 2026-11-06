@@ -182,8 +182,18 @@ export class ExecutionService {
     const done = await this.db.runTransaction(async tx => {
       const snap = await tx.get(request);
       if (!snap.exists || !['queued', 'running'].includes(snap.data().state)) return null;
-      tx.update(request, { state: 'completed', result, completedAt: Date.now() });
-      return snap.data().toolName;
+      const toolName = snap.data().toolName;
+      // The normal READ_FILE callback names its result field "content".
+      // Keep that callback unchanged, but do not return a nested "content"
+      // field from MCP: MCP itself uses content for its response blocks.
+      // Use "text" for the file contents at the MCP boundary.
+      let response = result;
+      if (toolName === 'read_file' && typeof result?.content === 'string') {
+        const { content, ...rest } = result;
+        response = { ...rest, text: content };
+      }
+      tx.update(request, { state: 'completed', result: response, completedAt: Date.now() });
+      return toolName;
     });
     if (done) {
       // Session-scoped history uses the same relay as every other AWFL client.
