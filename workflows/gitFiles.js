@@ -12,6 +12,7 @@ import express from 'express';
 import axios from 'axios';
 import { getFirestore } from 'firebase-admin/firestore';
 import { initializeApp, getApps } from 'firebase-admin/app';
+import { resolveGithubAppCredential } from './githubApp/service.js';
 
 // Ensure Firebase Admin initialized (no-op if already initialized by host)
 if (!getApps().length) {
@@ -90,6 +91,13 @@ async function loadGithubConfig(userId, projectId) {
 export async function resolveStoredGithubToken({ userId, projectId }) {
   const cfg = await loadGithubConfig(userId, projectId);
   return cfg?.token || process.env.GITHUB_TOKEN || null;
+}
+
+// First prefer short-lived installation credentials; legacy PATs remain a fallback.
+export async function resolveGithubCredential({ userId, projectId }) {
+  const app = await resolveGithubAppCredential({ userId, projectId });
+  if (app) return app.token;
+  return resolveStoredGithubToken({ userId, projectId });
 }
 
 async function saveGithubConfig(userId, projectId, { owner, repo, token, defaultBranch }) {
