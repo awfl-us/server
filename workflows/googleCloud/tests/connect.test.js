@@ -9,7 +9,7 @@ function firestore() {
   const store = new Map([['users/testuser/projects/project1', { id: 'project1' }]]);
   const ref = path => ({
     collection: name => ({ doc: id => ref(path + '/' + name + '/' + id) }),
-    get: async () => ({ exists: store.has(path), data: () => store.get(path) }),
+    get: async () => { const value = store.get(path); return { exists: store.has(path), data: () => value }; },
     create: async data => { assert.equal(store.has(path), false); store.set(path, data); },
     set: async data => { store.set(path, data); },
     delete: async () => { store.delete(path); },
