@@ -29,6 +29,8 @@ RUN apt-get update \
        sed \
        grep \
        findutils \
+       nodejs \
+       npm \
     && rm -rf /var/lib/apt/lists/*
 
 # Install GitHub CLI from official GitHub apt repo.
@@ -42,6 +44,11 @@ RUN mkdir -p /etc/apt/keyrings \
     && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
+# Browser support lives in the existing AWFL consumer image, not a separate MCP image.
+# Install browser system dependencies while still root.
+RUN python -m pip install --no-cache-dir playwright==1.64.1 \
+    && python -m playwright install --with-deps chromium
+
 # Non-root user for tool execution.
 RUN useradd -m -s /bin/bash awfl \
     && mkdir -p /workspace /app \
@@ -49,9 +56,15 @@ RUN useradd -m -s /bin/bash awfl \
 
 USER awfl
 
-# Pin this once you have a known-good release.
+# Deployment pins the exact CLI revision with the MCP execution enhancements.
+# Without an explicit revision, preserve the normal published AWFL behavior.
+ARG AWFL_CLI_REF
 RUN python -m pip install --user --upgrade pip \
-    && python -m pip install --user awfl
+    && if [ -n "$AWFL_CLI_REF" ]; then \
+         python -m pip install --user "awfl @ git+https://github.com/awfl-us/cli.git@${AWFL_CLI_REF}"; \
+       else \
+         python -m pip install --user awfl; \
+       fi
 
 WORKDIR /workspace
 
