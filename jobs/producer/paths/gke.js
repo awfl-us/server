@@ -37,6 +37,9 @@ export async function startGke({
   // Reinstalling from PyPI on every startup could replace the pinned version.
   const defaultStartup = 'awfl run';
   const startupSh = process.env.AWFL_STARTUP_SH || defaultStartup;
+  // The former MCP path launched the same image directly (no intermediate shell).
+  // Apply that small optimization to every standard project consumer as well.
+  const directCommand = startupSh === defaultStartup ? ['awfl', 'run'] : undefined;
 
   if (!consumerImage) {
     await bestEffortRelease({ userId, projectId });
@@ -131,7 +134,7 @@ export async function startGke({
 
   let cRun;
   try {
-    cRun = await runK8sJob({ namespace, jobName: consumerJobName, image: consumerImage, serviceAccountName: consumerKsa, envPairs: consumerEnv, containerName: 'consumer', shCommand: startupSh });
+    cRun = await runK8sJob({ namespace, jobName: consumerJobName, image: consumerImage, serviceAccountName: consumerKsa, envPairs: consumerEnv, containerName: 'consumer', ...(directCommand ? { command: directCommand } : { shCommand: startupSh }) });
   } catch (e) {
     await bestEffortRelease({ userId, projectId });
     return { status: 500, body: { error: 'Transport error creating consumer K8s Job', details: String(e?.message || e) } };
