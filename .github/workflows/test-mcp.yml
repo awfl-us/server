@@ -34,7 +34,7 @@ jobs:
         with:
           node-version: '22'
       - run: npm install --ignore-scripts
-      - run: node --test mcp/tests/*.test.js
+      - run: node --test mcp/tests/*.test.js jobs/producer/tests/*.test.js
       - run: node --check api.server.js
       - run: node --check jobs/producer/start.js
       - run: node --check mcp/index.js
