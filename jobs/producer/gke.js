@@ -12,7 +12,7 @@ function isLocalhostHost(h) {
   return host === 'localhost' || host === '127.0.0.1' || host === '::1';
 }
 
-function getBatchClient() {
+async function getBatchClient() {
   const kc = new KubeConfig();
   let mode = 'default';
   const inCloudRun = Boolean(process.env.K_SERVICE || process.env.K_REVISION || process.env.CLOUD_RUN_JOB);
@@ -28,7 +28,10 @@ function getBatchClient() {
       const skipTls = String(process.env.K8S_INSECURE_SKIP_TLS_VERIFY || process.env.K8S_SKIP_TLS_VERIFY || '') === '1';
       const caData = process.env.K8S_CA_CERT_B64 || process.env.K8S_CA_DATA_B64 || '';
       const caFile = process.env.K8S_CA_FILE || '';
-      const token = process.env.K8S_BEARER_TOKEN || '';
+      // Metadata tokens expire; acquire a fresh one for every operation instead
+      // of caching it in process.env when the consumer starts.
+      const token = process.env.K8S_BEARER_TOKEN ||
+        (inCloudRun ? (await fetchMetadataAccessToken({ timeoutMs: 5000 })).token : '');
 
       try {
         const u = new URL(server);
@@ -107,20 +110,7 @@ export async function runK8sJob({ namespace, jobName, image, serviceAccountName,
   if (!jobName) return { ok: false, status: 400, error: 'Missing jobName' };
   if (!image) return { ok: false, status: 400, error: 'Missing image' };
   try {
-    // If running in Cloud Run and talking to an external K8s API without a provided token, fetch a Google access token
-    const inCloudRun = Boolean(process.env.K_SERVICE || process.env.K_REVISION || process.env.CLOUD_RUN_JOB);
-    const hasExtApi = Boolean(process.env.K8S_API_SERVER || process.env.K8S_API_ENDPOINT);
-    if (inCloudRun && hasExtApi && !process.env.K8S_BEARER_TOKEN) {
-      try {
-        const { token } = await fetchMetadataAccessToken({ timeoutMs: 1500 });
-        if (token) process.env.K8S_BEARER_TOKEN = token;
-        try { console.log('[jobs/producer:gke] acquired access token from metadata server for K8s API'); } catch {}
-      } catch (e) {
-        try { console.warn('[jobs/producer:gke] failed to get metadata access token; ensure Cloud Run SA has default access and metadata server is reachable', String(e?.message || e)); } catch {}
-      }
-    }
-
-    const { batch, mode } = getBatchClient();
+    const { batch, mode } = await getBatchClient();
     const container = {
       name: containerName || 'main',
       image,
@@ -176,12 +166,25 @@ export async function runK8sJob({ namespace, jobName, image, serviceAccountName,
   }
 }
 
-export async function deleteK8sJob({ namespace, jobName, propagationPolicy = 'Background' }) {
+export async function deleteK8sJob({ namespace, jobName, propagationPolicy = 'Foreground' }) {
   if (!namespace || !jobName) return { ok: false, status: 400, error: 'Missing namespace/jobName' };
   try {
-    const { batch } = getBatchClient();
+    const { batch } = await getBatchClient();
     const resp = await batch.deleteNamespacedJob(jobName, namespace, undefined, undefined, 0, undefined, propagationPolicy);
-    return { ok: true, status: resp?.response?.statusCode || 200, data: resp?.body };
+    // Foreground deletion + a 404 read confirms the Job is gone before unlock.
+    const deadline = Date.now() + 30000;
+    while (Date.now() < deadline) {
+      try {
+        await batch.readNamespacedJob(jobName, namespace);
+      } catch (error) {
+        if (error?.response?.statusCode === 404) {
+          return { ok: true, status: resp?.response?.statusCode || 200 };
+        }
+        throw error;
+      }
+      await new Promise(resolve => setTimeout(resolve, 750));
+    }
+    return { ok: false, status: 504, error: 'Timed out waiting for Kubernetes Job shutdown' };
   } catch (e) {
     // Treat 404 as success (already deleted)
     const code = e?.response?.statusCode;
@@ -197,7 +200,7 @@ export async function deleteK8sJob({ namespace, jobName, propagationPolicy = 'Ba
 export async function inspectK8sJob({ namespace, jobName }) {
   if (!namespace || !jobName) return { state: 'unknown' };
   try {
-    const { batch } = getBatchClient();
+    const { batch } = await getBatchClient();
     const response = await batch.readNamespacedJob(jobName, namespace);
     const status = response?.body?.status || {};
     const conditions = Array.isArray(status.conditions) ? status.conditions : [];
