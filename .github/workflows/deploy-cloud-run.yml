@@ -136,17 +136,26 @@ jobs:
       - name: Build --set-secrets flag from secrets.txt
         id: secrets
         run: |
-          # Cloud Run expects ENV=SECRET:VERSION (optionally :PROJECT for cross-project).
-          # Using same-project secrets, so we omit the projects/... path used by Cloud Functions.
+          set -euo pipefail
+          # Cloud Run expects ENV=SECRET:VERSION in the deployment project.
           if [[ -f secrets.txt ]]; then
-            secret_list=$(grep -vE '^\s*#' secrets.txt | grep -vE '^\s*
-            if [[ -n "${secret_list}" ]]; then
-              echo "SECRET_FLAGS=--set-secrets=${secret_list}" >> "$GITHUB_OUTPUT"
-            else
-              echo "SECRET_FLAGS=" >> "$GITHUB_OUTPUT"
-            fi
+            secret_list=$(awk 'NF && $1 !~ /^#/ { print $1 "=" $1 ":latest" }' secrets.txt | paste -sd ',' -)
           else
-            echo "secrets.txt not found; continuing without --set-secrets"
+            secret_list=''
+          fi
+
+          # OAuth is optional until the client ID and secret are provisioned.
+          if [[ -n "${GOOGLE_CLOUD_OAUTH_CLIENT_ID:-}" ]]; then
+            if gcloud secrets describe GOOGLE_CLOUD_OAUTH_CLIENT_SECRET --project="${GCP_PROJECT_ID}" --quiet >/dev/null 2>&1; then
+              secret_list="${secret_list}${secret_list:+,}GOOGLE_CLOUD_OAUTH_CLIENT_SECRET=GOOGLE_CLOUD_OAUTH_CLIENT_SECRET:latest"
+            else
+              echo 'Google OAuth client secret is missing; Google Cloud connection remains disabled'
+            fi
+          fi
+
+          if [[ -n "${secret_list}" ]]; then
+            echo "SECRET_FLAGS=--set-secrets=${secret_list}" >> "$GITHUB_OUTPUT"
+          else
             echo "SECRET_FLAGS=" >> "$GITHUB_OUTPUT"
           fi
 
