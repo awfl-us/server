@@ -4,6 +4,7 @@ import { consumerNames } from './tools.js';
 // lifecycle is used by both MCP and regular /producer/start requests.
 const ensureProjectConsumer = async args => (await import('../jobs/producer/start.js')).ensureProjectConsumer(args);
 const getConsumerLock = async args => (await import('../workflows/projects/lock.js')).getConsumerLock(args);
+const inspectK8sJob = async args => (await import('../jobs/producer/gke.js')).inspectK8sJob(args);
 import { pickBackend, normalizeEnvelope } from '../workflows/events/model.js';
 
 export const digest = value => createHash('sha256').update(value).digest('hex');
@@ -13,8 +14,8 @@ export const validId = value => typeof value === 'string' && /^[a-f0-9]{32}$/.te
 // An MCP workspace is now an attachment to a project consumer, NOT a GKE Job.
 // Multiple sessions/clients can share one project environment and consumer lock.
 export class ExecutionService {
-  constructor({ db, ownerId = process.env.MCP_OWNER_UID, startConsumer = ensureProjectConsumer, getLock = getConsumerLock, backend = pickBackend }) {
-    Object.assign(this, { db, ownerId, startConsumer, getLock, backend });
+  constructor({ db, ownerId = process.env.MCP_OWNER_UID, startConsumer = ensureProjectConsumer, getLock = getConsumerLock, backend = pickBackend, inspectJob = inspectK8sJob }) {
+    Object.assign(this, { db, ownerId, startConsumer, getLock, backend, inspectJob });
   }
   async isOwner(userId) {
     if (this.ownerId) return userId === this.ownerId;
@@ -38,12 +39,20 @@ export class ExecutionService {
   }
   async status(userId, ws) {
     const { lock } = await this.getLock({ userId, projectId: ws.projectId });
-    const running = Boolean(lock && lock.expiresAt > Date.now());
+    const leaseActive = Boolean(lock && lock.expiresAt > Date.now());
+    const runtime = lock?.runtime;
+    const job = leaseActive && runtime?.mode === 'gke' && runtime.consumerJobName
+      ? await this.inspectJob({
+        namespace: runtime.namespace || process.env.K8S_NAMESPACE || 'awfl',
+        jobName: runtime.consumerJobName,
+      }) : null;
+    const running = leaseActive && job?.state !== 'failed' && job?.state !== 'not_found';
     return {
       state: running ? 'attached' : 'consumer_unavailable',
       project_id: ws.projectId, session_id: ws.sessionId,
-      consumer_id: running ? lock.consumerId : null,
+      consumer_id: leaseActive ? lock.consumerId : null,
       shared: true,
+      ...(job ? { consumer_job: job } : {}),
     };
   }
   async invoke(userId, name, args = {}) {
