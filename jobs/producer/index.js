@@ -25,7 +25,7 @@ router.use(express.json());
 // - Cloud Run path: attempts a best-effort per-run image override via containerOverrides; if the
 //   platform ignores image overrides, the job's configured image will be used.
 // - GKE path: uses CONSUMER_K8S_IMAGE by default, but allows override via body.image
-router.post('/start', async (req, res) => {
+export async function startProjectConsumer({ userId, projectId, body = {} }) {
   let consumerId = null;
   let lockAcquired = false;
   const bestEffortRelease = async (ctx = {}) => {
@@ -37,12 +37,9 @@ router.post('/start', async (req, res) => {
   };
 
   try {
-    const userId = req.userId;
-    const projectId = req.projectId;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized: missing user context' });
-    if (!projectId) return res.status(400).json({ error: 'Missing x-project-id header' });
+    if (!userId) return { status: 401, body: { error: 'Unauthorized: missing user context' } };
+    if (!projectId) return { status: 400, body: { error: 'Missing x-project-id header' } };
 
-    const body = req.body || {};
     let workspaceId = String(body.workspaceId || body.workspace_id || '').trim();
 
     // Optional explicit GCS prefix to pass to producer/consumer
@@ -51,7 +48,7 @@ router.post('/start', async (req, res) => {
     // Optional consumer image override (for local sidecar, Cloud Run, or GKE consumer)
     const requestedConsumerImage = String(body.image || '').trim();
     if (requestedConsumerImage && /\s|["'`]/.test(requestedConsumerImage)) {
-      return res.status(400).json({ error: 'Invalid image parameter' });
+      return { status: 400, body: { error: 'Invalid image parameter' } };
     }
 
     // Session handling
@@ -68,7 +65,7 @@ router.post('/start', async (req, res) => {
       try {
         workspaceId = await ensureWorkspaceId({ userId, projectId, sessionId: sessionIdForWorkspace, ttlMs: workspaceTtlMs });
       } catch (e) {
-        return res.status(400).json({ error: 'Failed to resolve/create workspace', details: String(e?.message || e) });
+        return { status: 400, body: { error: 'Failed to resolve/create workspace', details: String(e?.message || e) } };
       }
     }
 
@@ -89,7 +86,7 @@ router.post('/start', async (req, res) => {
 
     const lock = await acquireConsumerLock({ userId, projectId, consumerId, leaseMs, consumerType: 'CLOUD' });
     if (!lock.ok && lock.conflict) {
-      return res.status(202).json({ message: 'Lock held by another consumer', details: lock });
+      return { status: 202, body: { message: 'Lock held by another consumer', details: lock } };
     }
     lockAcquired = true;
 
@@ -105,7 +102,7 @@ router.post('/start', async (req, res) => {
     const producerSa = process.env.PRODUCER_JOB_SA_EMAIL || '';
     const consumerSa = process.env.CONSUMER_JOB_SA_EMAIL || '';
 
-    if (!gcpProject) { await bestEffortRelease({ userId, projectId }); return res.status(500).json({ error: 'Server missing GCP project configuration' }); }
+    if (!gcpProject) { await bestEffortRelease({ userId, projectId }); return { status: 500, body: { error: 'Server missing GCP project configuration' } }; }
 
     // Resolve Firebase and GitHub credentials using the shared cloud-consumer helper.
     const { githubToken, firebaseIdToken, firebaseCustomToken } = await loadConsumerCredentials({ userId, projectId });
@@ -139,7 +136,7 @@ router.post('/start', async (req, res) => {
         lockToken,
         lockId,
       });
-      return res.status(status).json(bodyOut);
+      return { status: status, body: bodyOut };
     }
 
     // Determine platform: default to GKE
@@ -166,13 +163,13 @@ router.post('/start', async (req, res) => {
       const createdReq = await ensureSubscription({ gcpProject, name: subReq, topic, filter: reqFilter });
       if (!createdReq.ok) {
         await bestEffortRelease({ userId, projectId });
-        return res.status(500).json({ error: 'Failed to create req subscription', details: createdReq.data || createdReq });
+        return { status: 500, body: { error: 'Failed to create req subscription', details: createdReq.data || createdReq } };
       }
       const createdResp = await ensureSubscription({ gcpProject, name: subResp, topic, filter: respFilter });
       if (!createdResp.ok) {
         await deleteSubscription({ gcpProject, name: subReq }).catch(() => {});
         await bestEffortRelease({ userId, projectId });
-        return res.status(500).json({ error: 'Failed to create resp subscription', details: createdResp.data || createdResp });
+        return { status: 500, body: { error: 'Failed to create resp subscription', details: createdResp.data || createdResp } };
       }
 
       try {
@@ -207,7 +204,7 @@ router.post('/start', async (req, res) => {
         bestEffortRelease,
         // TODO: wire firebaseIdToken/customToken to Cloud Run consumer when supported
       });
-      return res.status(status).json(bodyOut);
+      return { status: status, body: bodyOut };
     }
 
     // GKE path (default) — no Pub/Sub
@@ -234,20 +231,42 @@ router.post('/start', async (req, res) => {
       lockToken,
       lockId,
     });
-    return res.status(status).json(bodyOut);
+    return { status: status, body: bodyOut };
   } catch (err) {
     console.error('[jobs/producer:start] error', err);
     try {
-      const userId = req.userId;
-      const projectId = req.projectId;
+      const userId = userId;
+      const projectId = projectId;
       if (userId && projectId && consumerId) {
         await releaseConsumerLock({ userId, projectId, consumerId });
       }
       // Best-effort: cancel/clear any scheduled progress
-      if (req.userId && req.projectId) cancelStartupProgress({ userId: req.userId, projectId: req.projectId, reason: 'exception' });
+      if (userId && projectId) cancelStartupProgress({ userId: userId, projectId: projectId, reason: 'exception' });
     } catch {}
-    return res.status(500).json({ error: String(err?.message || err) });
+    return { status: 500, body: { error: String(err?.message || err) } };
   }
+}
+
+// Both the browser and MCP use this launcher; an existing project lock means
+// we attach to the current consumer rather than creating another GKE Job.
+export async function ensureProjectConsumer({ userId, projectId }) {
+  const { lock } = await getConsumerLock({ userId, projectId });
+  if (lock && lock.expiresAt > Date.now()) {
+    return { state: 'attached', consumerId: lock.consumerId };
+  }
+  const result = await startProjectConsumer({ userId, projectId });
+  if (result.status === 202 && result.body?.message === 'Lock held by another consumer') {
+    return { state: 'attached', consumerId: result.body.details?.holder?.consumerId };
+  }
+  if (result.status !== 202 || !result.body?.ok) {
+    throw new Error(result.body?.error || 'Could not start project consumer');
+  }
+  return { state: 'starting', consumerId: result.body.consumerId };
+}
+
+router.post('/start', async (req, res) => {
+  const result = await startProjectConsumer({ userId: req.userId, projectId: req.projectId, body: req.body || {} });
+  return res.status(result.status).json(result.body);
 });
 
 // POST /jobs/producer/stop
