@@ -7,7 +7,7 @@ import { tools } from './tools.js';
 export function createMcpRouter(service, authenticate = requireAwflApiKey()) {
   const router = express.Router();
   router.use(authenticate);
-  router.use((req, res, next) => {
+  router.use(async (req, res, next) => {
     try {
       if (!await service.isOwner(req.userId)) return res.status(403).json({ error: 'Private execution service: owner access required' });
     } catch {
