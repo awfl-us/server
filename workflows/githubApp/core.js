@@ -4,10 +4,11 @@ const SEGMENT = /^[A-Za-z0-9_.-]+$/;
 
 export function parseGithubRemote(remote) {
   if (typeof remote !== 'string') return null;
+  // projects.normalizeGitRemote strips https:// and git@ on save.
   const normalized = remote.trim()
-    .replace(/^git@github\.com:/i, 'https://github.com/')
+    .replace(/^git@github\.com[:/]/i, 'https://github.com/')
     .replace(/^ssh:\/\/git@github\.com\//i, 'https://github.com/')
-    .replace(/^github\.com\//i, 'https://github.com/');
+    .replace(/^github\.com[:/]/i, 'https://github.com/');
   let url;
   try { url = new URL(normalized); } catch { return null; }
   if (!['https:', 'http:'].includes(url.protocol) || url.hostname !== 'github.com' ||
@@ -15,7 +16,7 @@ export function parseGithubRemote(remote) {
   const parts = url.pathname.replace(/^\//, '').replace(/\/$/, '').split('/');
   if (parts.length !== 2 || !SEGMENT.test(parts[0])) return null;
   const repo = parts[1].replace(/\.git$/i, '');
-  if (!repo || !SEGMENT.test(repo)) return null;
+  if (!repo || !SEGMENT.test(repo) || ['.', '..'].includes(repo) || ['.', '..'].includes(parts[0])) return null;
   return { owner: parts[0], repo, fullName: parts[0] + '/' + repo };
 }
 
