@@ -1,3 +1,8 @@
+// DEPRECATED: Legacy Node.js Pub/Sub consumer. Superseded by the Python
+// AWFL CLI consumer image defined in cloud/sse-consumer/Dockerfile and
+// launched via jobs/producer/paths/gke.js for cloud execution.
+// Do not use this worker for new deployments.
+
 // Pub/Sub consumer worker
 // - Subscribes to SUBSCRIPTION for channel=req messages
 // - Decrypts payloads using ENC_KEY_B64 and routing AAD
