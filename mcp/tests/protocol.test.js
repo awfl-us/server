@@ -192,3 +192,25 @@ test('workspace health checks the existing consumer Job rather than trusting a l
   assert.equal(status.state, 'consumer_unavailable');
   assert.equal(status.consumer_job.failed, 1);
 });
+
+test('pending MCP request exposes persisted Firestore lifecycle without leaking command data', async () => {
+  const db = memoryDb();
+  const id = 'a'.repeat(32);
+  const requestRef = db.collection('mcpWorkspaces').doc(id).collection('mcpRequests').doc('00000001');
+  await db.collection('mcpWorkspaces').doc(id).set({
+    userId: 'owner', projectId: 'topaigents', sessionId: 'test-session',
+    expiresAt: Date.now() + 60000, stopped: false,
+  });
+  await requestRef.set({ state: 'queued', createdAt: 1234, toolName: 'run_command',
+    args: { command: 'secret-command' } });
+  const service = new ExecutionService({ db, ownerId: 'owner' });
+  assert.deepEqual(await service.invoke('owner', 'request_result', { workspace_id: id, request_id: 1 }), {
+    state: 'pending', request_id: 1, request_state: 'queued',
+    created_at: 1234, claimed_at: null,
+  });
+  await requestRef.update({ state: 'running', claimedAt: 2345 });
+  assert.deepEqual(await service.invoke('owner', 'request_result', { workspace_id: id, request_id: 1 }), {
+    state: 'pending', request_id: 1, request_state: 'running',
+    created_at: 1234, claimed_at: 2345,
+  });
+});
