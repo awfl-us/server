@@ -21,7 +21,7 @@ export function parseGithubRemote(remote) {
 
 export function githubAppConfigured(env = process.env) {
   return Boolean(env.GITHUB_APP_ID && env.GITHUB_APP_CLIENT_ID &&
-    env.GITHUB_APP_CLIENT_SECRET && env.GITHUB_APP_PRIVATE_KEY_B64);
+    env.GITHUB_APP_CLIENT_SECRET && env.GITHUB_APP_PRIVATE_KEY_B64 && env.GITHUB_APP_SLUG);
 }
 
 export function githubAppInstallUrl(env = process.env) {
