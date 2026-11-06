@@ -8,6 +8,6 @@ export const tools = {
   run_command: { description: 'Execute Bash using the existing AWFL RUN_COMMAND tool. Returns stdout, stderr and exitCode on completion; use request_result if pending. Optional cwd affects this command only. Obtain user approval before destructive operations.', schema: { ...workspace, command: z.string().min(1).max(16384), cwd: z.string().max(4096).optional(), timeout: z.number().int().min(1).max(900).default(120) } },
   read_file: { description: 'Read a UTF-8 file using the existing AWFL READ_FILE tool.', schema: { ...workspace, path: z.string().min(1).max(4096) }, readOnly: true },
   write_file: { description: 'Create or replace a workspace file. Obtain approval before destructive overwrites.', schema: { ...workspace, path: z.string().min(1).max(4096), content: z.string().max(32768) } },
-  workspace_stop: { description: 'Detach the MCP session from its workspace. Never stop the shared project consumer or other clients; requires confirmation.', schema: { ...workspace, confirm: z.literal(true) } },
+  workspace_stop: { description: 'Stop the shared project consumer using the same shutdown path as /producer/stop (Kubernetes Job shutdown, then project lock release). Interrupts other sessions. Requires explicit confirmation; workspace_create starts a new consumer.', schema: { ...workspace, confirm: z.literal(true) } },
 };
 export const consumerNames = { run_command: 'RUN_COMMAND', read_file: 'READ_FILE', write_file: 'UPDATE_FILE' };
