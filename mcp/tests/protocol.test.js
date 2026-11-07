@@ -52,7 +52,7 @@ function memoryDb() {
   };
 }
 
-test('MCP SDK exposes seven tools and enforces owner auth', async () => {
+test('MCP SDK exposes eight tools and enforces owner auth', async () => {
   const app = express(); app.use(express.json());
   const service = { isOwner: async user => user === 'owner', invoke: async (user, name, args) => ({ user, name, args }) };
   app.use('/mcp', createMcpRouter(service, (req, res, next) => {
@@ -71,7 +71,8 @@ test('MCP SDK exposes seven tools and enforces owner auth', async () => {
     }
     await client.connect(new StreamableHTTPClientTransport(url, { requestInit: { headers: { Authorization: 'Bearer valid' } } }));
     const listed = await client.listTools();
-    assert.equal(listed.tools.length, 7);
+    assert.equal(listed.tools.length, 8);
+    assert.equal(listed.tools.find(t => t.name === 'projects_list').annotations.readOnlyHint, true);
     assert.equal(listed.tools.find(t => t.name === 'run_command').annotations.destructiveHint, true);
     assert.equal(listed.tools.find(t => t.name === 'workspace_create').inputSchema.required.includes('project_id'), true);
     const result = await client.callTool({ name: 'environment_status', arguments: {} });
