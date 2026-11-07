@@ -63,6 +63,7 @@ export class ExecutionService {
       execution: 'Existing project-scoped consumer; one GKE Job/lock per project',
       configured: true,
     };
+    if (name === 'projects_list') return this.listProjects(userId, args);
     if (name === 'workspace_create') return this.create(userId, args);
     const ws = await this.owned(userId, args.workspace_id, { allowStopped: name === 'workspace_stop' });
     if (name === 'workspace_stop') {
@@ -168,6 +169,31 @@ export class ExecutionService {
         clearTimeout(timer); unsubscribe(); reject(new Error('Response unavailable'));
       });
     });
+  }
+  async listProjects(userId, { limit = 50 } = {}) {
+    // Project records are already scoped to the authenticated owner. Sort in
+    // memory to support older records without an 'updated' field or new indexes.
+    const snap = await this.db.collection('users').doc(userId).collection('projects').get();
+    const timestamp = value => {
+      if (typeof value === 'number') return value;
+      if (value?.toMillis) return value.toMillis();
+      if (typeof value === 'string') return Date.parse(value) || 0;
+      return 0;
+    };
+    const projects = snap.docs.map(doc => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        name: data.name || null,
+        remote: data.remote || null,
+        updated: data.updated ?? null,
+        created: data.created ?? null,
+      };
+    }).sort((a, b) =>
+      (timestamp(b.updated) || timestamp(b.created)) -
+      (timestamp(a.updated) || timestamp(a.created))
+    ).slice(0, Math.min(Math.max(1, limit), 200));
+    return { projects };
   }
   async create(userId, args = {}) {
     // Do not silently select a random project as the earlier MCP implementation did.
