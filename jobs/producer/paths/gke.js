@@ -41,10 +41,10 @@ export async function startGke({
   const startupSh = process.env.AWFL_STARTUP_SH || defaultStartup;
   // The former MCP path launched the same image directly (no intermediate shell).
   // Apply that small optimization to every standard project consumer as well.
-  const refreshEnabled = Boolean(googleCloud?.accessToken && credentialRefreshToken);
+  const refreshEnabled = Boolean(credentialRefreshToken && (googleCloud?.accessToken || githubToken));
   const directCommand = startupSh === defaultStartup && !refreshEnabled ? ['awfl', 'run'] : undefined;
   const effectiveStartup = refreshEnabled && startupSh === defaultStartup
-    ? 'if python -c "import awfl.consumer_credentials" 2>/dev/null; then unset CLOUDSDK_AUTH_ACCESS_TOKEN; python -m awfl.consumer_credentials --once && (python -m awfl.consumer_credentials --loop & exec awfl run); else echo "[awfl] consumer image lacks credential refresher; using startup token until image update" >&2; exec awfl run; fi'
+    ? 'if python -c "import awfl.consumer_credentials" 2>/dev/null; then unset CLOUDSDK_AUTH_ACCESS_TOKEN; python -m awfl.consumer_credentials --once && (git config --global credential.https://github.com.helper "!python -m awfl.consumer_credentials --git-credential"; python -m awfl.consumer_credentials --loop & exec awfl run); else echo "[awfl] consumer image lacks credential refresher; using startup token until image update" >&2; exec awfl run; fi'
     : startupSh;
 
   if (!consumerImage) {
@@ -94,15 +94,18 @@ export async function startGke({
     { name: 'AWFL_PROJECT_ID', value: String(projectId) },
     { name: 'AWFL_CONSUMER_TYPE', value: 'CLOUD' },
     ...(githubToken ? [{ name: 'GITHUB_TOKEN', value: githubToken }] : []),
+    ...(refreshEnabled && githubToken ? [{ name: 'AWFL_GITHUB_TOKEN_FILE', value: '/tmp/awfl-github-token' }] : []),
     // Keep the OAuth refresh token on the server. gcloud reads the latest
     // access token from a file updated atomically by the consumer refresher.
     ...(refreshEnabled ? [
-      { name: 'CLOUDSDK_AUTH_ACCESS_TOKEN', value: googleCloud.accessToken }, // compatibility with older consumer images
+      ...(googleCloud?.accessToken ? [{ name: 'CLOUDSDK_AUTH_ACCESS_TOKEN', value: googleCloud.accessToken }] : []), // compatibility with older consumer images
       { name: 'AWFL_USER_ID', value: userId },
       { name: 'AWFL_CREDENTIAL_REFRESH_ORIGIN', value: String(process.env.API_ORIGIN || resolvedWorkflowsBaseUrl).split('/workflows')[0] },
       { name: 'AWFL_CREDENTIAL_REFRESH_CAPABILITY', value: credentialRefreshToken },
-      { name: 'CLOUDSDK_AUTH_ACCESS_TOKEN_FILE', value: '/tmp/awfl-google-access-token' },
-      { name: 'CLOUDSDK_CORE_PROJECT', value: googleCloud.cloudProjectId },
+      ...(googleCloud?.accessToken ? [
+        { name: 'CLOUDSDK_AUTH_ACCESS_TOKEN_FILE', value: '/tmp/awfl-google-access-token' },
+        { name: 'CLOUDSDK_CORE_PROJECT', value: googleCloud.cloudProjectId },
+      ] : []),
     ] : []),
     ...(resolvedWorkflowsBaseUrl ? [{ name: 'WORKFLOWS_BASE_URL', value: resolvedWorkflowsBaseUrl }] : []),
     ...(baseCtx?.eventsHeartbeatMs ? [{ name: 'EVENTS_HEARTBEAT_MS', value: baseCtx.eventsHeartbeatMs }] : []),
