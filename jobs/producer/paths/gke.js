@@ -99,7 +99,7 @@ export async function startGke({
     ...(refreshEnabled ? [
       { name: 'CLOUDSDK_AUTH_ACCESS_TOKEN', value: googleCloud.accessToken }, // compatibility with older consumer images
       { name: 'AWFL_USER_ID', value: userId },
-      { name: 'AWFL_CREDENTIAL_REFRESH_ORIGIN', value: String(process.env.API_ORIGIN || resolvedWorkflowsBaseUrl).replace(/\\/workflows\\/?$/, '') },
+      { name: 'AWFL_CREDENTIAL_REFRESH_ORIGIN', value: String(process.env.API_ORIGIN || resolvedWorkflowsBaseUrl).split('/workflows')[0] },
       { name: 'AWFL_CREDENTIAL_REFRESH_CAPABILITY', value: credentialRefreshToken },
       { name: 'CLOUDSDK_AUTH_ACCESS_TOKEN_FILE', value: '/tmp/awfl-google-access-token' },
       { name: 'CLOUDSDK_CORE_PROJECT', value: googleCloud.cloudProjectId },
