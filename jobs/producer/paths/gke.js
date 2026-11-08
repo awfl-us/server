@@ -44,7 +44,7 @@ export async function startGke({
   const refreshEnabled = Boolean(credentialRefreshToken && (googleCloud?.accessToken || githubToken));
   const directCommand = startupSh === defaultStartup && !refreshEnabled ? ['awfl', 'run'] : undefined;
   const effectiveStartup = refreshEnabled && startupSh === defaultStartup
-    ? 'if python -c "import awfl.consumer_credentials" 2>/dev/null; then unset CLOUDSDK_AUTH_ACCESS_TOKEN; python -m awfl.consumer_credentials --once && (git config --global credential.https://github.com.helper "!python -m awfl.consumer_credentials --git-credential"; python -m awfl.consumer_credentials --loop & exec awfl run); else echo "[awfl] consumer image lacks credential refresher; using startup token until image update" >&2; exec awfl run; fi'
+    ? 'if python -c "import awfl.consumer_credentials" 2>/dev/null; then unset CLOUDSDK_AUTH_ACCESS_TOKEN; python -m awfl.consumer_credentials --once && (git config --global credential.helper "!python -m awfl.consumer_credentials --git-credential"; python -m awfl.consumer_credentials --loop & exec awfl run); else echo "[awfl] consumer image lacks credential refresher; using startup token until image update" >&2; exec awfl run; fi'
     : startupSh;
 
   if (!consumerImage) {
