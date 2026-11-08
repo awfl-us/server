@@ -1,4 +1,5 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
+import { projectDoc } from '../../workflows/projects/util.js';
 import { requiredEnv, randomId } from './utils.js';
 import { ensureWorkspaceId } from '../../workflows/workspace/service.js';
 import { acquireConsumerLock, releaseConsumerLock, getConsumerLock } from '../../workflows/projects/lock.js';
@@ -68,12 +69,14 @@ export async function startProjectConsumer({ userId, projectId, body = {} }) {
     // Mint an external project lock token and id for this run
     const lockToken = randomBytes(32).toString('hex');
     const lockId = randomId('lock');
+    const credentialRefreshToken = randomBytes(32).toString('hex');
 
     const lock = await acquireConsumerLock({ userId, projectId, consumerId, leaseMs, consumerType: 'CLOUD' });
     if (!lock.ok && lock.conflict) {
       return { status: 202, body: { message: 'Lock held by another consumer', details: lock } };
     }
     lockAcquired = true;
+    await projectDoc(userId, projectId).set({ consumerCredentialRefresh: { consumerId, hash: createHash('sha256').update(credentialRefreshToken).digest('hex') } }, { merge: true });
 
     const sidecarEnabled = String(process.env.PRODUCER_SIDECAR_ENABLE || '').trim() === '1';
     const sidecarDefaultImage = process.env.PRODUCER_SIDECAR_CONSUMER_IMAGE || 'awfl-consumer:dev';
@@ -207,6 +210,7 @@ export async function startProjectConsumer({ userId, projectId, body = {} }) {
       sessionIdForFilter,
       githubToken,
       googleCloud,
+      credentialRefreshToken,
       workspaceId,
       since_id,
       since_time,
