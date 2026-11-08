@@ -44,7 +44,7 @@ export async function startGke({
   const refreshEnabled = Boolean(googleCloud?.accessToken && credentialRefreshToken);
   const directCommand = startupSh === defaultStartup && !refreshEnabled ? ['awfl', 'run'] : undefined;
   const effectiveStartup = refreshEnabled && startupSh === defaultStartup
-    ? 'python -m awfl.consumer_credentials --once && (python -m awfl.consumer_credentials --loop & exec awfl run)'
+    ? 'if python -c "import awfl.consumer_credentials" 2>/dev/null; then unset CLOUDSDK_AUTH_ACCESS_TOKEN; python -m awfl.consumer_credentials --once && (python -m awfl.consumer_credentials --loop & exec awfl run); else echo "[awfl] consumer image lacks credential refresher; using startup token until image update" >&2; exec awfl run; fi'
     : startupSh;
 
   if (!consumerImage) {
@@ -97,6 +97,7 @@ export async function startGke({
     // Keep the OAuth refresh token on the server. gcloud reads the latest
     // access token from a file updated atomically by the consumer refresher.
     ...(refreshEnabled ? [
+      { name: 'CLOUDSDK_AUTH_ACCESS_TOKEN', value: googleCloud.accessToken }, // compatibility with older consumer images
       { name: 'AWFL_USER_ID', value: userId },
       { name: 'AWFL_CREDENTIAL_REFRESH_ORIGIN', value: String(process.env.API_ORIGIN || resolvedWorkflowsBaseUrl).replace(/\\/workflows\\/?$/, '') },
       { name: 'AWFL_CREDENTIAL_REFRESH_CAPABILITY', value: credentialRefreshToken },
