@@ -17,6 +17,7 @@ export async function startGke({
   sessionIdForFilter,
   githubToken,
   googleCloud,
+  credentialRefreshToken,
   workspaceId,
   since_id, // unused in consumer-only mode
   since_time, // unused in consumer-only mode
@@ -40,7 +41,11 @@ export async function startGke({
   const startupSh = process.env.AWFL_STARTUP_SH || defaultStartup;
   // The former MCP path launched the same image directly (no intermediate shell).
   // Apply that small optimization to every standard project consumer as well.
-  const directCommand = startupSh === defaultStartup ? ['awfl', 'run'] : undefined;
+  const refreshEnabled = Boolean(googleCloud?.accessToken && credentialRefreshToken);
+  const directCommand = startupSh === defaultStartup && !refreshEnabled ? ['awfl', 'run'] : undefined;
+  const effectiveStartup = refreshEnabled && startupSh === defaultStartup
+    ? 'python -m awfl.consumer_credentials --once && (python -m awfl.consumer_credentials --loop & exec awfl run)'
+    : startupSh;
 
   if (!consumerImage) {
     await bestEffortRelease({ userId, projectId });
@@ -89,10 +94,13 @@ export async function startGke({
     { name: 'AWFL_PROJECT_ID', value: String(projectId) },
     { name: 'AWFL_CONSUMER_TYPE', value: 'CLOUD' },
     ...(githubToken ? [{ name: 'GITHUB_TOKEN', value: githubToken }] : []),
-    // Never pass the Google OAuth refresh token to a shared consumer.
-    // This access token is short-lived; reattaching after expiry refreshes it.
-    ...(googleCloud?.accessToken ? [
-      { name: 'CLOUDSDK_AUTH_ACCESS_TOKEN', value: googleCloud.accessToken },
+    // Keep the OAuth refresh token on the server. gcloud reads the latest
+    // access token from a file updated atomically by the consumer refresher.
+    ...(refreshEnabled ? [
+      { name: 'AWFL_USER_ID', value: userId },
+      { name: 'AWFL_CREDENTIAL_REFRESH_ORIGIN', value: String(process.env.API_ORIGIN || resolvedWorkflowsBaseUrl).replace(/\\/workflows\\/?$/, '') },
+      { name: 'AWFL_CREDENTIAL_REFRESH_CAPABILITY', value: credentialRefreshToken },
+      { name: 'CLOUDSDK_AUTH_ACCESS_TOKEN_FILE', value: '/tmp/awfl-google-access-token' },
       { name: 'CLOUDSDK_CORE_PROJECT', value: googleCloud.cloudProjectId },
     ] : []),
     ...(resolvedWorkflowsBaseUrl ? [{ name: 'WORKFLOWS_BASE_URL', value: resolvedWorkflowsBaseUrl }] : []),
@@ -141,7 +149,7 @@ export async function startGke({
 
   let cRun;
   try {
-    cRun = await runK8sJob({ namespace, jobName: consumerJobName, image: consumerImage, serviceAccountName: consumerKsa, envPairs: consumerEnv, containerName: 'consumer', ...(directCommand ? { command: directCommand } : { shCommand: startupSh }) });
+    cRun = await runK8sJob({ namespace, jobName: consumerJobName, image: consumerImage, serviceAccountName: consumerKsa, envPairs: consumerEnv, containerName: 'consumer', ...(directCommand ? { command: directCommand } : { shCommand: effectiveStartup }) });
   } catch (e) {
     await bestEffortRelease({ userId, projectId });
     return { status: 500, body: { error: 'Transport error creating consumer K8s Job', details: String(e?.message || e) } };
