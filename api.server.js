@@ -1,3 +1,4 @@
+import consumerCredentialRefresh from './workflows/googleCloud/consumerRefresh.js';
 import express from 'express'
 import workflowsRoutes from './workflows/index.js'
 import { getFirestore } from 'firebase-admin/firestore'
@@ -119,6 +120,7 @@ const execution = new ExecutionService({ db: getFirestore() })
 app.use('/mcp', createMcpRouter(execution))
 
 // Workflows (primary mount)
+app.use('/consumer-credentials/refresh', consumerCredentialRefresh)
 app.use('/workflows', workflowsRoutes)
 // Back-compat for local/dev prefix
 // app.use('/api/workflows', workflowsRoutes)
