@@ -48,7 +48,7 @@ RUN mkdir -p /etc/apt/keyrings \
 # Browser support lives in the existing AWFL consumer image, not a separate MCP image.
 # Install browser system dependencies while still root.
 RUN python -m pip install --no-cache-dir playwright==1.64.1 \
-    && python -m playwright install --with-deps chromium \
+    && python -m playwright install --with-deps --only-shell chromium \
     && chmod -R a+rX /ms-playwright
 
 # Include gcloud for project-scoped Google Cloud testing. OAuth refresh tokens never enter the image or Job.
