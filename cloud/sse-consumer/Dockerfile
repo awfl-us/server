@@ -89,7 +89,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && curl -fsSL --retry 3 "https://github.com/sbt/sbt/releases/download/v${SBT_VERSION}/sbt-${SBT_VERSION}.tgz" -o /tmp/sbt.tgz \
     && tar -xzf /tmp/sbt.tgz -C /opt \
-    && rm /tmp/sbt.tgz
+    && rm /tmp/sbt.tgz \
+    && ln -s /opt/sbt/bin/sbt /usr/local/bin/sbt
 ENV JAVA_HOME="/usr/lib/jvm/java-21-openjdk-amd64"
 ENV PATH="/opt/sbt/bin:${PATH}"
 USER awfl
