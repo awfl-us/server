@@ -114,7 +114,10 @@ export async function runK8sJob({ namespace, jobName, image, serviceAccountName,
     const container = {
       name: containerName || 'main',
       image,
-      env: (Array.isArray(envPairs) ? envPairs : []).map((e) => ({ name: String(e.name), value: String(e.value ?? '') })),
+      env: (Array.isArray(envPairs) ? envPairs : []).map((e) =>
+        e?.valueFrom?.fieldRef?.fieldPath === 'metadata.uid'
+          ? { name: String(e.name), valueFrom: { fieldRef: { fieldPath: 'metadata.uid' } } }
+          : { name: String(e.name), value: String(e.value ?? '') }),
     };
 
     if (Array.isArray(command) && command.length) {
