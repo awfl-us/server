@@ -206,8 +206,8 @@ export async function startGke({
   // Keep lightweight consumers inexpensive, and provision enough disk and RAM
   // for sbt dependency resolution and Scala incremental compilation.
   const resources = imageProfile === 'scala' ? {
-    requests: { cpu: '1', memory: '3Gi', 'ephemeral-storage': '4Gi' },
-    limits: { cpu: '4', memory: '8Gi', 'ephemeral-storage': '10Gi' },
+    requests: { cpu: '1', memory: '2Gi', 'ephemeral-storage': '1Gi' },
+    limits: { cpu: '2', memory: '4Gi', 'ephemeral-storage': '2Gi' },
   } : imageProfile === 'lightweight' ? {
     requests: { cpu: '250m', memory: '1Gi', 'ephemeral-storage': '1Gi' },
     limits: { cpu: '2', memory: '4Gi', 'ephemeral-storage': '2Gi' },
