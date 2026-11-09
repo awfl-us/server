@@ -76,7 +76,9 @@ router.post('/:id', async (req, res) => {
           ? await service.claim(userId, req.projectId, mcp.workspaceId, mcp.requestId, req.body.consumer_id)
           : kind === 'output'
             ? await service.progress(userId, req.projectId, mcp.workspaceId, mcp.requestId, req.body)
-            : await service.complete(userId, req.projectId, mcp.workspaceId, mcp.requestId, req.body);
+            : kind === 'output_batch'
+              ? await service.progressBatch(userId, req.projectId, mcp.workspaceId, mcp.requestId, req.body)
+              : await service.complete(userId, req.projectId, mcp.workspaceId, mcp.requestId, req.body);
         return res.status(result.ok ? 200 : 409).json(result);
       } catch (error) {
         return res.status(403).json({ error: error.publicMessage || 'Request inaccessible' });
