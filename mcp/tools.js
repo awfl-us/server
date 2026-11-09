@@ -11,7 +11,7 @@ export const tools = {
     schema: { ...workspace, request_id: z.number().int().min(1).max(2000) }, readOnly: true,
   },
   environment_status: {
-    description: 'Inspect separately the shared GKE Job state, consumer readiness and project queue.',
+    description: 'Discover the shared GKE consumer readiness, queue, and LIVE environment: tool availability, GCP/GitHub credential presence and token-file names (never secret values). Call with workspace_id after attaching a project. Stale heartbeat means unknown, not absent credentials. Full instructions: awfl://environment/guide.',
     schema: { workspace_id: id.optional() }, readOnly: true,
   },
   projects_list: {
