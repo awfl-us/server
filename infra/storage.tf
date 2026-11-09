@@ -28,21 +28,13 @@ locals {
   shared_bucket_name  = coalesce(var.storage_bucket_name, local.default_bucket_name)
 }
 
-resource "google_storage_bucket" "shared" {
-  name                        = lower(local.shared_bucket_name)
-  location                    = var.bucket_location
-  uniform_bucket_level_access = true
-  force_destroy               = true
-
-  lifecycle_rule {
-    condition { age = 30 }
-    action { type = "Delete" }
-  }
-
-  depends_on = [google_project_service.storage]
+# Storage bucket lifecycle/IAM for the cloud workspace lives in the isolated
+# infra/workspace-storage Terraform root. Do not manage it from two states.
+data "google_storage_bucket" "shared" {
+  name = lower(local.shared_bucket_name)
 }
 
 output "gcs_bucket_name" {
   description = "Name of the shared GCS bucket for work persistence"
-  value       = google_storage_bucket.shared.name
+  value       = data.google_storage_bucket.shared.name
 }

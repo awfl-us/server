@@ -46,36 +46,36 @@ resource "google_project_iam_member" "dev_server_bindings" {
 # Read access (list/get)
 resource "google_storage_bucket_iam_member" "dev_server_object_viewer" {
   count  = local.shared_bucket_name != "" ? 1 : 0
-  bucket = google_storage_bucket.shared.name
+  bucket = data.google_storage_bucket.shared.name
   role   = "roles/storage.objectViewer"
   member = "serviceAccount:${google_service_account.dev_server.email}"
   depends_on = [
     google_service_account.dev_server,
-    google_storage_bucket.shared,
+    data.google_storage_bucket.shared,
   ]
 }
 
 # Write access (create new objects under allowed prefixes)
 resource "google_storage_bucket_iam_member" "dev_server_object_creator" {
   count  = local.shared_bucket_name != "" ? 1 : 0
-  bucket = google_storage_bucket.shared.name
+  bucket = data.google_storage_bucket.shared.name
   role   = "roles/storage.objectCreator"
   member = "serviceAccount:${google_service_account.dev_server.email}"
   depends_on = [
     google_service_account.dev_server,
-    google_storage_bucket.shared,
+    data.google_storage_bucket.shared,
   ]
 }
 
 # Full object admin (create, overwrite, delete, update metadata)
 resource "google_storage_bucket_iam_member" "dev_server_object_admin" {
   count  = local.shared_bucket_name != "" ? 1 : 0
-  bucket = google_storage_bucket.shared.name
+  bucket = data.google_storage_bucket.shared.name
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.dev_server.email}"
   depends_on = [
     google_service_account.dev_server,
-    google_storage_bucket.shared,
+    data.google_storage_bucket.shared,
   ]
 }
 

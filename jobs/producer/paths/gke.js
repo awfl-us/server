@@ -48,7 +48,7 @@ export async function startGke({
   encVer,
   encFp,
   baseCtx,
-  gcsPrefix, // unused in consumer-only mode
+  gcsPrefix, // legacy argument; never used to form the new project's storage boundary
   sessionIdForFilter,
   githubToken,
   googleCloud,
@@ -128,15 +128,20 @@ export async function startGke({
     { name: 'AWFL_PROJECT_ID', value: String(projectId) },
     { name: 'AWFL_CONSUMER_TYPE', value: 'CLOUD' },
     { name: 'AWFL_IDLE_TIMEOUT_SECONDS', value: String(idleTimeoutSeconds ?? 3600) },
+    // Storage tokens are obtained from the existing lock-bound capability
+    // broker, independently of the user's optional Google/GitHub credentials.
+    ...(credentialRefreshToken ? [
+      { name: 'AWFL_USER_ID', value: userId },
+      { name: 'AWFL_CREDENTIAL_REFRESH_ORIGIN', value: String(process.env.API_ORIGIN || resolvedWorkflowsBaseUrl).split('/workflows')[0] },
+      { name: 'AWFL_CREDENTIAL_REFRESH_CAPABILITY', value: credentialRefreshToken },
+      { name: 'AWFL_WORKSPACE_GCS_BUCKET', value: String(process.env.AWFL_WORKSPACE_GCS_BUCKET || process.env.GCS_BUCKET || '') },
+    ] : []),
     ...(githubToken ? [{ name: 'GITHUB_TOKEN', value: githubToken }] : []),
     ...(refreshEnabled && githubToken ? [{ name: 'AWFL_GITHUB_TOKEN_FILE', value: '/tmp/awfl-github-token' }] : []),
     // Keep the OAuth refresh token on the server. gcloud reads the latest
     // access token from a file updated atomically by the consumer refresher.
     ...(refreshEnabled ? [
       ...(googleCloud?.accessToken ? [{ name: 'CLOUDSDK_AUTH_ACCESS_TOKEN', value: googleCloud.accessToken }] : []), // compatibility with older consumer images
-      { name: 'AWFL_USER_ID', value: userId },
-      { name: 'AWFL_CREDENTIAL_REFRESH_ORIGIN', value: String(process.env.API_ORIGIN || resolvedWorkflowsBaseUrl).split('/workflows')[0] },
-      { name: 'AWFL_CREDENTIAL_REFRESH_CAPABILITY', value: credentialRefreshToken },
       ...(googleCloud?.accessToken ? [
         { name: 'CLOUDSDK_AUTH_ACCESS_TOKEN_FILE', value: '/tmp/awfl-google-access-token' },
         { name: 'CLOUDSDK_CORE_PROJECT', value: googleCloud.cloudProjectId },

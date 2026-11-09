@@ -22,3 +22,9 @@ infra/gke-guardrails/.terraform/
 infra/gke-guardrails/*.tfstate
 infra/gke-guardrails/*.tfstate.backup
 infra/gke-guardrails/*.tfplan
+
+# Isolated persistent workspace storage Terraform state and providers.
+infra/workspace-storage/.terraform/
+infra/workspace-storage/*.tfstate
+infra/workspace-storage/*.tfstate.backup
+infra/workspace-storage/*.tfplan
