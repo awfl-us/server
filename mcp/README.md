@@ -1,77 +1,62 @@
 # AWFL MCP: shared project consumer
 
-The existing API service exposes MCP at `https://api.awfl.us/mcp`.
-Authenticated MCP tools use an AWFL API key with the `mcp:invoke` scope;
-the service remains restricted to the owner. **MCP is a client of AWFL's
-existing project consumer, not a separate execution environment.**
+Production endpoint: https://api.awfl.us/mcp
 
-## Single environment per project
+AWFL MCP uses the **existing** project-scoped Python consumer, GKE Job,
+Firestore execution store and shared consumer lock, not another backend.
 
-The regular `POST /workflows/producer/start` route and MCP both use
-`jobs/producer/start.js`:
+## Discover the environment
 
-- A project's normal `consumerLock` is the sole authority for startup.
-- If a consumer already holds an unexpired lock, MCP attaches. This applies
-  to the CLI and cloud consumer alike.
-- Otherwise the shared startup helper acquires the same lock, creates the
-  normal project workspace, and starts the ordinary GKE consumer Job
-  (`consumer-...`). No `mcp-...` Job is created.
-- The consumer continues to use the existing image, `awfl` namespace,
-  service account, Firebase and GitHub App credentials.
-- A default GKE consumer starts via the image's direct `['awfl', 'run']`
-  entrypoint. Custom `AWFL_STARTUP_SH` continues to use the shell.
+MCP clients receive concise **server instructions** on initialization. The
+server publishes a guide resource at awfl://environment/guide via the standard
+MCP resources/list and resources/read methods.
 
-An MCP `workspace_id` is **an attachment handle**, not a new Kubernetes
-runtime. `workspace_create` requires `project_id` (no arbitrary first
-project) and optionally takes `session_id`; if omitted, it generates an
-MCP-specific session identifier and returns it. Multiple attachments can
-share one project consumer. `workspace_stop` detaches the MCP handle
-without stopping or deleting the shared consumer. To actually stop the
-project consumer, use the existing `/workflows/producer/stop` lifecycle.
+For actual environment facts, use the following tools:
 
-## Requests and sessions
+1. projects_list then workspace_create with project_id.
+2. environment_status with workspace_id to see readiness, installed tools,
+   GCP/GitHub credential availability, known token-file environment names and
+   refresh configuration. This comes from the live project heartbeat.
+3. A null environment means the heartbeat is absent or stale: **unknown**,
+   not credentials absent.
+4. run_command, command_output, read_file, apply_patch, search_files and
+   list_directory work through the same project consumer.
 
-MCP adapts `run_command`, `read_file`, and `write_file` into the
-same `RUN_COMMAND`, `READ_FILE`, and `UPDATE_FILE` tool calls emitted
-by the normal web client. The relay event type is `message`, and the
-payload carries the standard `tool_call` and `callback_id` fields.
+The consumer publishes an allowlisted inventory on the existing
+Firebase-authenticated heartbeat. The server checks the project lock
+generation and sanitizes the inventory before storing it in Firestore. It
+never returns token values or arbitrary environment variables.
 
-The existing project-wide AWFL consumer executes these operations with
-`handle_response()` unchanged. It posts the result to the usual
-`/workflows/callbacks/:callbackId` endpoint using Firebase user auth.
-A server-created callback record routes that result directly to the MCP
-request in Firestore; it does not forward the result over another HTTP
-connection. No second command implementation or SSE event handler is needed.
+## Credentials
 
-MCP calls wait up to 15s for the result. For longer commands, the API
-returns `state=pending`; poll `request_result` using the same workspace
-and request ID, without resubmitting the command. `run_command` reports
-the standard AWFL `output`, `error` and `exitCode` fields.
+When connected, CLOUDSDK_AUTH_ACCESS_TOKEN_FILE normally identifies
+/tmp/awfl-google-access-token, while CLOUDSDK_CORE_PROJECT identifies the GCP
+project. AWFL_GITHUB_TOKEN_FILE normally identifies /tmp/awfl-github-token.
+Git uses a dynamic credential helper and freshly spawned Python tool
+processes can receive updated GITHUB_TOKEN and GH_TOKEN values.
 
-Streaming and cancellation are deliberately not exposed: the ordinary
-AWFL handler currently returns a completed result, not a persistent
-execution ID. Any future streaming implementation should extend the
-*shared* AWFL execution system rather than create a separate MCP runtime.
+Credential presence is not a live OAuth/IAM verification. Never print,
+copy, paste or log token-file contents.
 
-AWFL relay event delivery uses the same reconnect/replay semantics for
-MCP and web-originated tool calls. Results are de-duplicated in Firestore,
-but the standard consumer does not currently atomically claim events
-before executing them. A replay before callback completion can therefore
-repeat a command, just as with existing web tool calls. Do not assume
-exactly-once shell side effects; use idempotent commands where needed.
+An AWFL MCP API key is distinct from Google Cloud and GitHub credentials.
+AWFL keys are managed under web Settings > API Keys or the Firebase ID
+token-authenticated /workflows/api-keys endpoints. Neither Google OAuth tokens
+nor MCP keys authorize the AWFL API-key management endpoints.
 
-## Safety and deployment
+## Execution and lifecycle
 
-The caller must own the selected project. Per-request claim/result checks
-also verify user, project, workspace, and bounded request numbers. The
-consumer does not expose any MCP-specific callback bearer token. Because
-the project environment has credentials, execute only trusted commands.
+A workspace_id is an attachment to the shared consumer, not a new GKE Job.
+Commands return durable execution IDs and support idempotency keys. Use
+command_output for cursor-based output and command_input/command_cancel for
+interactive tasks. A nonzero command exit remains a normal result.
 
-This is deliberately owner-only and not a multi-tenant arbitrary shell
-service. MCP does not install any separate GKE infrastructure. Any changes
-to the Python consumer are pinned through `AWFL_CLI_REF` in the existing
-deployment workflow. Do not deploy a server that emits MCP project events
-until the corresponding updated Python CLI image has been deployed.
+workspace_stop stops the **shared** consumer, can interrupt other attached
+clients, and requires explicit confirmation.
 
-Tests: `node --test mcp/tests/*.test.js` (server) and
-`python -m unittest discover -s tests -v` (CLI).
+The Python CLI is a **separate repository**, awfl-us/cli. After modifying
+Python code, merge the CLI changes and pin the exact commit through
+AWFL_CLI_REF in .github/workflows/deploy-cloud-run.yml. New container images
+are used by newly launched GKE Jobs; existing Jobs are not silently replaced.
+
+Tests: node --test mcp/tests/*.test.js (server);
+python -m unittest discover -s tests -v (CLI).
