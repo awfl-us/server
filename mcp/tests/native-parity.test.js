@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { ExecutionService, executionIdFor } from '../service.js';
 
 function memoryDb() {
@@ -58,6 +59,39 @@ async function setup(ctx) {
   return ctx.service.create('owner', { project_id: 'project-1' });
 }
 
+test('view_image reuses READ_FILE callback and request_result recovers the native image', async () => {
+  const ctx = makeService(), ws = await setup(ctx);
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAOn+XXcAAAAASUVORK5CYII=',
+    'base64');
+  const promise = ctx.service.invoke('owner', 'view_image', {
+    workspace_id: ws.workspace_id, path: '/workspace/screenshot.png',
+  });
+  // Allow the one asynchronous Firestore mock transaction to dispatch.
+  for (let n = 0; n < 30 && ctx.events.length === 0; n++) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  assert.equal(ctx.events.length, 1);
+  assert.equal(ctx.events[0].data.tool_call.function.name, 'READ_FILE');
+  assert.deepEqual(ctx.events[0].data.tool_call.function.arguments, {
+    filepath: '/workspace/screenshot.png', encoding: 'base64',
+    max_bytes: 640 * 1024, offset: 0, with_metadata: true,
+  });
+  assert.deepEqual(await ctx.service.claim(
+    'owner', 'project-1', ws.workspace_id, 1, 'consumer-1'), { ok: true, claimed: true });
+  assert.deepEqual(await ctx.service.complete(
+    'owner', 'project-1', ws.workspace_id, 1, {
+      text: png.toString('base64'), encoding: 'base64',
+      path: '/workspace/screenshot.png', size: png.length, next_offset: png.length,
+      truncated: false, sha256: createHash('sha256').update(png).digest('hex'),
+    }), { ok: true });
+  const first = await promise;
+  assert.equal(first.kind, 'image');
+  const recovered = await ctx.service.invoke('owner', 'request_result', {
+    workspace_id: ws.workspace_id, request_id: 1,
+  });
+  assert.deepEqual(recovered, first);
+});
 test('command gets durable execution ID before consumer completion, keyed retry executes once', async () => {
   const ctx = makeService(), ws = await setup(ctx);
   const args = { workspace_id: ws.workspace_id, command: 'echo hello',

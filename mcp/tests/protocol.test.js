@@ -73,7 +73,7 @@ test('MCP SDK exposes native parity tool surface and enforces owner auth', async
     assert.match(client.getInstructions(), /environment_status/);
     assert.match(client.getInstructions(), /CLOUDSDK_AUTH_ACCESS_TOKEN_FILE/);
     const listed = await client.listTools();
-    assert.equal(listed.tools.length, 14);
+    assert.equal(listed.tools.length, 15);
     const resources = await client.listResources();
     assert.ok(resources.resources.some(x => x.uri === 'awfl://environment/guide'));
     const guide = await client.readResource({ uri: 'awfl://environment/guide' });
@@ -82,9 +82,27 @@ test('MCP SDK exposes native parity tool surface and enforces owner auth', async
     assert.doesNotMatch(guide.contents[0].text, /Bearer [a-zA-Z0-9]{30,}/);
     assert.equal(listed.tools.find(t => t.name === 'projects_list').annotations.readOnlyHint, true);
     assert.equal(listed.tools.find(t => t.name === 'run_command').annotations.destructiveHint, true);
+    assert.equal(listed.tools.find(t => t.name === 'view_image').annotations.readOnlyHint, true);
     assert.equal(listed.tools.find(t => t.name === 'workspace_create').inputSchema.required.includes('project_id'), true);
     const result = await client.callTool({ name: 'environment_status', arguments: {} });
     assert.equal(JSON.parse(result.content[0].text).user, 'owner');
+    const tinyImage = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB', 'base64').toString('base64');
+    const originalInvoke = service.invoke;
+    service.invoke = async (user, name, args) =>
+      name === 'view_image' || name === 'request_result'
+        ? { kind: 'image', data: tinyImage, mimeType: 'image/png',
+            path: '/workspace/shot.png', size: 24, sha256: 'a'.repeat(64) }
+        : originalInvoke(user, name, args);
+    for (const name of ['view_image', 'request_result']) {
+      const imageResult = await client.callTool({ name,
+        arguments: name === 'view_image'
+          ? { workspace_id: 'a'.repeat(32), path: '/workspace/shot.png' }
+          : { workspace_id: 'a'.repeat(32), request_id: 1 } });
+      assert.deepEqual(imageResult.content.map(block => block.type), ['text', 'image']);
+      assert.equal(imageResult.content[1].mimeType, 'image/png');
+      assert.equal(imageResult.content[1].data, tinyImage);
+      assert.equal(imageResult.content[0].text.includes(tinyImage), false);
+    }
     const invalid = await client.callTool({ name: 'workspace_create', arguments: {} });
     assert.equal(invalid.isError, true);
   } finally {
