@@ -13,10 +13,6 @@ terraform {
       source  = "hashicorp/local"
       version = "~> 2.4"
     }
-    kubernetes = {
-      source  = "hashicorp/kubernetes"
-      version = "~> 2.35"
-    }
   }
 }
 
@@ -48,12 +44,3 @@ provider "google-beta" {
 
 # local provider needed for local_file resource
 provider "local" {}
-
-# Manage the existing GKE cluster's AWFL namespace quotas in Terraform.
-data "google_client_config" "k8s" {}
-
-provider "kubernetes" {
-  host                   = "https://${google_container_cluster.awfl.endpoint}"
-  token                  = data.google_client_config.k8s.access_token
-  cluster_ca_certificate = base64decode(google_container_cluster.awfl.master_auth[0].cluster_ca_certificate)
-}

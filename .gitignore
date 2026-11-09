@@ -16,3 +16,9 @@ cloud/sse-consumer/node_modules
 package-lock.json
 cloud/gcs-harness/node_modules
 node_modules
+
+# Independent Terraform root in infra/gke-guardrails
+infra/gke-guardrails/.terraform/
+infra/gke-guardrails/*.tfstate
+infra/gke-guardrails/*.tfstate.backup
+infra/gke-guardrails/*.tfplan
