@@ -2,6 +2,41 @@ import { runK8sJob } from '../gke.js';
 import { setConsumerRuntimeInfo } from '../../../workflows/projects/lock.js';
 import { scheduleStartupProgress } from '../progress.js';
 
+// Launch the consumer with the credentials supplied by the producer immediately.
+// Refresh happens asynchronously and can fail without preventing awfl run.
+// Seed the files first so gcloud and Git keep working even if refresh is unavailable.
+export function consumerStartupCommand({ startupSh = 'awfl run', refreshEnabled = false } = {}) {
+  if (!refreshEnabled || startupSh !== 'awfl run') return startupSh;
+  return [
+    'if python -c "import awfl.consumer_credentials" 2>/dev/null; then',
+    '  if [ -n "${CLOUDSDK_AUTH_ACCESS_TOKEN_FILE:-}" ] && [ -n "${CLOUDSDK_AUTH_ACCESS_TOKEN:-}" ]; then',
+    '    if (umask 077; printf "%s\\n" "$CLOUDSDK_AUTH_ACCESS_TOKEN" > "$CLOUDSDK_AUTH_ACCESS_TOKEN_FILE"); then',
+    '      unset CLOUDSDK_AUTH_ACCESS_TOKEN',
+    '    else',
+    '      echo "[awfl] Google token staging failed; keeping environment credential" >&2',
+    '      unset CLOUDSDK_AUTH_ACCESS_TOKEN_FILE',
+    '    fi',
+    '  fi',
+    '  if [ -n "${AWFL_GITHUB_TOKEN_FILE:-}" ] && [ -n "${GITHUB_TOKEN:-}" ]; then',
+    '    if ! (umask 077; printf "%s\\n" "$GITHUB_TOKEN" > "$AWFL_GITHUB_TOKEN_FILE"); then',
+    '      echo "[awfl] GitHub token staging failed; keeping environment credential" >&2',
+    '      unset AWFL_GITHUB_TOKEN_FILE',
+    '    fi',
+    '  fi',
+    '  if [ -n "${AWFL_GITHUB_TOKEN_FILE:-}" ]; then',
+    '    if ! git config --global credential.helper "!python -m awfl.consumer_credentials --git-credential"; then',
+    '      echo "[awfl] Git credential helper setup failed; using startup credential" >&2',
+    '    fi',
+    '  fi',
+    '  python -m awfl.consumer_credentials --loop &',
+    'else',
+    '  echo "[awfl] consumer image lacks credential refresher; using startup credentials" >&2',
+    '  unset CLOUDSDK_AUTH_ACCESS_TOKEN_FILE AWFL_GITHUB_TOKEN_FILE',
+    'fi',
+    'exec awfl run',
+  ].join('\n');
+}
+
 // Updated GKE start path: launch only the consumer Job (awfl CLI) via HTTP/SSE. No Pub/Sub.
 export async function startGke({
   userId,
@@ -43,9 +78,7 @@ export async function startGke({
   // Apply that small optimization to every standard project consumer as well.
   const refreshEnabled = Boolean(credentialRefreshToken && (googleCloud?.accessToken || githubToken));
   const directCommand = startupSh === defaultStartup && !refreshEnabled ? ['awfl', 'run'] : undefined;
-  const effectiveStartup = refreshEnabled && startupSh === defaultStartup
-    ? 'if python -c "import awfl.consumer_credentials" 2>/dev/null; then unset CLOUDSDK_AUTH_ACCESS_TOKEN; python -m awfl.consumer_credentials --once && (git config --global credential.helper "!python -m awfl.consumer_credentials --git-credential"; python -m awfl.consumer_credentials --loop & exec awfl run); else echo "[awfl] consumer image lacks credential refresher; using startup token until image update" >&2; exec awfl run; fi'
-    : startupSh;
+  const effectiveStartup = consumerStartupCommand({ startupSh, refreshEnabled });
 
   if (!consumerImage) {
     await bestEffortRelease({ userId, projectId });
