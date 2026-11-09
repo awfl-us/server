@@ -15,7 +15,7 @@ jobs:
     env:
       MCP_OWNER_UID: ${{ vars.MCP_OWNER_UID }}
       GOOGLE_CLOUD_OAUTH_CLIENT_ID: ${{ vars.GOOGLE_CLOUD_OAUTH_CLIENT_ID }}
-      AWFL_CLI_REF: '6a27a3bf2b3f34b71fa7af22db5067b236b58777'
+      AWFL_CLI_REF: '15412e754679e2cdcd49cd200638eeb3be17b6b9'
       CORS_ALLOW_ORIGIN: ${{ vars.CORS_ALLOW_ORIGIN }}
       # Default to repository variables; will be overridden by JSON if present
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
@@ -214,6 +214,49 @@ jobs:
             --build-arg "AWFL_CLI_REF=${AWFL_CLI_REF}" \
             -t "${CONSUMER_IMAGE_URI}" cloud/sse-consumer
           docker push "${CONSUMER_IMAGE_URI}"
+
+      # Smoke-test the built consumer image without requiring full Chromium.
+      - name: Verify headless browser in consumer image
+        if: ${{ steps.consumer_image.outputs.build_required == 'true' }}
+        env:
+          CONSUMER_IMG: ${{ steps.consumer_image.outputs.CONSUMER_IMAGE_URI }}
+        run: |
+          set -euo pipefail
+          docker run --rm --shm-size=256m "$CONSUMER_IMG" python -c '
+          from playwright.sync_api import sync_playwright
+          with sync_playwright() as p:
+              browser = p.chromium.launch(headless=True)
+              page = browser.new_page()
+              page.goto("data:text/html,<title>AWFL browser smoke</title>")
+              assert page.title() == "AWFL browser smoke"
+              browser.close()
+          '
+
+      # Artifact Registry's Image Streaming cache eliminates cold pulls after
+      # image pushes. This is best-effort: a cache outage must not block deploy.
+      - name: Prewarm consumer image for GKE Image Streaming
+        env:
+          CONSUMER_IMG: ${{ steps.consumer_image.outputs.CONSUMER_IMAGE_URI }}
+        run: |
+          set -euo pipefail
+          TAG="${CONSUMER_IMG##*:}"
+          REPO="projects/${GCP_PROJECT_ID}/locations/${GCP_REGION}/repositories/app"
+          PAYLOAD="$(jq -nc \
+            --arg tag "${REPO}/packages/sse-consumer/tags/${TAG}" \
+            --arg region "${GCP_REGION}" \
+            '{tag:$tag,retentionDays:"7",streamLocation:$region}')"
+          if curl --fail-with-body --silent --show-error \
+              --retry 3 --retry-all-errors --retry-delay 2 --max-time 45 \
+              -X POST \
+              -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+              -H "Content-Type: application/json" \
+              -d "$PAYLOAD" \
+              "https://artifactregistry.googleapis.com/v1/${REPO}:prewarmArtifact" \
+              -o /tmp/awfl-consumer-prewarm.json; then
+            echo "GKE Image Streaming prewarm requested for ${TAG} in ${GCP_REGION}"
+          else
+            echo "::warning::Image prewarming failed; cold starts may be slower, but the deployment can proceed"
+          fi
 
       # Create/replace Producer Cloud Run Job (no sidecar)
       # If PRODUCER_CLOUD_RUN_JOB_NAME is omitted, skip. Orchestrator can generate per-run/random job ids.
