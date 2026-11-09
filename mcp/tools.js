@@ -41,7 +41,7 @@ export const tools = {
     },
   },
   command_output: {
-    description: 'Read persisted incremental stdout/stderr events of an execution, using a stable cursor; can long-poll for updates.',
+    description: 'Read persisted incremental stdout/stderr using a stable cursor; can long-poll. timings_ms separates submission, delivery (dispatch to claim), execution (claim to completion), and total elapsed latency.',
     schema: { ...workspace, execution_id: executionId, cursor: z.number().int().min(0).default(0),
       wait_ms: z.number().int().min(0).max(15000).default(0),
       max_bytes: z.number().int().min(1).max(1048576).default(65536) }, readOnly: true,

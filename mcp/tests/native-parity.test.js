@@ -106,6 +106,8 @@ test('claim fences stale consumers and persists ordered output before completion
   assert.equal(chunk.stdout, 'hello');
   assert.equal(chunk.cursor, 1);
   assert.equal(chunk.state, 'running');
+  assert.equal(chunk.timings_ms.total, null);
+  assert.ok(chunk.timings_ms.elapsed >= 0);
   const result = await ctx.service.complete('owner', 'project-1', ws.workspace_id, 1, {
     execution_id: created.execution_id, state: 'completed', exit_code: 7,
     cursor: 1, error: null,
@@ -118,6 +120,10 @@ test('claim fences stale consumers and persists ordered output before completion
   assert.equal(done.exit_code, 7);
   assert.equal(done.stderr, '');
   assert.equal(done.error, null);
+  assert.ok(done.timings_ms.submission >= 0);
+  assert.ok(done.timings_ms.delivery >= 0);
+  assert.ok(done.timings_ms.execution >= 0);
+  assert.ok(done.timings_ms.total >= done.timings_ms.execution);
 });
 
 test('queued commands report waiting_for_consumer without a live lock', async () => {
