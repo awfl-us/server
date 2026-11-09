@@ -438,7 +438,9 @@ export class ExecutionService {
         const { content, ...rest } = result;
         response = { ...rest, text: content };
       }
-      tx.update(request, { state: 'completed', result: response, completedAt: Date.now() });
+      const terminal = ['completed', 'failed', 'timed_out', 'cancelled'].includes(response?.state)
+        ? response.state : 'completed';
+      tx.update(request, { state: terminal, result: response, completedAt: Date.now() });
       return toolName;
     });
     if (done) {
