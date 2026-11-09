@@ -1,0 +1,151 @@
+{
+  "benchmark": "AWFL MCP latency - after environment-discovery CLI rollout",
+  "date_utc": "2026-11-09",
+  "test_environment": "Production https://api.awfl.us/mcp; fresh shared GKE consumer for awfl-us/server",
+  "protocol": "MCP Streamable HTTP 2025-03-26 (stateless HTTP POST)",
+  "key_handling": "Temporary AWFL MCP key created using Firebase-authenticated API and revoked immediately after each direct run; no keys persisted or logged",
+  "methodology": {
+    "plugin": "ChatGPT AWFL Cloud Terminal connector, host-observed Date.now around each complete tool action",
+    "direct": "Python requests.Session in the existing GKE consumer to https://api.awfl.us/mcp, using authenticated JSON-RPC initialize/initialized/tools/call",
+    "logs": "Cloud Run HTTP request records for ten plugin run_command(yield_time_ms=0) submissions matched by timestamp, from 2026-11-09T15:56:12Z through 15:56:42Z",
+    "caveats": [
+      "Direct client is co-located in GKE while ChatGPT connector runs remotely; differences include gateway, network, host orchestration, and session setup.",
+      "The connector's host tool time does not isolate a specific upstream subsystem.",
+      "Small samples on warm, shared production infrastructure; no controlled load or confidence intervals."
+    ]
+  },
+  "lightweight_tools": {
+    "environment_status": {
+      "plugin_n": 10,
+      "plugin_median_ms": 1141.5,
+      "plugin_samples_ms": [
+        786,
+        968,
+        1043,
+        1094,
+        1136,
+        1147,
+        1360,
+        1476,
+        1518,
+        1716
+      ],
+      "direct_n": 12,
+      "direct_median_ms": 89.2,
+      "direct_samples_ms": [
+        69.4,
+        71,
+        77.8,
+        78.4,
+        81.7,
+        88.7,
+        89.7,
+        89.8,
+        102.7,
+        104.3,
+        156,
+        158.4
+      ]
+    },
+    "projects_list": {
+      "plugin_n": 10,
+      "plugin_median_ms": 1248.5,
+      "plugin_samples_ms": [
+        890,
+        1073,
+        1098,
+        1180,
+        1204,
+        1293,
+        1381,
+        1628,
+        1665,
+        2262
+      ],
+      "direct_n": 12,
+      "direct_median_ms": 135.2,
+      "direct_samples_ms": [
+        94.3,
+        97.9,
+        99.6,
+        115.5,
+        121,
+        133.8,
+        136.7,
+        136.8,
+        155.8,
+        175,
+        213.3,
+        278
+      ]
+    }
+  },
+  "command_submit_no_wait": {
+    "operation": "run_command with command printf 'ZERO_YIELD_OK\\n', yield_time_ms=0 and timeout_ms=30000",
+    "plugin_n": 10,
+    "plugin_median_ms": 2634.5,
+    "plugin_samples_ms": [
+      2168,
+      2273,
+      2408,
+      2488,
+      2546,
+      2723,
+      2878,
+      3419,
+      4182,
+      4748
+    ],
+    "direct_n": 8,
+    "direct_median_ms": 544.5,
+    "direct_samples_ms": [
+      470.1,
+      471.9,
+      505.1,
+      536.7,
+      552.3,
+      574,
+      601.2,
+      684.4
+    ],
+    "plugin_cloud_run_breakdown": {
+      "n": 10,
+      "median_client_to_first_http_ms": 1946.5,
+      "median_mcp_initialize_to_tool_request_start_ms": 190,
+      "median_aws_cloud_run_tool_request_processing_ms": 417.9,
+      "median_last_http_completion_to_client_ms": 72.8,
+      "median_initialize_http_processing_ms": 44.2,
+      "median_initialized_notification_http_processing_ms": 38.2,
+      "note": "Stage medians are calculated separately and do not necessarily sum to median overall."
+    }
+  },
+  "short_command_wait": {
+    "operation": "run_command printf 'SHORT_OK\\n' with yield_time_ms=10000",
+    "plugin_n": 8,
+    "plugin_median_ms": 9676.5,
+    "plugin_samples_ms": [
+      3080,
+      3118,
+      3626,
+      7260,
+      12093,
+      12494,
+      13829,
+      17924
+    ],
+    "direct_n": 8,
+    "direct_median_ms": 1005.25,
+    "direct_samples_ms": [
+      746,
+      769.8,
+      840.7,
+      993.8,
+      1016.7,
+      1048,
+      10420,
+      10460.8
+    ],
+    "caution": "High variance, shared consumer and nested direct test; not suitable for attributing the entire difference to a single stage."
+  },
+  "conclusion": "Dominant avoidable user-visible latency for short submissions is before the first HTTP arrival at AWFL Cloud Run. AWS Cloud Run handling still contributes ~418 ms for command submission, while direct authenticated MCP submit takes ~545 ms median."
+}
