@@ -190,10 +190,9 @@ export class ExecutionService {
     let toolArgs;
     if (name === 'run_command') {
       toolArgs = commandArguments(args);
-    } else if (name === 'read_file') {
-      toolArgs = { ...parameters, filepath: parameters.path };
-    } else if (name === 'write_file') {
-      toolArgs = { ...parameters, filepath: parameters.path };
+    } else if (name === 'read_file' || name === 'write_file') {
+      const { path, ...rest } = parameters;
+      toolArgs = { filepath: path, ...rest };
     } else {
       toolArgs = parameters;
     }
