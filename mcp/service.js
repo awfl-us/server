@@ -12,11 +12,15 @@ export const digest = value => createHash('sha256').update(value).digest('hex');
 export function fail(message) { throw Object.assign(new Error(message), { publicMessage: message }); }
 export const validId = value => typeof value === 'string' && /^[a-f0-9]{32}$/.test(value);
 const requestDocId = seq => String(seq).padStart(8, '0');
-export const executionIdFor = (workspaceId, seq) => 'exec_' + workspaceId + '_' + requestDocId(seq);
-export function parseExecutionId(id) {
-  const match = /^exec_([a-f0-9]{32})_([0-9]{8})$/.exec(String(id || ''));
-  if (!match) fail('Invalid execution ID');
-  return { workspaceId: match[1], seq: Number(match[2]) };
+// Execution IDs remain 32 hexadecimal characters for old AWFL clients.
+// The workspace ID is always provided separately and authorization-scoped.
+export const executionIdFor = (workspaceId, seq) => workspaceId.slice(0, 24) + requestDocId(seq);
+export function parseExecutionId(id, workspaceId = null) {
+  const old = /^exec_([a-f0-9]{32})_([0-9]{8})$/.exec(String(id || ''));
+  if (old) return { workspaceId: old[1], seq: Number(old[2]) };
+  if (!validId(workspaceId) || !/^[a-f0-9]{24}[0-9]{8}$/.test(String(id || '')) ||
+      id.slice(0, 24) !== workspaceId.slice(0, 24)) fail('Invalid execution ID');
+  return { workspaceId, seq: Number(id.slice(24)) };
 }
 const terminalStates = new Set(['completed', 'failed', 'timed_out', 'cancelled']);
 function requestState(data) {
@@ -290,7 +294,7 @@ export class ExecutionService {
   }
 
   async waitForCommand(userId, ws, args) {
-    const parsed = parseExecutionId(args.execution_id);
+    const parsed = parseExecutionId(args.execution_id, args.workspace_id);
     const request = this.ref(parsed.workspaceId).collection('mcpRequests').doc(requestDocId(parsed.seq));
     const wait = Math.max(0, Math.min(15000, args.yield_time_ms ?? 10000));
     if (wait) await new Promise(resolve => {
