@@ -63,7 +63,7 @@ test('command gets durable execution ID before consumer completion, keyed retry 
   const args = { workspace_id: ws.workspace_id, command: 'echo hello',
     idempotency_key: 'test-key-123', yield_time_ms: 0 };
   const first = await ctx.service.invoke('owner', 'run_command', args);
-  assert.match(first.execution_id, /^exec_[a-f0-9]{32}_00000001$/);
+  assert.match(first.execution_id, /^[a-f0-9]{24}00000001$/);
   assert.equal(first.state, 'queued');
   assert.equal(ctx.events.length, 1);
   const same = await ctx.service.invoke('owner', 'run_command', args);
@@ -202,4 +202,13 @@ test('queued unclaimed work can be redelivered to replacement generation without
     workspace_id: ws.workspace_id, execution_id: started.execution_id,
   });
   assert.equal(ctx.events.length, 2);
+});
+
+
+test('execution IDs keep legacy 32-hex compatibility while accepting already-issued IDs', () => {
+  const workspaceId = 'a'.repeat(32);
+  const current = executionIdFor(workspaceId, 42);
+  assert.equal(current.length, 32);
+  assert.equal(current, 'a'.repeat(24) + '00000042');
+  assert.equal(current.slice(24), '00000042');
 });
