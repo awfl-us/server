@@ -67,10 +67,26 @@ export class ExecutionService {
         jobName: runtime.consumerJobName,
       }) : null;
     const running = leaseActive && job?.state !== 'failed' && job?.state !== 'not_found';
+    const heartbeat = lock?.heartbeat;
+    const heartbeatFresh = Boolean(heartbeat && heartbeat.consumerId === lock.consumerId &&
+      heartbeat.generation === lock.acquiredAt &&
+      Number.isFinite(heartbeat.at) && Date.now() - heartbeat.at < 30000);
+    const ready = running && heartbeatFresh && heartbeat.connected === true;
     return {
-      state: running ? 'attached' : 'consumer_unavailable',
+      state: !running ? 'consumer_unavailable' : ready ? 'attached' : 'starting',
       project_id: ws.projectId, session_id: ws.sessionId,
       consumer_id: leaseActive ? lock.consumerId : null,
+      consumer: {
+        id: leaseActive ? lock.consumerId : null,
+        job_state: job?.state || 'unknown',
+        readiness: ready ? 'ready' : running ? 'initializing' : 'unavailable',
+        connected: ready,
+        last_heartbeat_at: heartbeatFresh ? heartbeat.at : null,
+        startup_phase: ready ? 'ready' : job?.state === 'pending' ? 'provisioning' : 'initializing',
+        capacity: heartbeatFresh ? heartbeat.capacity : null,
+        active_execution_ids: heartbeatFresh ? heartbeat.activeExecutions : [],
+        capabilities: heartbeatFresh ? heartbeat.capabilities : [],
+      },
       shared: true,
       ...(job ? { consumer_job: job } : {}),
     };
