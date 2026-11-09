@@ -15,7 +15,8 @@ function clampLeaseMs(input) {
 function shapeLock(lock) {
   if (!lock) return null;
   const { consumerId, consumerType, leaseMs, acquiredAt, refreshedAt, expiresAt } = lock;
-  return { consumerId, consumerType, leaseMs, acquiredAt, refreshedAt: refreshedAt || acquiredAt, expiresAt };
+  return { consumerId, consumerType, leaseMs, acquiredAt, refreshedAt: refreshedAt || acquiredAt, expiresAt,
+    ...(lock.runtime?.imageProfile ? { imageProfile: lock.runtime.imageProfile } : {}) };
 }
 
 export async function acquireConsumerLock({ userId, projectId, consumerId, leaseMs, consumerType = 'CLOUD' }) {

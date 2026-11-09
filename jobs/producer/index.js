@@ -1,9 +1,14 @@
 import express from 'express';
 import { startProjectConsumer } from './start.js';
 import { stopProjectConsumer } from './stop.js';
+import { consumerImageCatalog } from './imageProfiles.js';
 
 const router = express.Router();
 router.use(express.json());
+
+// Catalog reflects which immutable image profiles the current deployment has
+// actually published. Shared by the web selector and API consumers.
+router.get('/images', (_req, res) => res.json(consumerImageCatalog()));
 
 // Shared lifecycle for the regular API and MCP attachment.
 router.post('/start', async (req, res) => {

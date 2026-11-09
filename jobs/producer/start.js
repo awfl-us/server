@@ -11,6 +11,7 @@ import { startLocalDocker } from './paths/localDocker.js';
 import { loadConsumerCredentials } from './credentials.js';
 import { cancelStartupProgress } from './progress.js';
 import { resolveIdleTimeoutSeconds } from './idleTimeout.js';
+import { normalizeImageProfile } from './imageProfiles.js';
 
 export async function startProjectConsumer({ userId, projectId, body = {} }) {
   let consumerId = null;
@@ -43,6 +44,15 @@ export async function startProjectConsumer({ userId, projectId, body = {} }) {
     const requestedConsumerImage = String(body.image || '').trim();
     if (requestedConsumerImage && /\s|["'`]/.test(requestedConsumerImage)) {
       return { status: 400, body: { error: 'Invalid image parameter' } };
+    }
+    const requestedImageProfile = body.imageProfile ?? body.image_profile;
+    try {
+      if (requestedImageProfile !== undefined) normalizeImageProfile(requestedImageProfile);
+      if (requestedConsumerImage && requestedImageProfile !== undefined) {
+        return { status: 400, body: { error: 'Choose either image or imageProfile, not both' } };
+      }
+    } catch (error) {
+      return { status: 400, body: { error: error.message } };
     }
 
     // Session handling
@@ -210,6 +220,7 @@ export async function startProjectConsumer({ userId, projectId, body = {} }) {
       consumerId,
       gcpProject,
       requestedConsumerImage,
+      requestedImageProfile,
       encKeyB64,
       encVer,
       encFp,
@@ -246,14 +257,23 @@ export async function startProjectConsumer({ userId, projectId, body = {} }) {
 
 // Both the browser and MCP use this launcher; an existing project lock means
 // we attach to the current consumer rather than creating another GKE Job.
-export async function ensureProjectConsumer({ userId, projectId, idleTimeoutSeconds }, { getLock = getConsumerLock, start = startProjectConsumer } = {}) {
+export async function ensureProjectConsumer({ userId, projectId, idleTimeoutSeconds, imageProfile }, { getLock = getConsumerLock, start = startProjectConsumer } = {}) {
+  if (imageProfile !== undefined) normalizeImageProfile(imageProfile);
   const { lock } = await getLock({ userId, projectId });
   if (lock && lock.expiresAt > Date.now()) {
-    return { state: 'attached', consumerId: lock.consumerId };
+    const activeProfile = lock.runtime?.imageProfile;
+    if (imageProfile !== undefined && activeProfile && imageProfile !== activeProfile) {
+      throw new Error(`This project already runs the ${activeProfile} image; stop it before choosing ${imageProfile}`);
+    }
+    return { state: 'attached', consumerId: lock.consumerId,
+      ...(activeProfile ? { imageProfile: activeProfile } : {}) };
   }
   const result = await start({
     userId, projectId,
-    ...(idleTimeoutSeconds !== undefined ? { body: { idleTimeoutSeconds } } : {}),
+    ...(idleTimeoutSeconds !== undefined || imageProfile !== undefined ? { body: {
+      ...(idleTimeoutSeconds !== undefined ? { idleTimeoutSeconds } : {}),
+      ...(imageProfile !== undefined ? { imageProfile } : {}),
+    } } : {}),
   });
   if (result.status === 202 && result.body?.message === 'Lock held by another consumer') {
     return { state: 'attached', consumerId: result.body.details?.holder?.consumerId };
@@ -261,6 +281,7 @@ export async function ensureProjectConsumer({ userId, projectId, idleTimeoutSeco
   if (result.status !== 202 || !result.body?.ok) {
     throw new Error(result.body?.error || 'Could not start project consumer');
   }
-  return { state: 'starting', consumerId: result.body.consumerId };
+  return { state: 'starting', consumerId: result.body.consumerId,
+    ...(result.body.imageProfile ? { imageProfile: result.body.imageProfile } : {}) };
 }
 

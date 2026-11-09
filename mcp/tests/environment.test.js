@@ -37,7 +37,7 @@ test('consumer environment is strictly allowlisted before Firestore storage', ()
   assert.equal(value.credentials.google_cloud.token_file, '/tmp/awfl-google-access-token');
   assert.equal(value.credentials.github.token_file, null);
   assert.deepEqual(Object.keys(value.tools).sort(),
-    ['chromium_playwright', 'gcloud', 'git', 'node', 'python'].sort());
+    ['chromium_playwright', 'gcloud', 'git', 'node', 'python', 'java', 'sbt'].sort());
   for (const secret of ['DO_NOT_EXPOSE', 'LEAKED_GOOGLE', 'LEAKED_GITHUB', '/root/.aws']) {
     assert.equal(JSON.stringify(value).includes(secret), false);
   }

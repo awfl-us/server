@@ -15,7 +15,7 @@ jobs:
     env:
       MCP_OWNER_UID: ${{ vars.MCP_OWNER_UID }}
       GOOGLE_CLOUD_OAUTH_CLIENT_ID: ${{ vars.GOOGLE_CLOUD_OAUTH_CLIENT_ID }}
-      AWFL_CLI_REF: '15412e754679e2cdcd49cd200638eeb3be17b6b9'
+      AWFL_CLI_REF: 'ae3784da7f91d7e66379e0029bdb1453ad090bfd'
       CORS_ALLOW_ORIGIN: ${{ vars.CORS_ALLOW_ORIGIN }}
       # Default to repository variables; will be overridden by JSON if present
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
@@ -187,42 +187,48 @@ jobs:
 
       # The consumer fingerprint includes the pinned AWFL CLI revision, even
       # when only that revision changes in this deployment workflow.
-      - name: Resolve Consumer image
-        id: consumer_image
+      - name: Resolve Consumer images
+        id: consumer_images
         run: |
           set -euo pipefail
           SOURCE_SHA=$(printf '%s\n%s\n' "$(git rev-parse HEAD:cloud/sse-consumer)" "${AWFL_CLI_REF}" | sha256sum | cut -d' ' -f1)
-          CONSUMER_IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/app/sse-consumer:source-${SOURCE_SHA}"
-          echo "CONSUMER_IMAGE_URI=${CONSUMER_IMAGE_URI}" >> "$GITHUB_OUTPUT"
-          if docker manifest inspect "${CONSUMER_IMAGE_URI}" >/dev/null 2>&1; then
-            echo "build_required=false" >> "$GITHUB_OUTPUT"
-            echo "Reusing unchanged consumer image: ${CONSUMER_IMAGE_URI}"
-          else
-            echo "build_required=true" >> "$GITHUB_OUTPUT"
-            echo "Consumer image missing or cannot be inspected; building: ${CONSUMER_IMAGE_URI}"
-          fi
+          : > /tmp/awfl-consumer-build-profiles
+          for profile in lightweight browser scala; do
+            image="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/app/sse-consumer-${profile}:source-${SOURCE_SHA}"
+            echo "$(echo "${profile}" | tr '[:lower:]' '[:upper:]')_IMAGE_URI=${image}" >> "$GITHUB_OUTPUT"
+            if docker manifest inspect "${image}" >/dev/null 2>&1; then
+              echo "Reusing unchanged ${profile} consumer image: ${image}"
+            else
+              echo "${profile}" >> /tmp/awfl-consumer-build-profiles
+            fi
+          done
+          echo "CONSUMER_IMAGE_URI=${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/app/sse-consumer-lightweight:source-${SOURCE_SHA}" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push Consumer image
-        if: ${{ steps.consumer_image.outputs.build_required == 'true' }}
+      - name: Build and push Consumer images
         run: |
           set -euo pipefail
-          CONSUMER_IMAGE_URI="${{ steps.consumer_image.outputs.CONSUMER_IMAGE_URI }}"
-          docker build \
-            --build-arg HTTP_PROXY="${HTTP_PROXY}" \
-            --build-arg HTTPS_PROXY="${HTTPS_PROXY}" \
-            --build-arg NO_PROXY="${NO_PROXY}" \
-            --build-arg "AWFL_CLI_REF=${AWFL_CLI_REF}" \
-            -t "${CONSUMER_IMAGE_URI}" cloud/sse-consumer
-          docker push "${CONSUMER_IMAGE_URI}"
+          while IFS= read -r profile; do
+            image="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/app/sse-consumer-${profile}:source-$(printf '%s\n%s\n' "$(git rev-parse HEAD:cloud/sse-consumer)" "${AWFL_CLI_REF}" | sha256sum | cut -d' ' -f1)"
+            docker build \
+              --target "${profile}" \
+              --build-arg HTTP_PROXY="${HTTP_PROXY}" \
+              --build-arg HTTPS_PROXY="${HTTPS_PROXY}" \
+              --build-arg NO_PROXY="${NO_PROXY}" \
+              --build-arg "AWFL_CLI_REF=${AWFL_CLI_REF}" \
+              -t "${image}" cloud/sse-consumer
+            docker push "${image}"
+          done < /tmp/awfl-consumer-build-profiles
 
-      # Smoke-test the built consumer image without requiring full Chromium.
-      - name: Verify headless browser in consumer image
-        if: ${{ steps.consumer_image.outputs.build_required == 'true' }}
+      # Verify each published image, not just Docker build success.
+      - name: Verify Consumer image profiles
         env:
-          CONSUMER_IMG: ${{ steps.consumer_image.outputs.CONSUMER_IMAGE_URI }}
+          LIGHTWEIGHT_IMG: ${{ steps.consumer_images.outputs.LIGHTWEIGHT_IMAGE_URI }}
+          BROWSER_IMG: ${{ steps.consumer_images.outputs.BROWSER_IMAGE_URI }}
+          SCALA_IMG: ${{ steps.consumer_images.outputs.SCALA_IMAGE_URI }}
         run: |
           set -euo pipefail
-          docker run --rm --shm-size=256m "$CONSUMER_IMG" python -c '
+          docker run --rm "$LIGHTWEIGHT_IMG" sh -lc 'command -v awfl && command -v git && command -v gcloud && ! command -v java && ! python -c "import playwright"'
+          docker run --rm --shm-size=256m "$BROWSER_IMG" python -c '
           from playwright.sync_api import sync_playwright
           with sync_playwright() as p:
               browser = p.chromium.launch(headless=True)
@@ -231,32 +237,40 @@ jobs:
               assert page.title() == "AWFL browser smoke"
               browser.close()
           '
+          docker run --rm "$SCALA_IMG" sh -lc 'java -version && command -v sbt && ! python -c "import playwright"'
 
       # Artifact Registry's Image Streaming cache eliminates cold pulls after
       # image pushes. This is best-effort: a cache outage must not block deploy.
-      - name: Prewarm consumer image for GKE Image Streaming
+      - name: Prewarm consumer images for GKE Image Streaming
         env:
-          CONSUMER_IMG: ${{ steps.consumer_image.outputs.CONSUMER_IMAGE_URI }}
+          LIGHTWEIGHT_IMG: ${{ steps.consumer_images.outputs.LIGHTWEIGHT_IMAGE_URI }}
+          BROWSER_IMG: ${{ steps.consumer_images.outputs.BROWSER_IMAGE_URI }}
+          SCALA_IMG: ${{ steps.consumer_images.outputs.SCALA_IMAGE_URI }}
         run: |
           set -euo pipefail
-          TAG="${CONSUMER_IMG##*:}"
           REPO="projects/${GCP_PROJECT_ID}/locations/${GCP_REGION}/repositories/app"
-          PAYLOAD="$(jq -nc \
-            --arg tag "${REPO}/packages/sse-consumer/tags/${TAG}" \
-            --arg region "${GCP_REGION}" \
-            '{tag:$tag,retentionDays:"7",streamLocation:$region}')"
-          if curl --fail-with-body --silent --show-error \
-              --retry 3 --retry-all-errors --retry-delay 2 --max-time 45 \
-              -X POST \
-              -H "Authorization: Bearer $(gcloud auth print-access-token)" \
-              -H "Content-Type: application/json" \
-              -d "$PAYLOAD" \
-              "https://artifactregistry.googleapis.com/v1/${REPO}:prewarmArtifact" \
-              -o /tmp/awfl-consumer-prewarm.json; then
-            echo "GKE Image Streaming prewarm requested for ${TAG} in ${GCP_REGION}"
-          else
-            echo "::warning::Image prewarming failed; cold starts may be slower, but the deployment can proceed"
-          fi
+          for profile in lightweight browser scala; do
+            case "${profile}" in
+              lightweight) image="${LIGHTWEIGHT_IMG}" ;;
+              browser) image="${BROWSER_IMG}" ;;
+              scala) image="${SCALA_IMG}" ;;
+            esac
+            tag="${image##*:}"
+            payload="$(jq -nc \
+              --arg tag "${REPO}/packages/sse-consumer-${profile}/tags/${tag}" \
+              --arg region "${GCP_REGION}" \
+              '{tag:$tag,retentionDays:"7",streamLocation:$region}')"
+            if ! curl --fail-with-body --silent --show-error \
+                --retry 3 --retry-all-errors --retry-delay 2 --max-time 45 \
+                -X POST \
+                -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+                -H "Content-Type: application/json" \
+                -d "$payload" \
+                "https://artifactregistry.googleapis.com/v1/${REPO}:prewarmArtifact" \
+                -o "/tmp/awfl-consumer-prewarm-${profile}.json"; then
+              echo "::warning::Image prewarming failed for ${profile}; the deployment can proceed"
+            fi
+          done
 
       # Create/replace Producer Cloud Run Job (no sidecar)
       # If PRODUCER_CLOUD_RUN_JOB_NAME is omitted, skip. Orchestrator can generate per-run/random job ids.
@@ -287,7 +301,7 @@ jobs:
         if: ${{ env.CONSUMER_CLOUD_RUN_JOB_NAME != '' }}
         shell: bash
         env:
-          CONSUMER_IMG: ${{ steps.consumer_image.outputs.CONSUMER_IMAGE_URI }}
+          CONSUMER_IMG: ${{ steps.consumer_images.outputs.CONSUMER_IMAGE_URI }}
           CONSUMER_JOB_SA_EMAIL: ${{ vars.CONSUMER_JOB_SA_EMAIL }}
           CLOUD_RUN_RUNTIME_SA: ${{ env.CLOUD_RUN_RUNTIME_SA }}
         run: |
@@ -324,9 +338,11 @@ jobs:
         run: |
           set -euo pipefail
           # Make the just-built consumer image available to the services (used by GKE path fallback)
-          CONSUMER_IMAGE_URI="${{ steps.consumer_image.outputs.CONSUMER_IMAGE_URI }}"
+          CONSUMER_IMAGE_URI="${{ steps.consumer_images.outputs.CONSUMER_IMAGE_URI }}"
+          CONSUMER_BROWSER_IMAGE_URI="${{ steps.consumer_images.outputs.BROWSER_IMAGE_URI }}"
+          CONSUMER_SCALA_IMAGE_URI="${{ steps.consumer_images.outputs.SCALA_IMAGE_URI }}"
           # Use an alternate delimiter (;) to avoid escaping commas inside values (e.g., CORS_ALLOW_ORIGIN)
-          BASE_ENV_VARS="NODE_ENV=production;GCP_PROJECT=${GCP_PROJECT_ID};ALLOW_SKIP_AUTH=0;WORKFLOWS_BASE_URL=${WORKFLOWS_BASE_URL};GCS_BUCKET=${GCS_BUCKET};PUBSUB_TOPIC=${PUBSUB_TOPIC};PRODUCER_CLOUD_RUN_JOB_NAME=${PRODUCER_CLOUD_RUN_JOB_NAME};CONSUMER_CLOUD_RUN_JOB_NAME=${CONSUMER_CLOUD_RUN_JOB_NAME};CORS_ALLOW_ORIGIN=${CORS_ALLOW_ORIGIN};HTTP_PROXY=${HTTP_PROXY};HTTPS_PROXY=${HTTPS_PROXY};NO_PROXY=${NO_PROXY};CONSUMER_K8S_IMAGE=${CONSUMER_IMAGE_URI}"
+          BASE_ENV_VARS="NODE_ENV=production;GCP_PROJECT=${GCP_PROJECT_ID};ALLOW_SKIP_AUTH=0;WORKFLOWS_BASE_URL=${WORKFLOWS_BASE_URL};GCS_BUCKET=${GCS_BUCKET};PUBSUB_TOPIC=${PUBSUB_TOPIC};PRODUCER_CLOUD_RUN_JOB_NAME=${PRODUCER_CLOUD_RUN_JOB_NAME};CONSUMER_CLOUD_RUN_JOB_NAME=${CONSUMER_CLOUD_RUN_JOB_NAME};CORS_ALLOW_ORIGIN=${CORS_ALLOW_ORIGIN};HTTP_PROXY=${HTTP_PROXY};HTTPS_PROXY=${HTTPS_PROXY};NO_PROXY=${NO_PROXY};CONSUMER_K8S_IMAGE=${CONSUMER_IMAGE_URI};CONSUMER_BROWSER_K8S_IMAGE=${CONSUMER_BROWSER_IMAGE_URI};CONSUMER_SCALA_K8S_IMAGE=${CONSUMER_SCALA_IMAGE_URI}"
 
           JSON_FILE=".github/actions-variables.json"
           if [[ -f "$JSON_FILE" ]]; then

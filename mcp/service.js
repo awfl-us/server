@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { consumerNames } from './tools.js';
+import { consumerImageCatalog } from '../jobs/producer/imageProfiles.js';
 import { MAX_IMAGE_BYTES, normalizeImageResult } from './image.js';
 import { commandTimingsMs } from './timing.js';
 // Defer loading the producer API modules until startup. The same project
@@ -108,6 +109,7 @@ export class ExecutionService {
       state: !running ? 'consumer_unavailable' : ready ? 'attached' : 'starting',
       project_id: ws.projectId, session_id: ws.sessionId,
       consumer_id: leaseActive ? lock.consumerId : null,
+      image_profile: leaseActive ? runtime?.imageProfile || null : null,
       consumer: {
         id: leaseActive ? lock.consumerId : null,
         job_state: job?.state || 'unknown',
@@ -136,6 +138,7 @@ export class ExecutionService {
       environment_guide: 'awfl://environment/guide',
       next_step: 'Use projects_list, workspace_create, then environment_status(workspace_id) to inspect live credentials and tools.',
     };
+    if (name === 'image_profiles_list') return consumerImageCatalog();
     if (name === 'projects_list') return this.listProjects(userId, args);
     if (name === 'workspace_create') return this.create(userId, args);
     const ws = await this.owned(userId, args.workspace_id, { allowStopped: name === 'workspace_stop' });
@@ -627,6 +630,7 @@ export class ExecutionService {
     const consumer = await this.startConsumer({
       userId, projectId,
       ...(args.idle_timeout_seconds !== undefined ? { idleTimeoutSeconds: args.idle_timeout_seconds } : {}),
+      ...(args.image_profile !== undefined ? { imageProfile: args.image_profile } : {}),
     });
     const id = randomBytes(16).toString('hex');
     const sessionId = (typeof args.session_id === 'string' && args.session_id.trim()) || 'mcp-' + id;
@@ -637,6 +641,7 @@ export class ExecutionService {
     });
     return { workspace_id: id, project_id: projectId, session_id: sessionId,
       state: consumer.state, consumer_id: consumer.consumerId,
+      ...(consumer.imageProfile ? { image_profile: consumer.imageProfile } : {}),
       shared: true, expires_at: expiresAt };
   }
   async complete(userId, projectId, id, seq, result) {
