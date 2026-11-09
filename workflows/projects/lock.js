@@ -1,3 +1,4 @@
+import { sanitizeEnvironment } from '../../mcp/environment.js';
 import { getFirestore } from 'firebase-admin/firestore';
 import { projectDoc } from './util.js';
 
@@ -191,7 +192,7 @@ export async function getConsumerLock({ userId, projectId }) {
  * The caller must be Firebase-authorized for this project. A stale consumer
  * cannot update a replacement's heartbeat after its lease expires.
  */
-export async function heartbeatConsumer({ userId, projectId, consumerId, connected, capacity, activeExecutions, capabilities }) {
+export async function heartbeatConsumer({ userId, projectId, consumerId, connected, capacity, activeExecutions, capabilities, environment }) {
   const ref = projectDoc(userId, projectId);
   return db.runTransaction(async tx => {
     const snap = await tx.get(ref);
@@ -211,6 +212,7 @@ export async function heartbeatConsumer({ userId, projectId, consumerId, connect
         ? activeExecutions.filter(x => typeof x === 'string').slice(0, 64) : [],
       capabilities: Array.isArray(capabilities)
         ? capabilities.filter(x => typeof x === 'string').slice(0, 32) : [],
+      environment: sanitizeEnvironment(environment),
     };
     tx.set(ref, { consumerLock: { ...lock, heartbeat } }, { merge: true });
     return { ok: true, heartbeat: { at: now, phase: heartbeat.phase } };
