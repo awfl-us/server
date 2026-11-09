@@ -17,7 +17,9 @@ terraform apply quota.tfplan
 terraform state list
 ```
 
-Pod/CPU/memory limits are configured in `limits.tf`. Terraform is
+Pod/CPU/memory limits are configured in `limits.tf`: 20 active Pods,
+10 vCPU, 40Gi RAM, 20Gi ephemeral storage, and 25 Job objects. At the
+default 0.5 vCPU/2Gi/1Gi request per environment, all 20 fit the quota. Terraform is
 separate from the CI deployment workflow; changes to this directory
 must be applied using the existing remote state.
 
