@@ -292,6 +292,81 @@ export class ExecutionService {
       wait_ms: 0, consumer: args.consumer });
   }
 
+  async reconcileExecution(userId, ws, request, data) {
+    if (!data || terminalStates.has(requestState(data))) return;
+    const { lock } = await this.getLock({ userId, projectId: ws.projectId });
+    const live = Boolean(lock && lock.expiresAt > Date.now());
+    if (data.state === 'running') {
+      let lost = !live || (data.claimedBy && lock.consumerId !== data.claimedBy);
+      if (!lost && lock.runtime?.consumerJobName) {
+        const job = await this.inspectJob({
+          namespace: lock.runtime.namespace || process.env.K8S_NAMESPACE || 'awfl',
+          jobName: lock.runtime.consumerJobName,
+        });
+        lost = job.state === 'failed' || job.state === 'not_found';
+      }
+      if (lost) {
+        await this.db.runTransaction(async tx => {
+          const snapshot = await tx.get(request);
+          if (snapshot.exists && snapshot.data().state === 'running') {
+            tx.update(request, { state: 'failed', completedAt: Date.now(),
+              result: { execution_id: data.executionId, state: 'failed',
+                exit_code: null, error: { code: 'execution_lost',
+                  message: 'Consumer ended after claiming this execution; it will not be replayed',
+                  retryable: false } } });
+          }
+        });
+      }
+      return;
+    }
+    if (!['queued', 'waiting_for_consumer', 'accepted'].includes(data.state)) return;
+    if (Date.now() >= (data.startupDeadlineAt || data.createdAt + 180000)) {
+      await this.db.runTransaction(async tx => {
+        const snapshot = await tx.get(request);
+        if (snapshot.exists && ['queued', 'waiting_for_consumer', 'accepted'].includes(snapshot.data().state)) {
+          tx.update(request, { state: 'failed', completedAt: Date.now(),
+            result: { execution_id: data.executionId, state: 'failed', exit_code: null,
+              error: { code: 'consumer_start_timeout',
+                message: 'Consumer did not claim the command before the startup deadline',
+                retryable: true } } });
+        }
+      });
+      return;
+    }
+    if (!live || data.dispatchConsumerId === lock.consumerId || !data.callbackId) return;
+    // A queued/unclaimed command can safely be re-delivered to a replacement
+    // generation; the transactional claim prevents duplicate side effects.
+    const eligible = await this.db.runTransaction(async tx => {
+      const snapshot = await tx.get(request);
+      if (!snapshot.exists || !['queued', 'waiting_for_consumer', 'accepted'].includes(snapshot.data().state) ||
+          snapshot.data().dispatchConsumerId === lock.consumerId) return false;
+      tx.update(request, { state: 'queued', dispatchConsumerId: lock.consumerId,
+        dispatchedAt: Date.now() });
+      return true;
+    });
+    if (!eligible) return;
+    const original = data.args || {};
+    const toolName = data.toolName;
+    const args = toolName === 'run_command' ? commandArguments(original) : original;
+    const eventData = {
+      callback_id: data.callbackId,
+      mcp: { execution_id: data.executionId, request_id: data.seq },
+      tool_call: { function: { name: consumerNames[toolName], arguments: args } },
+    };
+    if (toolName === 'run_command') {
+      eventData.timeout_seconds = original.timeout_ms ? original.timeout_ms / 1000 : original.timeout ?? 120;
+      if (original.cwd) eventData.workdir = original.cwd;
+    }
+    try {
+      await this.backend(userId, ws.projectId).append(normalizeEnvelope({
+        projectId: ws.projectId, sessionId: ws.sessionId,
+        type: 'message', source: 'mcp', data: eventData,
+      }));
+    } catch {
+      await request.update({ dispatchConsumerId: null });
+    }
+  }
+
   async commandOutput(userId, ws, args) {
     const { workspaceId, seq } = parseExecutionId(args.execution_id);
     if (workspaceId !== args.workspace_id) fail('Execution belongs to another workspace');
@@ -300,6 +375,8 @@ export class ExecutionService {
     const request = this.ref(workspaceId).collection('mcpRequests').doc(requestDocId(seq));
     let snap = await request.get();
     if (!snap.exists || snap.data()?.toolName !== 'run_command') fail('Execution not found');
+    await this.reconcileExecution(userId, target, request, snap.data());
+    snap = await request.get();
     const cursor = args.cursor ?? 0;
     const maxBytes = args.max_bytes ?? 65536;
     if (!Number.isInteger(cursor) || cursor < 0 || !Number.isInteger(maxBytes) || maxBytes < 1) fail('Invalid cursor or max_bytes');
