@@ -193,7 +193,7 @@ export async function startGke({
 
   // Set billed Autopilot resource requests and bounded container limits.
   const resources = {
-    requests: { cpu: '500m', memory: '2Gi', 'ephemeral-storage': '1Gi' },
+    requests: { cpu: '500m', memory: '1536Mi', 'ephemeral-storage': '1Gi' },
     limits: { cpu: '2', memory: '4Gi', 'ephemeral-storage': '2Gi' },
   };
   let cRun;
