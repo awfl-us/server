@@ -9,8 +9,8 @@ subprocesses postpone shutdown; SSE heartbeats and lease renewals do not.
 
 ## Kubernetes admission caps
 Terraform in infra/gke-guardrails/limits.tf defines limits for the pre-existing awfl
-namespace: 2 non-terminal Pods, up to 4 requested vCPU, 8Gi requested RAM,
-4Gi requested ephemeral storage, and 8 Job objects. No container may use
+namespace: 20 non-terminal Pods, up to 10 requested vCPU, 40Gi requested RAM,
+20Gi requested ephemeral storage, and 25 Job objects. No container may use
 more than 2 CPU/4Gi memory/2Gi ephemeral storage. Finished Jobs are cleaned
 up after 300 seconds, reducing accumulation.
 
