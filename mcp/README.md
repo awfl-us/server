@@ -50,6 +50,13 @@ Commands return durable execution IDs and support idempotency keys. Use
 command_output for cursor-based output and command_input/command_cancel for
 interactive tasks. A nonzero command exit remains a normal result.
 
+Command results include timings_ms from existing server-side milestones:
+submission (creation to dispatch), delivery (dispatch to claim),
+execution (claim to completion), total (creation to completion), and
+elapsed (current request age, frozen at completion). Missing milestones
+return null; these include transport and callback overhead, not just
+subprocess wall time. Use them to distinguish queueing from slow commands.
+
 workspace_stop stops the **shared** consumer, can interrupt other attached
 clients, and requires explicit confirmation.
 

@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { consumerNames } from './tools.js';
+import { commandTimingsMs } from './timing.js';
 // Defer loading the producer API modules until startup. The same project
 // lifecycle is used by both MCP and regular /producer/start requests.
 const ensureProjectConsumer = async args => (await import('../jobs/producer/start.js')).ensureProjectConsumer(args);
@@ -447,6 +448,7 @@ export class ExecutionService {
     const complete = terminalStates.has(requestState(data));
     if (complete && nextCursor < high && chunks.length === 0) {
       return { execution_id: args.execution_id, state: 'failed', exit_code: null,
+        timings_ms: commandTimingsMs(data),
         cursor, has_more: false, error: {
           code: 'output_expired', message: 'Persisted output is incomplete or max_bytes too small',
           retryable: false,
@@ -459,6 +461,7 @@ export class ExecutionService {
     return {
       execution_id: args.execution_id, workspace_id: workspaceId,
       state, exit_code: result.exit_code ?? result.exitCode ?? null,
+      timings_ms: commandTimingsMs(data),
       ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
       stdout: chunks.filter(x => x.stream === 'stdout' || x.stream === 'pty').map(x => x.text).join('') || fallback,
       stderr: chunks.filter(x => x.stream === 'stderr').map(x => x.text).join(''),
