@@ -216,3 +216,103 @@ test('old long execution IDs still parse with full workspace authorization', asy
   assert.throws(() => parseExecutionId(executionIdFor(workspaceId, 3), 'b'.repeat(32)),
     /Invalid execution ID/);
 });
+
+
+test('batched output commits 16 ordered cursors and preserves stdout/stderr', async () => {
+  const ctx = makeService(), ws = await setup(ctx);
+  const command = await ctx.service.invoke('owner', 'run_command', {
+    workspace_id: ws.workspace_id, command: 'large stream', yield_time_ms: 0,
+  });
+  await ctx.service.claim('owner', 'project-1', ws.workspace_id, 1, 'consumer-1');
+  const chunks = Array.from({ length: 16 }, (_, i) => ({
+    cursor: i + 1, stream: i % 2 ? 'stderr' : 'stdout', text: 'chunk-' + i + '\n',
+  }));
+  const result = await ctx.service.progressBatch('owner', 'project-1', ws.workspace_id, 1,
+    { execution_id: command.execution_id, chunks });
+  assert.equal(result.ok, true);
+  assert.equal(result.persisted, 16);
+  assert.equal(result.cursor, 16);
+  const replay = await ctx.service.progressBatch('owner', 'project-1', ws.workspace_id, 1,
+    { execution_id: command.execution_id, chunks });
+  assert.equal(replay.duplicate, true);
+  const next = await ctx.service.invoke('owner', 'command_output', {
+    workspace_id: ws.workspace_id, execution_id: command.execution_id,
+    cursor: 0, max_bytes: 200000,
+  });
+  assert.equal(next.chunks.length, 16);
+  assert.equal(next.cursor, 16);
+  assert.equal(next.stdout, chunks.filter(x => x.stream === 'stdout').map(x => x.text).join(''));
+  assert.equal(next.stderr, chunks.filter(x => x.stream === 'stderr').map(x => x.text).join(''));
+});
+
+test('partially retried batch appends only a new suffix without duplication', async () => {
+  const ctx = makeService(), ws = await setup(ctx);
+  const command = await ctx.service.invoke('owner', 'run_command', {
+    workspace_id: ws.workspace_id, command: 'echo retry', yield_time_ms: 0,
+  });
+  await ctx.service.claim('owner', 'project-1', ws.workspace_id, 1, 'consumer-1');
+  const chunks = Array.from({ length: 12 }, (_, i) => ({
+    cursor: i + 1, stream: 'stdout', text: String(i),
+  }));
+  await ctx.service.progressBatch('owner', 'project-1', ws.workspace_id, 1,
+    { execution_id: command.execution_id, chunks: chunks.slice(0, 5) });
+  const result = await ctx.service.progressBatch('owner', 'project-1', ws.workspace_id, 1,
+    { execution_id: command.execution_id, chunks });
+  assert.equal(result.ok, true);
+  assert.equal(result.persisted, 7);
+  const output = await ctx.service.invoke('owner', 'command_output', {
+    workspace_id: ws.workspace_id, execution_id: command.execution_id, max_bytes: 65536,
+  });
+  assert.equal(output.chunks.length, 12);
+  assert.equal(output.stdout, '01234567891011');
+});
+
+test('batch validates cursor gaps, conflicts and payload size before mutations', async () => {
+  const ctx = makeService(), ws = await setup(ctx);
+  const command = await ctx.service.invoke('owner', 'run_command', {
+    workspace_id: ws.workspace_id, command: 'check bounds', yield_time_ms: 0,
+  });
+  await ctx.service.claim('owner', 'project-1', ws.workspace_id, 1, 'consumer-1');
+  const attrs = { execution_id: command.execution_id };
+  const call = chunks => ctx.service.progressBatch(
+    'owner', 'project-1', ws.workspace_id, 1, { ...attrs, chunks });
+  assert.equal((await call([{ cursor: 2, stream: 'stdout', text: 'gap' }])).ok, false);
+  await assert.rejects(call([{ cursor: 1, stream: 'stdout', text: 'x'.repeat(131073) }]), /128KiB/);
+  await assert.rejects(call([
+    { cursor: 1, stream: 'stdout', text: 'first' },
+    { cursor: 3, stream: 'stdout', text: 'not contiguous' },
+  ]), /contiguous/);
+  const record = ctx.db.collection('mcpWorkspaces').doc(ws.workspace_id)
+    .collection('mcpRequests').doc('00000001');
+  assert.equal((await record.get()).data().outputCursor, 0);
+  await call([{ cursor: 1, stream: 'stdout', text: 'correct' }]);
+  const conflict = await call([{ cursor: 1, stream: 'stderr', text: 'wrong' }]);
+  assert.equal(conflict.ok, false);
+  assert.match(conflict.error, /conflict/);
+  const recordAfter = await record.get();
+  assert.equal(recordAfter.data().outputCursor, 1);
+});
+
+test('mixed legacy single-chunk and batched output writes remain cursor compatible', async () => {
+  const ctx = makeService(), ws = await setup(ctx);
+  const cmd = await ctx.service.invoke('owner', 'run_command', {
+    workspace_id: ws.workspace_id, command: 'mixed', yield_time_ms: 0,
+  });
+  await ctx.service.claim('owner', 'project-1', ws.workspace_id, 1, 'consumer-1');
+  assert.equal((await ctx.service.progress('owner', 'project-1', ws.workspace_id, 1, {
+    execution_id: cmd.execution_id, chunk: { cursor: 1, stream: 'stdout', text: 'one' },
+  })).ok, true);
+  const progress = await ctx.service.progressBatch('owner', 'project-1', ws.workspace_id, 1, {
+    execution_id: cmd.execution_id,
+    chunks: [
+      { cursor: 2, stream: 'stderr', text: 'two' },
+      { cursor: 3, stream: 'stdout', text: 'three' },
+    ],
+  });
+  assert.equal(progress.cursor, 3);
+  const result = await ctx.service.invoke('owner', 'command_output', {
+    workspace_id: ws.workspace_id, execution_id: cmd.execution_id,
+  });
+  assert.equal(result.stdout, 'onethree');
+  assert.equal(result.stderr, 'two');
+});
