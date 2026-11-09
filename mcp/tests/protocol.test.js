@@ -72,6 +72,12 @@ test('MCP SDK exposes native parity tool surface and enforces owner auth', async
     await client.connect(new StreamableHTTPClientTransport(url, { requestInit: { headers: { Authorization: 'Bearer valid' } } }));
     const listed = await client.listTools();
     assert.equal(listed.tools.length, 14);
+    const resources = await client.listResources();
+    assert.ok(resources.resources.some(x => x.uri === 'awfl://environment/guide'));
+    const guide = await client.readResource({ uri: 'awfl://environment/guide' });
+    assert.match(guide.contents[0].text, /CLOUDSDK_AUTH_ACCESS_TOKEN_FILE/);
+    assert.match(guide.contents[0].text, /Firebase ID token/);
+    assert.doesNotMatch(guide.contents[0].text, /Bearer [a-zA-Z0-9]{30,}/);
     assert.equal(listed.tools.find(t => t.name === 'projects_list').annotations.readOnlyHint, true);
     assert.equal(listed.tools.find(t => t.name === 'run_command').annotations.destructiveHint, true);
     assert.equal(listed.tools.find(t => t.name === 'workspace_create').inputSchema.required.includes('project_id'), true);
