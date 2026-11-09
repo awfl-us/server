@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync, existsSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { consumerStartupCommand } from '../paths/gke.js';
+import { consumerStartupCommand, projectCheckoutUrl } from '../paths/gke.js';
 
 function executable(path, body) {
   writeFileSync(path, body, { mode: 0o755 });
@@ -118,4 +118,27 @@ test('custom startup and non-refresh consumers keep existing behavior', () => {
     consumerStartupCommand({ startupSh: 'awfl run', refreshEnabled: false }),
     'awfl run',
   );
+});
+
+
+test('GitHub remotes normalize for checkout; untrusted/non-GitHub strings are rejected', () => {
+  assert.equal(projectCheckoutUrl('github.com:awfl-us/server.git'), 'https://github.com/awfl-us/server.git');
+  assert.equal(projectCheckoutUrl('github.com/awfl-us/server.git'), 'https://github.com/awfl-us/server.git');
+  assert.equal(projectCheckoutUrl('https://github.com/awfl-us/server'), 'https://github.com/awfl-us/server.git');
+  assert.equal(projectCheckoutUrl('git@github.com:awfl-us/server.git'), 'https://github.com/awfl-us/server.git');
+  for (const invalid of ['https://evil.example/repo.git', 'github.com/owner/repo;echo hacked',
+    'github.com/owner/repo name', '', undefined]) {
+    assert.equal(projectCheckoutUrl(invalid), null);
+  }
+});
+
+test('project checkout is nonfatal and uses standard GKE consumer startup', () => {
+  const command = consumerStartupCommand({ refreshEnabled: true, checkoutEnabled: true });
+  assert.match(command, /git clone --quiet/);
+  assert.match(command, /GIT_TERMINAL_PROMPT=0/);
+  assert.match(command, /project clone unavailable; shell remains usable/);
+  assert.match(command, /exec awfl run$/);
+  const withoutRefresh = consumerStartupCommand({ refreshEnabled: false, checkoutEnabled: true });
+  assert.match(withoutRefresh, /git clone --quiet/);
+  assert.match(withoutRefresh, /exec awfl run$/);
 });

@@ -198,6 +198,7 @@ router.post('/:id/consumer-heartbeat', async (req, res) => {
   try {
     const outcome = await heartbeatConsumer({
       userId: req.userId, projectId: req.params.id, consumerId,
+      podUid: req.body?.podUid,
       connected: req.body?.connected,
       capacity: req.body?.capacity, activeExecutions: req.body?.activeExecutions,
       capabilities: req.body?.capabilities,

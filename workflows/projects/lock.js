@@ -191,7 +191,7 @@ export async function getConsumerLock({ userId, projectId }) {
  * The caller must be Firebase-authorized for this project. A stale consumer
  * cannot update a replacement's heartbeat after its lease expires.
  */
-export async function heartbeatConsumer({ userId, projectId, consumerId, connected, capacity, activeExecutions, capabilities }) {
+export async function heartbeatConsumer({ userId, projectId, consumerId, podUid, connected, capacity, activeExecutions, capabilities }) {
   const ref = projectDoc(userId, projectId);
   return db.runTransaction(async tx => {
     const snap = await tx.get(ref);
@@ -203,6 +203,7 @@ export async function heartbeatConsumer({ userId, projectId, consumerId, connect
     const heartbeat = {
       consumerId,
       generation: lock.acquiredAt,
+      podUid: typeof podUid === 'string' && /^[a-f0-9-]{36}$/.test(podUid) ? podUid : null,
       at: now,
       connected: connected === true,
       phase: connected === true ? 'ready' : 'connecting_to_server',
