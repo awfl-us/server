@@ -147,6 +147,7 @@ export async function startGke({
     { name: 'AWFL_CONSUMER_ID', value: consumerId },
     { name: 'AWFL_PROJECT_ID', value: String(projectId) },
     { name: 'AWFL_CONSUMER_TYPE', value: 'CLOUD' },
+    { name: 'AWFL_POD_UID', valueFrom: { fieldRef: { fieldPath: 'metadata.uid' } } },
     ...(checkoutUrl ? [{ name: 'AWFL_PROJECT_CLONE_URL', value: checkoutUrl }] : []),
     ...(githubToken ? [{ name: 'GITHUB_TOKEN', value: githubToken }] : []),
     ...(refreshEnabled && githubToken ? [{ name: 'AWFL_GITHUB_TOKEN_FILE', value: '/tmp/awfl-github-token' }] : []),
@@ -208,7 +209,7 @@ export async function startGke({
 
   let cRun;
   try {
-    cRun = await runK8sJob({ namespace, jobName: consumerJobName, image: consumerImage, serviceAccountName: consumerKsa, envPairs: consumerEnv, containerName: 'consumer', ...(directCommand ? { command: directCommand } : { shCommand: effectiveStartup }) });
+    cRun = await runK8sJob({ namespace, jobName: consumerJobName, image: consumerImage, serviceAccountName: consumerKsa, envPairs: consumerEnv, containerName: 'consumer', backoffLimit: 3, ...(directCommand ? { command: directCommand } : { shCommand: effectiveStartup }) });
   } catch (e) {
     await bestEffortRelease({ userId, projectId });
     return { status: 500, body: { error: 'Transport error creating consumer K8s Job', details: String(e?.message || e) } };
