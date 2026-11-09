@@ -1,13 +1,20 @@
 import { runK8sJob } from '../gke.js';
 import { setConsumerRuntimeInfo } from '../../../workflows/projects/lock.js';
 import { scheduleStartupProgress } from '../progress.js';
+import { projectDoc } from '../../../workflows/projects/util.js';
+
+// Only allow GitHub repository URLs; never interpolate project metadata into a shell.
+export function projectCheckoutUrl(remote) {
+  const matched = /^(?:(?:https?:\/\/)?github\.com[:/]|git@github\.com:)([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?)$/.exec(String(remote || '').trim());
+  return matched ? 'https://github.com/' + matched[1].replace(/\.git$/, '') + '.git' : null;
+}
 
 // Launch the consumer with the credentials supplied by the producer immediately.
 // Refresh happens asynchronously and can fail without preventing awfl run.
 // Seed the files first so gcloud and Git keep working even if refresh is unavailable.
-export function consumerStartupCommand({ startupSh = 'awfl run', refreshEnabled = false } = {}) {
-  if (!refreshEnabled || startupSh !== 'awfl run') return startupSh;
-  return [
+export function consumerStartupCommand({ startupSh = 'awfl run', refreshEnabled = false, checkoutEnabled = false } = {}) {
+  if ((!refreshEnabled && !checkoutEnabled) || startupSh !== 'awfl run') return startupSh;
+  const credentialBootstrap = refreshEnabled ? [
     'if python -c "import awfl.consumer_credentials" 2>/dev/null; then',
     '  if [ -n "${CLOUDSDK_AUTH_ACCESS_TOKEN_FILE:-}" ] && [ -n "${CLOUDSDK_AUTH_ACCESS_TOKEN:-}" ]; then',
     '    if (umask 077; printf "%s\\n" "$CLOUDSDK_AUTH_ACCESS_TOKEN" > "$CLOUDSDK_AUTH_ACCESS_TOKEN_FILE"); then',
@@ -33,8 +40,15 @@ export function consumerStartupCommand({ startupSh = 'awfl run', refreshEnabled 
     '  echo "[awfl] consumer image lacks credential refresher; using startup credentials" >&2',
     '  unset CLOUDSDK_AUTH_ACCESS_TOKEN_FILE AWFL_GITHUB_TOKEN_FILE',
     'fi',
-    'exec awfl run',
-  ].join('\n');
+  ] : [];
+  const checkout = checkoutEnabled ? [
+    'if [ -n "${AWFL_PROJECT_CLONE_URL:-}" ] && [ -d /workspace ] && [ ! -e /workspace/.git ]; then',
+    '  if [ -z "$(ls -A /workspace)" ]; then',
+    '    GIT_TERMINAL_PROMPT=0 git clone --quiet "$AWFL_PROJECT_CLONE_URL" /workspace || echo "[awfl] project clone unavailable; shell remains usable" >&2',
+    '  fi',
+    'fi',
+  ] : [];
+  return [...credentialBootstrap, ...checkout, 'exec awfl run'].join('\n');
 }
 
 // Updated GKE start path: launch only the consumer Job (awfl CLI) via HTTP/SSE. No Pub/Sub.
@@ -77,8 +91,15 @@ export async function startGke({
   // The former MCP path launched the same image directly (no intermediate shell).
   // Apply that small optimization to every standard project consumer as well.
   const refreshEnabled = Boolean(credentialRefreshToken && (googleCloud?.accessToken || githubToken));
-  const directCommand = startupSh === defaultStartup && !refreshEnabled ? ['awfl', 'run'] : undefined;
-  const effectiveStartup = consumerStartupCommand({ startupSh, refreshEnabled });
+  let checkoutUrl = null;
+  try {
+    const project = await projectDoc(userId, projectId).get();
+    checkoutUrl = projectCheckoutUrl(project.data()?.remote);
+  } catch {
+    console.warn('[jobs/producer:gke] project checkout URL unavailable; continuing without checkout');
+  }
+  const directCommand = startupSh === defaultStartup && !refreshEnabled && !checkoutUrl ? ['awfl', 'run'] : undefined;
+  const effectiveStartup = consumerStartupCommand({ startupSh, refreshEnabled, checkoutEnabled: Boolean(checkoutUrl) });
 
   if (!consumerImage) {
     await bestEffortRelease({ userId, projectId });
@@ -126,6 +147,7 @@ export async function startGke({
     { name: 'AWFL_CONSUMER_ID', value: consumerId },
     { name: 'AWFL_PROJECT_ID', value: String(projectId) },
     { name: 'AWFL_CONSUMER_TYPE', value: 'CLOUD' },
+    ...(checkoutUrl ? [{ name: 'AWFL_PROJECT_CLONE_URL', value: checkoutUrl }] : []),
     ...(githubToken ? [{ name: 'GITHUB_TOKEN', value: githubToken }] : []),
     ...(refreshEnabled && githubToken ? [{ name: 'AWFL_GITHUB_TOKEN_FILE', value: '/tmp/awfl-github-token' }] : []),
     // Keep the OAuth refresh token on the server. gcloud reads the latest
