@@ -45,7 +45,7 @@ resource "local_file" "actions_variables" {
     CLOUD_RUN_JOBS_SERVICE = "jobs"
 
     # Shared work bucket
-    GCS_BUCKET = google_storage_bucket.shared.name
+    GCS_BUCKET = data.google_storage_bucket.shared.name
 
     # Service account emails for Producer and Consumer Jobs
     # deploy-cloud-run.yml expects *_JOB_SA_EMAIL (and falls back to CLOUD_RUN_RUNTIME_SA)
@@ -97,7 +97,7 @@ resource "local_file" "actions_variables" {
     # Ensure topic exists before referencing it
     google_pubsub_topic.shared,
     # Ensure bucket exists before referencing it
-    google_storage_bucket.shared,
+    data.google_storage_bucket.shared,
     # Include cluster so cluster/namespace/ksa vars are available
     google_container_cluster.awfl,
   ]

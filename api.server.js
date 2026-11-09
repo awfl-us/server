@@ -120,7 +120,7 @@ const execution = new ExecutionService({ db: getFirestore() })
 app.use('/mcp', createMcpRouter(execution))
 
 // Workflows (primary mount)
-app.use('/consumer-credentials/refresh', consumerCredentialRefresh)
+app.use('/consumer-credentials', consumerCredentialRefresh)
 app.use('/workflows', workflowsRoutes)
 // Back-compat for local/dev prefix
 // app.use('/api/workflows', workflowsRoutes)

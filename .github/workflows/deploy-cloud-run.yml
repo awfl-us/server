@@ -15,7 +15,7 @@ jobs:
     env:
       MCP_OWNER_UID: ${{ vars.MCP_OWNER_UID }}
       GOOGLE_CLOUD_OAUTH_CLIENT_ID: ${{ vars.GOOGLE_CLOUD_OAUTH_CLIENT_ID }}
-      AWFL_CLI_REF: 'a65a83ab872fb7ed97da49cba1f6335d454919ca'
+      AWFL_CLI_REF: '3f25595ff413065147ab254b62dd9310a0451dd6'
       CORS_ALLOW_ORIGIN: ${{ vars.CORS_ALLOW_ORIGIN }}
       # Default to repository variables; will be overridden by JSON if present
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
@@ -63,6 +63,7 @@ jobs:
         run: |
           npm install --ignore-scripts
           node --test mcp/tests/*.test.js
+          node --test workflows/workspace/storageTokens.test.js
 
       - name: Authenticate to Google Cloud (WIF/OIDC)
         uses: google-github-actions/auth@v2
