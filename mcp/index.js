@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { requireAwflApiKey } from '../workflows/apiKeys/verify.js';
 import { tools } from './tools.js';
+import { ENVIRONMENT_INSTRUCTIONS, ENVIRONMENT_GUIDE, ENVIRONMENT_GUIDE_URI } from './environment.js';
 
 export function createMcpRouter(service, authenticate = requireAwflApiKey()) {
   const router = express.Router();
@@ -20,7 +21,17 @@ export function createMcpRouter(service, authenticate = requireAwflApiKey()) {
   });
   router.post('/', async (req, res) => {
     // A new SDK server/transport for every HTTP request prevents cross-user/session leakage.
-    const server = new McpServer({ name: 'awfl-cloud-execution', version: '1.0.0' });
+    const server = new McpServer(
+      { name: 'awfl-cloud-execution', version: '1.1.0' },
+      { instructions: ENVIRONMENT_INSTRUCTIONS },
+    );
+    // MCP resources are discoverable by clients that support resources/list.
+    // No secrets are embedded; live credential status comes from environment_status.
+    server.registerResource('awfl-environment-guide', ENVIRONMENT_GUIDE_URI,
+      { description: 'AWFL project consumer, credentials, refresh and tool usage', mimeType: 'text/markdown' },
+      async uri => ({
+        contents: [{ uri: uri.href, mimeType: 'text/markdown', text: ENVIRONMENT_GUIDE }],
+      }));
     for (const [name, definition] of Object.entries(tools)) {
       server.registerTool(name, { description: definition.description, inputSchema: definition.schema,
         annotations: { readOnlyHint: Boolean(definition.readOnly), destructiveHint: !definition.readOnly,

@@ -1,0 +1,95 @@
+/** Public AWFL MCP guidance and secret-free consumer inventory contract. */
+export const ENVIRONMENT_GUIDE_URI = 'awfl://environment/guide';
+
+export const ENVIRONMENT_INSTRUCTIONS = [
+  'AWFL attaches to one existing project-scoped shared GKE consumer, not a separate execution backend.',
+  'Call projects_list, workspace_create({project_id}), and then environment_status({workspace_id}) to discover readiness, credentials and tools.',
+  'Environment details come from the current consumer heartbeat. Missing or stale heartbeat means unknown, not credentials absent.',
+  'Google Cloud normally uses CLOUDSDK_AUTH_ACCESS_TOKEN_FILE (/tmp/awfl-google-access-token) and CLOUDSDK_CORE_PROJECT. Do not print token contents.',
+  'GitHub normally uses AWFL_GITHUB_TOKEN_FILE (/tmp/awfl-github-token) with a Git credential helper. New CLI subprocesses load the latest token.',
+  'AWFL MCP API keys are separate from GCP/GitHub credentials. Manage them in AWFL Settings > API Keys or through the Firebase-authenticated /workflows/api-keys API.',
+  'Never echo, log or share secret token values. More details: MCP resource awfl://environment/guide.',
+].join('\n');
+
+export const ENVIRONMENT_GUIDE = [
+  '# AWFL cloud environment guide',
+  '',
+  'AWFL MCP uses the **existing shared project-scoped GKE Python consumer**, Firestore execution records and consumer lock. It does not create an independent runtime.',
+  '',
+  '## Discover the environment',
+  '',
+  '1. Call projects_list, workspace_create({project_id}), then environment_status({workspace_id}).',
+  '2. Consumer readiness is not the same as an active Kubernetes Job; wait until the consumer heartbeat says ready.',
+  '3. The environment object reflects the latest fresh consumer heartbeat, not the MCP server process. Null means unknown/not ready, not missing credentials.',
+  '4. Use run_command and command_output for shell execution, read_file and apply_patch for edits, and search_files/list_directory for inspection.',
+  '',
+  '## Google Cloud',
+  '',
+  '- CLOUDSDK_AUTH_ACCESS_TOKEN_FILE normally identifies /tmp/awfl-google-access-token (secret content).',
+  '- CLOUDSDK_CORE_PROJECT identifies the configured GCP project. gcloud is normally installed at /opt/google-cloud-sdk/bin/gcloud.',
+  '- Use gcloud or read the token file inside a trusted process only; never print the token or include it in command output or logs.',
+  '- Refresh is configured when available. A reported token file is not proof of live authorization or IAM permissions.',
+  '',
+  '## GitHub',
+  '',
+  '- AWFL_GITHUB_TOKEN_FILE normally identifies /tmp/awfl-github-token (secret content).',
+  '- Git uses a dynamic credential helper; prefer normal git commands without displaying credentials.',
+  '- New Python consumer subprocesses load fresh GITHUB_TOKEN and GH_TOKEN from the rotated file when present. Already-running shells can retain stale environment values.',
+  '',
+  '## AWFL MCP API keys are different',
+  '',
+  '- AWFL MCP keys authorize calls to https://api.awfl.us/mcp; they are not Google Cloud or GitHub tokens.',
+  '- Create and revoke AWFL keys from AWFL web Settings > API Keys.',
+  '- Management endpoints require an AWFL Firebase ID token (NOT a GCP access token or existing MCP key):',
+  '  GET /workflows/api-keys — list metadata;',
+  '  POST /workflows/api-keys with JSON {"name":"My MCP client"} — return a new key ONCE;',
+  '  DELETE /workflows/api-keys/:id — revoke.',
+  '- Use an authenticated key-management flow. Never expose the newly generated key in agent tool output, logs or conversation.',
+  '',
+  '## Security and interpretation',
+  '',
+  '- Environment status contains only allowlisted booleans, known variable names, documented token paths and the configured GCP project. No credential values.',
+  '- A nonempty token file indicates configured local credentials; it does not confirm OAuth validity or cloud IAM authorization.',
+  '- Workspaces and executions remain scoped to project authorization. Shared consumer process state must not be changed globally.',
+].join('\n');
+
+const TOOL_NAMES = ['git', 'gcloud', 'python', 'node', 'chromium_playwright'];
+const GOOGLE_PATH = '/tmp/awfl-google-access-token';
+const GITHUB_PATH = '/tmp/awfl-github-token';
+
+/** Reject arbitrary fields before persisting heartbeat data in Firestore. */
+export function sanitizeEnvironment(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const credentials = value.credentials || {};
+  const google = credentials.google_cloud || {};
+  const github = credentials.github || {};
+  const tools = value.tools || {};
+  const project = google.project;
+  const cwd = typeof value.cwd === 'string' &&
+    value.cwd.startsWith('/') && value.cwd.length <= 1024 &&
+    !/[\u0000-\u001f\u007f]/.test(value.cwd) ? value.cwd : null;
+  return {
+    runtime: 'shared_gke_python_consumer',
+    cwd,
+    credentials: {
+      google_cloud: {
+        available: google.available === true,
+        token_file_env: 'CLOUDSDK_AUTH_ACCESS_TOKEN_FILE',
+        token_file: google.token_file === GOOGLE_PATH && google.available === true ? GOOGLE_PATH : null,
+        project_env: 'CLOUDSDK_CORE_PROJECT',
+        project: typeof project === 'string' && /^[a-z][a-z0-9-]{0,62}$/.test(project) ? project : null,
+        refresh_configured: google.refresh_configured === true,
+        cli_available: google.cli_available === true,
+      },
+      github: {
+        available: github.available === true,
+        token_file_env: 'AWFL_GITHUB_TOKEN_FILE',
+        token_file: github.token_file === GITHUB_PATH && github.available === true ? GITHUB_PATH : null,
+        refresh_configured: github.refresh_configured === true,
+        git_credential_helper: github.git_credential_helper === true,
+        cli_available: github.cli_available === true,
+      },
+    },
+    tools: Object.fromEntries(TOOL_NAMES.map(name => [name, tools[name] === true])),
+  };
+}

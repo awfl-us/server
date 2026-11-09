@@ -116,8 +116,11 @@ export class ExecutionService {
         capacity: heartbeatFresh ? heartbeat.capacity : null,
         active_execution_ids: heartbeatFresh ? heartbeat.activeExecutions : [],
         capabilities: heartbeatFresh ? heartbeat.capabilities : [],
+        environment: heartbeatFresh ? heartbeat.environment || null : null,
       },
       shared: true,
+      environment_guide: 'awfl://environment/guide',
+      environment: heartbeatFresh ? heartbeat.environment || null : null,
       queue: { pending, running: active },
       ...(job ? { consumer_job: job } : {}),
     };
@@ -128,6 +131,8 @@ export class ExecutionService {
       state: 'control_plane_ready', transport: 'Shared project event stream and callbacks',
       execution: 'Existing project-scoped consumer; one GKE Job/lock per project',
       configured: true,
+      environment_guide: 'awfl://environment/guide',
+      next_step: 'Use projects_list, workspace_create, then environment_status(workspace_id) to inspect live credentials and tools.',
     };
     if (name === 'projects_list') return this.listProjects(userId, args);
     if (name === 'workspace_create') return this.create(userId, args);
