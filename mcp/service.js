@@ -12,11 +12,27 @@ export const digest = value => createHash('sha256').update(value).digest('hex');
 export function fail(message) { throw Object.assign(new Error(message), { publicMessage: message }); }
 export const validId = value => typeof value === 'string' && /^[a-f0-9]{32}$/.test(value);
 const requestDocId = seq => String(seq).padStart(8, '0');
-export const executionIdFor = (workspaceId, seq) => 'exec_' + workspaceId + '_' + requestDocId(seq);
-export function parseExecutionId(id) {
-  const match = /^exec_([a-f0-9]{32})_([0-9]{8})$/.exec(String(id || ''));
-  if (!match) fail('Invalid execution ID');
-  return { workspaceId: match[1], seq: Number(match[2]) };
+// 32 hexadecimal characters keep compatibility with existing AWFL MCP
+// connectors. The first 24 are the workspace prefix; the final eight
+// encode the per-workspace sequence. Authorization always checks the FULL
+// workspace ID separately. Previous exec_<workspace>_<seq> handles remain
+// readable across the upgrade.
+export const executionIdFor = (workspaceId, seq) =>
+  workspaceId.slice(0, 24) + seq.toString(16).padStart(8, '0');
+export function parseExecutionId(id, workspaceId) {
+  if (!validId(workspaceId)) fail('Invalid workspace ID');
+  const raw = String(id || '');
+  const oldId = /^exec_([a-f0-9]{32})_([0-9]{8})$/.exec(raw);
+  if (oldId) {
+    if (oldId[1] !== workspaceId) fail('Execution belongs to another workspace');
+    return { workspaceId, seq: Number(oldId[2]) };
+  }
+  if (!/^[a-f0-9]{32}$/.test(raw) || raw.slice(0, 24) !== workspaceId.slice(0, 24)) {
+    fail('Invalid execution ID for workspace');
+  }
+  const seq = Number.parseInt(raw.slice(24), 16);
+  if (!Number.isSafeInteger(seq) || seq < 1 || seq > 2000) fail('Invalid execution ID sequence');
+  return { workspaceId, seq };
 }
 const terminalStates = new Set(['completed', 'failed', 'timed_out', 'cancelled']);
 function requestState(data) {
@@ -290,7 +306,7 @@ export class ExecutionService {
   }
 
   async waitForCommand(userId, ws, args) {
-    const parsed = parseExecutionId(args.execution_id);
+    const parsed = parseExecutionId(args.execution_id, args.workspace_id);
     const request = this.ref(parsed.workspaceId).collection('mcpRequests').doc(requestDocId(parsed.seq));
     const wait = Math.max(0, Math.min(15000, args.yield_time_ms ?? 10000));
     if (wait) await new Promise(resolve => {
