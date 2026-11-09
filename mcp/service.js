@@ -174,6 +174,7 @@ export class ExecutionService {
       tx.create(ref.collection('mcpRequests').doc(requestDocId(seq)), {
         seq, executionId: id, state: consumerLive ? 'queued' : 'waiting_for_consumer',
         toolName: name, createdAt: Date.now(), claimedAt: null, outputCursor: 0,
+        startupDeadlineAt: Date.now() + 180000,
         expires_at, args: parameters,
       });
       if (keyRef) tx.create(keyRef, { workspaceId, seq, fingerprint, createdAt: Date.now(), expires_at });
@@ -203,6 +204,7 @@ export class ExecutionService {
       created_at: Date.now(),
       expires_at: new Date(ws.expiresAt + 86400000),
     });
+    await request.update({ callbackId });
     let toolArgs;
     if (name === 'run_command') {
       toolArgs = commandArguments(args);
@@ -222,11 +224,18 @@ export class ExecutionService {
       if (args.cwd) eventData.workdir = args.cwd;
     }
     try {
+      if (isCommand && !consumerLive) {
+        // Reuse the project's existing lifecycle. Startup is separate from
+        // the command execution timeout; no second GKE Job/consumer is created.
+        await this.startConsumer({ userId, projectId: ws.projectId });
+      }
       await this.backend(userId, ws.projectId).append(normalizeEnvelope({
         projectId: ws.projectId, sessionId: ws.sessionId,
         type: 'message', source: 'mcp', data: eventData,
       }));
-      await request.update({ dispatchedAt: Date.now() });
+      const current = await this.getLock({ userId, projectId: ws.projectId });
+      await request.update({ dispatchedAt: Date.now(),
+        dispatchConsumerId: current.lock?.consumerId || null });
     } catch {
       await request.update({
         state: 'failed', result: {
