@@ -18,10 +18,15 @@ export const tools = {
     description: 'List your owned AWFL projects by recent update.',
     schema: { limit: z.number().int().min(1).max(200).default(50) }, readOnly: true,
   },
+  image_profiles_list: {
+    description: 'List selectable GKE environment image profiles and whether each image is configured for startup.',
+    schema: {}, readOnly: true,
+  },
   workspace_create: {
-    description: 'Attach to or start the existing project-scoped AWFL consumer; never creates a second execution backend. idle_timeout_seconds applies only when starting a new consumer, not when attaching to an existing one (default: 3600 seconds, range: 60-86400).',
+    description: 'Attach to or start the existing project-scoped AWFL consumer. image_profile chooses lightweight (default), browser (Chromium/Playwright), or scala (Java/sbt) for a NEW consumer; an existing shared environment cannot be switched without stopping it. idle_timeout_seconds applies only to a new consumer.',
     schema: { project_id: z.string().min(1).max(128), session_id: z.string().min(1).max(128).optional(),
-      idle_timeout_seconds: z.number().int().min(60).max(86400).optional() },
+      idle_timeout_seconds: z.number().int().min(60).max(86400).optional(),
+      image_profile: z.enum(['lightweight', 'browser', 'scala']).optional() },
   },
   run_command: {
     description: 'Execute Bash in the shared project consumer. Returns a durable execution_id immediately if not finished; poll command_output. An idempotency_key prevents duplicate side effects when retrying. A nonzero shell exit is a normal result, not an MCP transport error.',

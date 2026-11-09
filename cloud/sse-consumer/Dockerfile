@@ -12,7 +12,6 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PATH="/home/awfl/.local/bin:${PATH}" \
     HOME="/home/awfl" \
-    PLAYWRIGHT_BROWSERS_PATH="/ms-playwright" \
     WORKDIR="/workspace"
 
 WORKDIR /app
@@ -45,12 +44,6 @@ RUN mkdir -p /etc/apt/keyrings \
     && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
-# Browser support lives in the existing AWFL consumer image, not a separate MCP image.
-# Install browser system dependencies while still root.
-RUN python -m pip install --no-cache-dir playwright==1.64.1 \
-    && python -m playwright install --with-deps --only-shell chromium \
-    && chmod -R a+rX /ms-playwright
-
 # Include gcloud for project-scoped Google Cloud testing. OAuth refresh tokens never enter the image or Job.
 RUN curl -fsSL https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-x86_64.tar.gz -o /tmp/gcloud.tar.gz \
     && echo '16fda6058d66e4ec29e8575e2b6e19b0d03cea7b091e6730f7e8361209e6955f  /tmp/gcloud.tar.gz' | sha256sum -c - \
@@ -78,3 +71,28 @@ RUN python -m pip install --user --upgrade pip \
 WORKDIR /workspace
 
 CMD ["awfl"]
+# All profiles use the same AWFL runtime, project lock and credential refresh.
+# Browser and Scala dependencies are deliberately absent from the base image.
+FROM base AS browser
+USER root
+ENV PLAYWRIGHT_BROWSERS_PATH="/ms-playwright"
+RUN python -m pip install --no-cache-dir playwright==1.64.1 \
+    && python -m playwright install --with-deps chromium \
+    && chmod -R a+rX /ms-playwright
+USER awfl
+
+FROM base AS scala
+USER root
+ARG SBT_VERSION=1.11.0
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openjdk-21-jdk-headless \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL --retry 3 "https://github.com/sbt/sbt/releases/download/v${SBT_VERSION}/sbt-${SBT_VERSION}.tgz" -o /tmp/sbt.tgz \
+    && tar -xzf /tmp/sbt.tgz -C /opt \
+    && rm /tmp/sbt.tgz
+ENV JAVA_HOME="/usr/lib/jvm/java-21-openjdk-amd64"
+ENV PATH="/opt/sbt/bin:${PATH}"
+USER awfl
+
+# Default for docker build without --target.
+FROM base AS lightweight

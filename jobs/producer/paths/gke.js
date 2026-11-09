@@ -1,6 +1,7 @@
 import { runK8sJob } from '../gke.js';
 import { setConsumerRuntimeInfo } from '../../../workflows/projects/lock.js';
 import { scheduleStartupProgress } from '../progress.js';
+import { resolveConsumerImage } from '../imageProfiles.js';
 
 // Launch the consumer with the credentials supplied by the producer immediately.
 // Refresh happens asynchronously and can fail without preventing awfl run.
@@ -44,6 +45,7 @@ export async function startGke({
   consumerId,
   gcpProject,
   requestedConsumerImage,
+  requestedImageProfile,
   encKeyB64,
   encVer,
   encFp,
@@ -67,7 +69,16 @@ export async function startGke({
   lockId,
 }) {
   const namespace = process.env.K8S_NAMESPACE || 'awfl';
-  const consumerImage = requestedConsumerImage || process.env.CONSUMER_K8S_IMAGE || '';
+  let consumerImage;
+  let imageProfile;
+  try {
+    ({ image: consumerImage, imageProfile } = resolveConsumerImage({
+      imageProfile: requestedImageProfile, imageOverride: requestedConsumerImage,
+    }));
+  } catch (error) {
+    await bestEffortRelease({ userId, projectId });
+    return { status: 400, body: { error: error.message } };
+  }
   const consumerKsa = process.env.CONSUMER_KSA_NAME || 'consumer';
 
   // Default startup script for the consumer
@@ -109,6 +120,7 @@ export async function startGke({
       namespace,
       consumerJobName,
       image: consumerImage,
+      imageProfile,
       resolvedWorkflowsBaseUrl,
       baseWasLocalhost,
       hasApiOrigin: Boolean(process.env.API_ORIGIN),
@@ -191,8 +203,15 @@ export async function startGke({
     }
   }
 
-  // Set billed Autopilot resource requests and bounded container limits.
-  const resources = {
+  // Keep lightweight consumers inexpensive, and provision enough disk and RAM
+  // for sbt dependency resolution and Scala incremental compilation.
+  const resources = imageProfile === 'scala' ? {
+    requests: { cpu: '1', memory: '3Gi', 'ephemeral-storage': '4Gi' },
+    limits: { cpu: '4', memory: '8Gi', 'ephemeral-storage': '10Gi' },
+  } : imageProfile === 'lightweight' ? {
+    requests: { cpu: '250m', memory: '1Gi', 'ephemeral-storage': '1Gi' },
+    limits: { cpu: '2', memory: '4Gi', 'ephemeral-storage': '2Gi' },
+  } : {
     requests: { cpu: '500m', memory: '1536Mi', 'ephemeral-storage': '1Gi' },
     limits: { cpu: '2', memory: '4Gi', 'ephemeral-storage': '2Gi' },
   };
@@ -229,6 +248,7 @@ export async function startGke({
         enc_fp: encFp,
         sessionId: sessionIdForFilter || null,
         idleTimeoutSeconds,
+        imageProfile,
       },
     });
   } catch (e) {
@@ -247,6 +267,7 @@ export async function startGke({
       producerJob: null,
       consumerJob: consumerJobName,
       consumerId,
+      imageProfile,
       workspaceId,
       sessionId: sessionIdForFilter || null,
       enc_ver: encVer,

@@ -43,3 +43,26 @@ test('failed project startup propagates and does not create an orphan MCP attach
     start: async () => ({ status: 500, body: { error: 'GKE unavailable' } }),
   }), /GKE unavailable/);
 });
+
+test('MCP passes a selected Scala profile through the existing project startup path', async () => {
+  const calls = [];
+  const result = await ensureProjectConsumer({ userId: 'owner', projectId: 'repo', imageProfile: 'scala' }, {
+    getLock: async () => ({ lock: null }),
+    start: async args => {
+      calls.push(args);
+      return { status: 202, body: { ok: true, consumerId: 'scala-consumer', imageProfile: 'scala' } };
+    },
+  });
+  assert.deepEqual(calls, [{ userId: 'owner', projectId: 'repo', body: { imageProfile: 'scala' } }]);
+  assert.deepEqual(result, { state: 'starting', consumerId: 'scala-consumer', imageProfile: 'scala' });
+});
+
+test('cannot silently switch images on an already running shared project consumer', async () => {
+  let started = false;
+  await assert.rejects(ensureProjectConsumer({ userId: 'owner', projectId: 'repo', imageProfile: 'scala' }, {
+    getLock: async () => ({ lock: { consumerId: 'browser-consumer', expiresAt: Date.now() + 60000,
+      runtime: { imageProfile: 'browser' } } }),
+    start: async () => { started = true; },
+  }), /stop it before choosing scala/);
+  assert.equal(started, false);
+});
