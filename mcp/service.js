@@ -337,6 +337,7 @@ export class ExecutionService {
     return {
       execution_id: args.execution_id, workspace_id: workspaceId,
       state, exit_code: result.exit_code ?? result.exitCode ?? null,
+      ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
       stdout: chunks.filter(x => x.stream === 'stdout' || x.stream === 'pty').map(x => x.text).join('') || fallback,
       stderr: chunks.filter(x => x.stream === 'stderr').map(x => x.text).join(''),
       chunks, cursor: nextCursor, has_more: nextCursor < high,
