@@ -399,7 +399,7 @@ export class ExecutionService {
   }
 
   async commandOutput(userId, ws, args) {
-    const { workspaceId, seq } = parseExecutionId(args.execution_id);
+    const { workspaceId, seq } = parseExecutionId(args.execution_id, args.workspace_id);
     if (workspaceId !== args.workspace_id) fail('Execution belongs to another workspace');
     const target = await this.owned(userId, workspaceId);
     if (target.projectId !== ws.projectId) fail('Execution belongs to another project');
