@@ -63,7 +63,9 @@ test('command gets durable execution ID before consumer completion, keyed retry 
   const args = { workspace_id: ws.workspace_id, command: 'echo hello',
     idempotency_key: 'test-key-123', yield_time_ms: 0 };
   const first = await ctx.service.invoke('owner', 'run_command', args);
-  assert.match(first.execution_id, /^exec_[a-f0-9]{32}_00000001$/);
+  assert.match(first.execution_id, /^[a-f0-9]{32}$/);
+  assert.ok(first.execution_id.startsWith(ws.workspace_id.slice(0, 24)));
+  assert.ok(first.execution_id.endsWith('00000001'));
   assert.equal(first.state, 'queued');
   assert.equal(ctx.events.length, 1);
   const same = await ctx.service.invoke('owner', 'run_command', args);
@@ -202,4 +204,15 @@ test('queued unclaimed work can be redelivered to replacement generation without
     workspace_id: ws.workspace_id, execution_id: started.execution_id,
   });
   assert.equal(ctx.events.length, 2);
+});
+
+test('old long execution IDs still parse with full workspace authorization', async () => {
+  const { parseExecutionId } = await import('../service.js');
+  const workspaceId = 'a'.repeat(32);
+  assert.deepEqual(parseExecutionId('exec_' + workspaceId + '_00000002', workspaceId),
+    { workspaceId, seq: 2 });
+  assert.deepEqual(parseExecutionId(executionIdFor(workspaceId, 3), workspaceId),
+    { workspaceId, seq: 3 });
+  assert.throws(() => parseExecutionId(executionIdFor(workspaceId, 3), 'b'.repeat(32)),
+    /Invalid execution ID/);
 });
