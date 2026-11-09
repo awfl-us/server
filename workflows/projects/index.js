@@ -1,6 +1,6 @@
 import express from 'express';
 import { projectsCol, projectDoc, has, asBool, normalizeGitRemote } from './util.js';
-import { acquireConsumerLock, releaseConsumerLock, getConsumerLockStatus } from './lock.js';
+import { acquireConsumerLock, releaseConsumerLock, getConsumerLockStatus, heartbeatConsumer } from './lock.js';
 
 const router = express.Router();
 router.use(express.json());
@@ -184,6 +184,27 @@ router.get('/:id/consumer-lock/status', async (req, res) => {
     if (err?.code === 404) return res.status(404).json({ error: 'Project not found' });
     console.error('[projects] consumer-lock status failed', err);
     return res.status(500).json({ error: 'Failed to get consumer lock status' });
+  }
+});
+
+// Heartbeat uses the EXISTING Firebase-authorized project route and
+// lock record, not a separate consumer registry or execution backend.
+router.post('/:id/consumer-heartbeat', async (req, res) => {
+  if (!req.userId) return res.sendStatus(401);
+  const consumerId = String(req.body?.consumerId || '');
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(consumerId)) {
+    return res.status(400).json({ error: 'Invalid consumer ID' });
+  }
+  try {
+    const outcome = await heartbeatConsumer({
+      userId: req.userId, projectId: req.params.id, consumerId,
+      connected: req.body?.connected,
+      capacity: req.body?.capacity, activeExecutions: req.body?.activeExecutions,
+      capabilities: req.body?.capabilities,
+    });
+    return res.status(outcome.ok ? 200 : 409).json(outcome);
+  } catch {
+    return res.status(503).json({ error: 'Consumer heartbeat unavailable' });
   }
 });
 
