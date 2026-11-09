@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 const id = z.string().regex(/^[a-f0-9]{32}$/);
-const executionId = z.string().regex(/^exec_[a-f0-9]{32}_[0-9]{8}$/);
+const executionId = z.string().regex(/^(?:[a-f0-9]{32}|exec_[a-f0-9]{32}_[0-9]{8})$/);
 const path = z.string().min(1).max(4096);
 const workspace = { workspace_id: id };
 
