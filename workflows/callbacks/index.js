@@ -73,7 +73,7 @@ router.post('/:id', async (req, res) => {
         const service = new ExecutionService({ db });
         const kind = req.body._awfl_mcp_event;
         const result = kind === 'claim'
-          ? await service.claim(userId, req.projectId, mcp.workspaceId, mcp.requestId, req.body.consumer_id)
+          ? await service.claim(userId, req.projectId, mcp.workspaceId, mcp.requestId, req.body.consumer_id, req.body.pod_uid)
           : kind === 'output'
             ? await service.progress(userId, req.projectId, mcp.workspaceId, mcp.requestId, req.body)
             : await service.complete(userId, req.projectId, mcp.workspaceId, mcp.requestId, req.body);
