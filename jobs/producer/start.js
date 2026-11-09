@@ -10,6 +10,7 @@ import { startGke } from './paths/gke.js';
 import { startLocalDocker } from './paths/localDocker.js';
 import { loadConsumerCredentials } from './credentials.js';
 import { cancelStartupProgress } from './progress.js';
+import { resolveIdleTimeoutSeconds } from './idleTimeout.js';
 
 export async function startProjectConsumer({ userId, projectId, body = {} }) {
   let consumerId = null;
@@ -25,6 +26,13 @@ export async function startProjectConsumer({ userId, projectId, body = {} }) {
   try {
     if (!userId) return { status: 401, body: { error: 'Unauthorized: missing user context' } };
     if (!projectId) return { status: 400, body: { error: 'Missing x-project-id header' } };
+
+    let idleTimeoutSeconds;
+    try {
+      idleTimeoutSeconds = resolveIdleTimeoutSeconds(body.idleTimeoutSeconds ?? body.idle_timeout_seconds);
+    } catch (error) {
+      return { status: 400, body: { error: error.message } };
+    }
 
     let workspaceId = String(body.workspaceId || body.workspace_id || '').trim();
 
@@ -215,6 +223,7 @@ export async function startProjectConsumer({ userId, projectId, body = {} }) {
       since_id,
       since_time,
       leaseMs,
+      idleTimeoutSeconds,
       bestEffortRelease,
       firebaseIdToken,
       firebaseCustomToken,
@@ -237,12 +246,15 @@ export async function startProjectConsumer({ userId, projectId, body = {} }) {
 
 // Both the browser and MCP use this launcher; an existing project lock means
 // we attach to the current consumer rather than creating another GKE Job.
-export async function ensureProjectConsumer({ userId, projectId }, { getLock = getConsumerLock, start = startProjectConsumer } = {}) {
+export async function ensureProjectConsumer({ userId, projectId, idleTimeoutSeconds }, { getLock = getConsumerLock, start = startProjectConsumer } = {}) {
   const { lock } = await getLock({ userId, projectId });
   if (lock && lock.expiresAt > Date.now()) {
     return { state: 'attached', consumerId: lock.consumerId };
   }
-  const result = await start({ userId, projectId });
+  const result = await start({
+    userId, projectId,
+    ...(idleTimeoutSeconds !== undefined ? { body: { idleTimeoutSeconds } } : {}),
+  });
   if (result.status === 202 && result.body?.message === 'Lock held by another consumer') {
     return { state: 'attached', consumerId: result.body.details?.holder?.consumerId };
   }

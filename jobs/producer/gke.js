@@ -105,7 +105,7 @@ async function fetchMetadataAccessToken({ timeoutMs = 1500 } = {}) {
   }
 }
 
-export async function runK8sJob({ namespace, jobName, image, serviceAccountName, envPairs = [], containerName = 'main', ttlSecondsAfterFinished = 3600, activeDeadlineSeconds, backoffLimit = 0, command, args, shCommand }) {
+export async function runK8sJob({ namespace, jobName, image, serviceAccountName, envPairs = [], containerName = 'main', ttlSecondsAfterFinished = 300, activeDeadlineSeconds, backoffLimit = 0, command, args, shCommand, resources }) {
   if (!namespace) return { ok: false, status: 400, error: 'Missing namespace' };
   if (!jobName) return { ok: false, status: 400, error: 'Missing jobName' };
   if (!image) return { ok: false, status: 400, error: 'Missing image' };
@@ -115,6 +115,7 @@ export async function runK8sJob({ namespace, jobName, image, serviceAccountName,
       name: containerName || 'main',
       image,
       env: (Array.isArray(envPairs) ? envPairs : []).map((e) => ({ name: String(e.name), value: String(e.value ?? '') })),
+      ...(resources ? { resources } : {}),
     };
 
     if (Array.isArray(command) && command.length) {

@@ -56,7 +56,8 @@ export async function startGke({
   workspaceId,
   since_id, // unused in consumer-only mode
   since_time, // unused in consumer-only mode
-  leaseMs, // unused in consumer-only mode (lock now managed by consumer CLI)
+  leaseMs, // project lock managed by consumer CLI
+  idleTimeoutSeconds,
   bestEffortRelease,
   // Per-request auth tokens from /start
   firebaseIdToken,
@@ -126,6 +127,7 @@ export async function startGke({
     { name: 'AWFL_CONSUMER_ID', value: consumerId },
     { name: 'AWFL_PROJECT_ID', value: String(projectId) },
     { name: 'AWFL_CONSUMER_TYPE', value: 'CLOUD' },
+    { name: 'AWFL_IDLE_TIMEOUT_SECONDS', value: String(idleTimeoutSeconds ?? 3600) },
     ...(githubToken ? [{ name: 'GITHUB_TOKEN', value: githubToken }] : []),
     ...(refreshEnabled && githubToken ? [{ name: 'AWFL_GITHUB_TOKEN_FILE', value: '/tmp/awfl-github-token' }] : []),
     // Keep the OAuth refresh token on the server. gcloud reads the latest
@@ -184,9 +186,19 @@ export async function startGke({
     }
   }
 
+  // Set billed Autopilot resource requests and bounded container limits.
+  const resources = {
+    requests: { cpu: '500m', memory: '2Gi', 'ephemeral-storage': '1Gi' },
+    limits: { cpu: '2', memory: '4Gi', 'ephemeral-storage': '2Gi' },
+  };
   let cRun;
   try {
-    cRun = await runK8sJob({ namespace, jobName: consumerJobName, image: consumerImage, serviceAccountName: consumerKsa, envPairs: consumerEnv, containerName: 'consumer', ...(directCommand ? { command: directCommand } : { shCommand: effectiveStartup }) });
+    cRun = await runK8sJob({
+      namespace, jobName: consumerJobName, image: consumerImage,
+      serviceAccountName: consumerKsa, envPairs: consumerEnv,
+      containerName: 'consumer', resources,
+      ...(directCommand ? { command: directCommand } : { shCommand: effectiveStartup }),
+    });
   } catch (e) {
     await bestEffortRelease({ userId, projectId });
     return { status: 500, body: { error: 'Transport error creating consumer K8s Job', details: String(e?.message || e) } };
@@ -211,6 +223,7 @@ export async function startGke({
         enc_ver: encVer,
         enc_fp: encFp,
         sessionId: sessionIdForFilter || null,
+        idleTimeoutSeconds,
       },
     });
   } catch (e) {
@@ -234,6 +247,7 @@ export async function startGke({
       enc_ver: encVer,
       enc_fp: encFp,
       consumerImage,
+      idleTimeoutSeconds,
     },
   };
 }

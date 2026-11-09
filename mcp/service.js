@@ -616,7 +616,10 @@ export class ExecutionService {
     if (!projectId) fail('project_id is required');
     const project = await this.db.collection('users').doc(userId).collection('projects').doc(projectId).get();
     if (!project.exists) fail('Project not found');
-    const consumer = await this.startConsumer({ userId, projectId });
+    const consumer = await this.startConsumer({
+      userId, projectId,
+      ...(args.idle_timeout_seconds !== undefined ? { idleTimeoutSeconds: args.idle_timeout_seconds } : {}),
+    });
     const id = randomBytes(16).toString('hex');
     const sessionId = (typeof args.session_id === 'string' && args.session_id.trim()) || 'mcp-' + id;
     const expiresAt = Date.now() + 3600000;
