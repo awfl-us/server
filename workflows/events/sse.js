@@ -12,6 +12,15 @@ export function createSSEConnection(res, options = {}) {
     }
   }, heartbeatMs);
 
+  // Write a comment only after the caller has authenticated, validated the
+  // workspace, and installed its event subscription. Unlike header-only
+  // responses, actual SSE bytes reach clients without waiting 15 seconds for
+  // the first idle keep-alive.
+  function ready() {
+    if (closed) return false;
+    try { return res.write(': ready\n\n'); } catch { return false; }
+  }
+
   function sendEvent(ev = {}) {
     if (closed) return false;
     try {
@@ -35,5 +44,5 @@ export function createSSEConnection(res, options = {}) {
     try { res.end(); } catch {}
   }
 
-  return { sendEvent, close };
+  return { sendEvent, ready, close };
 }

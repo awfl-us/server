@@ -209,6 +209,7 @@ router.get('/stream', async (req, res) => {
           }
         }, { after_time: lastSeenTime });
 
+        sse.ready(); // Flush successful SSE handshake now, not at the first 15s heartbeat.
         req.on('close', () => {
           try { unsub && unsub(); } catch {}
           try { sse.close(); } catch {}
@@ -236,6 +237,7 @@ router.get('/stream', async (req, res) => {
         }, { after_time: lastSeenTime });
 
         // Cleanup on connection close
+        sse.ready(); // Flush successful SSE handshake now, not at the first 15s heartbeat.
         req.on('close', () => {
           try { unsub && unsub(); } catch {}
           try { sse.close(); } catch {}
