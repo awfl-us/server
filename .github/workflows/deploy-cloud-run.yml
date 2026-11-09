@@ -227,7 +227,7 @@ jobs:
           SCALA_IMG: ${{ steps.consumer_images.outputs.SCALA_IMAGE_URI }}
         run: |
           set -euo pipefail
-          docker run --rm "$LIGHTWEIGHT_IMG" sh -lc 'command -v awfl && command -v git && command -v gcloud && ! command -v java && ! python -c "import playwright"'
+          docker run --rm "$LIGHTWEIGHT_IMG" sh -c 'command -v awfl && command -v git && command -v gcloud && ! command -v java && ! python -c "import playwright"'
           docker run --rm --shm-size=256m "$BROWSER_IMG" python -c '
           from playwright.sync_api import sync_playwright
           with sync_playwright() as p:
@@ -237,7 +237,7 @@ jobs:
               assert page.title() == "AWFL browser smoke"
               browser.close()
           '
-          docker run --rm "$SCALA_IMG" sh -lc 'java -version && command -v sbt && ! python -c "import playwright"'
+          docker run --rm "$SCALA_IMG" sh -c 'java -version && command -v sbt && ! python -c "import playwright"'
 
       # Artifact Registry's Image Streaming cache eliminates cold pulls after
       # image pushes. This is best-effort: a cache outage must not block deploy.
