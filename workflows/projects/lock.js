@@ -181,5 +181,38 @@ export async function getConsumerLock({ userId, projectId }) {
   }
   const data = snap.data() || {};
   const lock = data.consumerLock || null;
-  return { ok: true, lock: lock ? { ...shapeLock(lock), runtime: lock.runtime || null } : null };
+  return { ok: true, lock: lock ? { ...shapeLock(lock), runtime: lock.runtime || null,
+    heartbeat: lock.heartbeat || null } : null };
+}
+
+
+/**
+ * Record application readiness on the EXISTING project consumer lock.
+ * The caller must be Firebase-authorized for this project. A stale consumer
+ * cannot update a replacement's heartbeat after its lease expires.
+ */
+export async function heartbeatConsumer({ userId, projectId, consumerId, connected, capacity, activeExecutions, capabilities }) {
+  const ref = projectDoc(userId, projectId);
+  return db.runTransaction(async tx => {
+    const snap = await tx.get(ref);
+    const lock = snap.data()?.consumerLock;
+    const now = Date.now();
+    if (!snap.exists || !lock || lock.consumerId !== consumerId || lock.expiresAt <= now) {
+      return { ok: false, error: 'Consumer lock no longer held' };
+    }
+    const heartbeat = {
+      consumerId,
+      generation: lock.acquiredAt,
+      at: now,
+      connected: connected === true,
+      phase: connected === true ? 'ready' : 'connecting_to_server',
+      capacity: Math.min(Math.max(Number(capacity) || 0, 0), 64),
+      activeExecutions: Array.isArray(activeExecutions)
+        ? activeExecutions.filter(x => typeof x === 'string').slice(0, 64) : [],
+      capabilities: Array.isArray(capabilities)
+        ? capabilities.filter(x => typeof x === 'string').slice(0, 32) : [],
+    };
+    tx.set(ref, { consumerLock: { ...lock, heartbeat } }, { merge: true });
+    return { ok: true, heartbeat: { at: now, phase: heartbeat.phase } };
+  });
 }
