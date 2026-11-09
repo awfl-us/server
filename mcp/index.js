@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { requireAwflApiKey } from '../workflows/apiKeys/verify.js';
 import { tools } from './tools.js';
+import { formatToolResult } from './image.js';
 import { ENVIRONMENT_INSTRUCTIONS, ENVIRONMENT_GUIDE, ENVIRONMENT_GUIDE_URI } from './environment.js';
 
 export function createMcpRouter(service, authenticate = requireAwflApiKey()) {
@@ -38,7 +39,7 @@ export function createMcpRouter(service, authenticate = requireAwflApiKey()) {
           idempotentHint: Boolean(definition.readOnly), openWorldHint: true } }, async args => {
         try {
           const result = await service.invoke(req.userId, name, args);
-          return { content: [{ type: 'text', text: JSON.stringify(result) }], isError: Boolean(result.error && (typeof result.error === 'object' || result.state === 'failed')) };
+          return formatToolResult(result);
         } catch (error) {
           // Only known public errors cross the trust boundary. Never emit SDK/GCP error bodies.
           return { isError: true, content: [{ type: 'text', text: error.publicMessage || 'Execution service unavailable; retry or inspect deployment health' }] };

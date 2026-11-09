@@ -67,3 +67,16 @@ are used by newly launched GKE Jobs; existing Jobs are not silently replaced.
 
 Tests: node --test mcp/tests/*.test.js (server);
 python -m unittest discover -s tests -v (CLI).
+
+## Native screenshot viewing
+
+Capture a screenshot using Playwright inside the shared consumer, saving it to
+an image file under /workspace. Then call view_image({workspace_id, path}) to
+return a native MCP image block, rather than base64 text. The same consumer's
+READ_FILE handler and path sandbox are reused; no extra Chromium service or
+credential is required. PNG, JPEG and WebP are supported. Images must be at
+most 640 KiB to stay within Firestore and callback size limits; for large
+screenshots use Playwright's JPEG quality setting or a smaller viewport.
+Pending view_image results can be retrieved with request_result, which also
+returns the native image block when the read completes. Image magic bytes,
+checksum and completeness are validated; partial images are rejected.

@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { consumerNames } from './tools.js';
+import { MAX_IMAGE_BYTES, normalizeImageResult } from './image.js';
 import { commandTimingsMs } from './timing.js';
 // Defer loading the producer API modules until startup. The same project
 // lifecycle is used by both MCP and regular /producer/start requests.
@@ -245,6 +246,10 @@ export class ExecutionService {
     let toolArgs;
     if (name === 'run_command') {
       toolArgs = commandArguments(args);
+    } else if (name === 'view_image') {
+      // Reuse the running consumer's READ_FILE implementation and path guards.
+      toolArgs = { filepath: args.path, encoding: 'base64',
+        max_bytes: MAX_IMAGE_BYTES, offset: 0, with_metadata: true };
     } else if (name === 'read_file' || name === 'write_file') {
       const { path, ...rest } = parameters;
       toolArgs = { filepath: path, ...rest };
@@ -651,6 +656,7 @@ export class ExecutionService {
         const { content, ...rest } = result;
         response = { ...rest, text: content };
       }
+      if (toolName === 'view_image') response = normalizeImageResult(result);
       const terminal = ['completed', 'failed', 'timed_out', 'cancelled'].includes(response?.state)
         ? response.state : 'completed';
       tx.update(request, { state: terminal, result: response, completedAt: Date.now() });

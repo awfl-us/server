@@ -60,6 +60,10 @@ export const tools = {
     description: 'Cancel a running process group. Does not stop other commands or the shared consumer.',
     schema: { ...workspace, execution_id: executionId },
   },
+  view_image: {
+    description: 'Return a saved Playwright screenshot as native MCP image content (PNG, JPEG or WebP). First capture it to a file under /workspace with Playwright page.screenshot(path=...), then call view_image with that path. Up to 640 KiB; for larger captures use JPEG quality 75-85 or a smaller viewport. No base64 in text output.',
+    schema: { ...workspace, path }, readOnly: true,
+  },
   read_file: {
     description: 'Read a bounded text/byte or line range with optional line numbers, hash, mtime and encoding.',
     schema: { ...workspace, path,
@@ -106,6 +110,7 @@ export const tools = {
 
 export const consumerNames = {
   run_command: 'RUN_COMMAND', command_input: 'COMMAND_INPUT', command_cancel: 'COMMAND_CANCEL',
+  view_image: 'READ_FILE',
   read_file: 'READ_FILE', write_file: 'UPDATE_FILE', apply_patch: 'APPLY_PATCH',
   search_files: 'SEARCH_FILES', list_directory: 'LIST_DIRECTORY',
 };
