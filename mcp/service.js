@@ -511,6 +511,75 @@ export class ExecutionService {
     });
   }
 
+  /**
+   * Persist an ordered batch of output events under the existing execution.
+   *
+   * One transaction checks the authoritative cursor and commits up to 16
+   * independently addressable output documents. Retrying the same batch after
+   * a response timeout is safe, including a prefix already acknowledged.
+   * Legacy one-event callbacks remain supported by progress().
+   */
+  async progressBatch(userId, projectId, workspaceId, seq, payload) {
+    const ws = await this.owned(userId, workspaceId);
+    if (ws.projectId !== projectId) fail('Project mismatch');
+    const chunks = payload.chunks;
+    if (!Array.isArray(chunks) || chunks.length < 1 || chunks.length > 16) {
+      fail('Output batch must contain 1-16 events');
+    }
+    let totalBytes = 0;
+    let previousCursor = null;
+    for (const event of chunks) {
+      if (!event || typeof event !== 'object' || Array.isArray(event) ||
+          !Number.isInteger(event.cursor) || event.cursor < 1 || event.cursor > 100000 ||
+          !['stdout', 'stderr', 'pty'].includes(event.stream) ||
+          typeof event.text !== 'string') {
+        fail('Invalid output batch event');
+      }
+      if (previousCursor !== null && event.cursor !== previousCursor + 1) {
+        fail('Output batch cursors must be contiguous');
+      }
+      previousCursor = event.cursor;
+      totalBytes += Buffer.byteLength(event.text, 'utf8');
+      if (totalBytes > 131072) fail('Output batch exceeds 128KiB');
+    }
+    const request = this.ref(workspaceId).collection('mcpRequests').doc(requestDocId(seq));
+    return this.db.runTransaction(async tx => {
+      const snap = await tx.get(request);
+      if (!snap.exists || snap.data().state !== 'running' ||
+          snap.data().executionId !== payload.execution_id) {
+        return { ok: false, error: 'Execution not running or owner changed' };
+      }
+      const high = snap.data().outputCursor || 0;
+      if (chunks[0].cursor > high + 1) return { ok: false, error: 'Output cursor gap' };
+      // Verify the already-written prefix on a retry. A reused cursor with
+      // different text/channel is a conflict, never an accepted duplicate.
+      const duplicates = chunks.filter(event => event.cursor <= high);
+      for (const event of duplicates) {
+        const prior = await tx.get(request.collection('output').doc(requestDocId(event.cursor)));
+        if (!prior.exists || prior.data().stream !== event.stream ||
+            prior.data().text !== event.text) {
+          return { ok: false, error: 'Output cursor conflict' };
+        }
+      }
+      const pending = chunks.filter(event => event.cursor > high);
+      if (!pending.length) return { ok: true, duplicate: true, cursor: high, persisted: 0 };
+      if (pending[0].cursor !== high + 1) {
+        return { ok: false, error: 'Output cursor gap' };
+      }
+      const now = Date.now();
+      for (const event of pending) {
+        tx.create(request.collection('output').doc(requestDocId(event.cursor)), {
+          stream: event.stream, text: event.text, cursor: event.cursor,
+          timestamp: now, expires_at: snap.data().expires_at,
+        });
+      }
+      tx.update(request, { outputCursor: pending[pending.length - 1].cursor,
+        lastOutputAt: now });
+      return { ok: true, persisted: pending.length,
+        cursor: pending[pending.length - 1].cursor };
+    });
+  }
+
   async listProjects(userId, { limit = 50 } = {}) {
     // Project records are already scoped to the authenticated owner. Sort in
     // memory to support older records without an 'updated' field or new indexes.
