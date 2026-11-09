@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import { createMcpRouter } from '../index.js';
+import { tools as toolDefinitions } from '../tools.js';
 import { ExecutionService } from '../service.js';
 import { generateApiKey, isActiveApiKeyRecord } from '../../workflows/apiKeys/core.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -73,7 +74,7 @@ test('MCP SDK exposes native parity tool surface and enforces owner auth', async
     assert.match(client.getInstructions(), /environment_status/);
     assert.match(client.getInstructions(), /CLOUDSDK_AUTH_ACCESS_TOKEN_FILE/);
     const listed = await client.listTools();
-    assert.equal(listed.tools.length, 15);
+    assert.equal(listed.tools.length, Object.keys(toolDefinitions).length);
     const resources = await client.listResources();
     assert.ok(resources.resources.some(x => x.uri === 'awfl://environment/guide'));
     const guide = await client.readResource({ uri: 'awfl://environment/guide' });
