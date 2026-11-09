@@ -34,7 +34,7 @@ export function consumerStartupCommand({ startupSh = 'awfl run', refreshEnabled 
     '  unset CLOUDSDK_AUTH_ACCESS_TOKEN_FILE AWFL_GITHUB_TOKEN_FILE',
     'fi',
     'exec awfl run',
-  ].join('\\n');
+  ].join('\n');
 }
 
 // Updated GKE start path: launch only the consumer Job (awfl CLI) via HTTP/SSE. No Pub/Sub.
