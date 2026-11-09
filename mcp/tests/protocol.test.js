@@ -70,6 +70,8 @@ test('MCP SDK exposes native parity tool surface and enforces owner auth', async
       assert.equal((await fetch(url, { method: 'POST', headers: { authorization } })).status, status);
     }
     await client.connect(new StreamableHTTPClientTransport(url, { requestInit: { headers: { Authorization: 'Bearer valid' } } }));
+    assert.match(client.getInstructions(), /environment_status/);
+    assert.match(client.getInstructions(), /CLOUDSDK_AUTH_ACCESS_TOKEN_FILE/);
     const listed = await client.listTools();
     assert.equal(listed.tools.length, 14);
     const resources = await client.listResources();
