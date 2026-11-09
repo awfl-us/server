@@ -5,8 +5,8 @@ import { projectDoc } from '../../../workflows/projects/util.js';
 
 // Only allow GitHub repository URLs; never interpolate project metadata into a shell.
 export function projectCheckoutUrl(remote) {
-  const matched = /^(?:(?:https?:\\/\\/)?github\\.com[:/]|git@github\\.com:)([A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+(?:\\.git)?)$/.exec(String(remote || '').trim());
-  return matched ? 'https://github.com/' + matched[1].replace(/\\.git$/, '') + '.git' : null;
+  const matched = /^(?:(?:https?:\/\/)?github\.com[:/]|git@github\.com:)([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?)$/.exec(String(remote || '').trim());
+  return matched ? 'https://github.com/' + matched[1].replace(/\.git$/, '') + '.git' : null;
 }
 
 // Launch the consumer with the credentials supplied by the producer immediately.
