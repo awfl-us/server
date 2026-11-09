@@ -151,3 +151,55 @@ test('readiness is not inferred from an active GKE Job without heartbeat', async
   assert.equal(status.state, 'attached');
   assert.equal(status.consumer.connected, true);
 });
+
+
+test('consumer crash during a claimed command reports execution_lost without re-execution', async () => {
+  const ctx = makeService(), ws = await setup(ctx);
+  const started = await ctx.service.invoke('owner', 'run_command', {
+    workspace_id: ws.workspace_id, command: 'deploy --once', yield_time_ms: 0,
+  });
+  assert.equal((await ctx.service.claim('owner', 'project-1', ws.workspace_id, 1, 'consumer-1')).claimed, true);
+  ctx.service.getLock = async () => ({ lock: null });
+  const done = await ctx.service.invoke('owner', 'command_output', {
+    workspace_id: ws.workspace_id, execution_id: started.execution_id,
+  });
+  assert.equal(done.state, 'failed');
+  assert.equal(done.error.code, 'execution_lost');
+  assert.equal(ctx.events.length, 1);
+});
+
+test('startup timeout yields terminal consumer_start_timeout instead of waiting indefinitely', async () => {
+  const ctx = makeService(), ws = await setup(ctx);
+  const started = await ctx.service.invoke('owner', 'run_command', {
+    workspace_id: ws.workspace_id, command: 'echo hello', yield_time_ms: 0,
+  });
+  const record = ctx.db.collection('mcpWorkspaces').doc(ws.workspace_id)
+    .collection('mcpRequests').doc('00000001');
+  await record.update({ startupDeadlineAt: Date.now() - 1 });
+  const output = await ctx.service.invoke('owner', 'command_output', {
+    workspace_id: ws.workspace_id, execution_id: started.execution_id,
+  });
+  assert.equal(output.state, 'failed');
+  assert.equal(output.error.code, 'consumer_start_timeout');
+});
+
+test('queued unclaimed work can be redelivered to replacement generation without duplication', async () => {
+  const ctx = makeService(), ws = await setup(ctx);
+  const started = await ctx.service.invoke('owner', 'run_command', {
+    workspace_id: ws.workspace_id, command: 'echo safe', yield_time_ms: 0,
+  });
+  assert.equal(ctx.events.length, 1);
+  ctx.service.getLock = async () => ({ lock: {
+    consumerId: 'consumer-2', expiresAt: Date.now() + 60000,
+  } });
+  await ctx.service.invoke('owner', 'command_output', {
+    workspace_id: ws.workspace_id, execution_id: started.execution_id,
+  });
+  assert.equal(ctx.events.length, 2);
+  assert.equal(ctx.events[1].data.mcp.execution_id, started.execution_id);
+  assert.equal((await ctx.service.claim('owner', 'project-1', ws.workspace_id, 1, 'consumer-2')).claimed, true);
+  await ctx.service.invoke('owner', 'command_output', {
+    workspace_id: ws.workspace_id, execution_id: started.execution_id,
+  });
+  assert.equal(ctx.events.length, 2);
+});
