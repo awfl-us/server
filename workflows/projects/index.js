@@ -201,6 +201,7 @@ router.post('/:id/consumer-heartbeat', async (req, res) => {
       connected: req.body?.connected,
       capacity: req.body?.capacity, activeExecutions: req.body?.activeExecutions,
       capabilities: req.body?.capabilities,
+      environment: req.body?.environment,
     });
     return res.status(outcome.ok ? 200 : 409).json(outcome);
   } catch {
