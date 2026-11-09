@@ -19,8 +19,9 @@ export const tools = {
     schema: { limit: z.number().int().min(1).max(200).default(50) }, readOnly: true,
   },
   workspace_create: {
-    description: 'Attach to or start the existing project-scoped AWFL consumer; never creates a second execution backend.',
-    schema: { project_id: z.string().min(1).max(128), session_id: z.string().min(1).max(128).optional() },
+    description: 'Attach to or start the existing project-scoped AWFL consumer; never creates a second execution backend. idle_timeout_seconds applies only when starting a new consumer, not when attaching to an existing one (default: 3600 seconds, range: 60-86400).',
+    schema: { project_id: z.string().min(1).max(128), session_id: z.string().min(1).max(128).optional(),
+      idle_timeout_seconds: z.number().int().min(60).max(86400).optional() },
   },
   run_command: {
     description: 'Execute Bash in the shared project consumer. Returns a durable execution_id immediately if not finished; poll command_output. An idempotency_key prevents duplicate side effects when retrying. A nonzero shell exit is a normal result, not an MCP transport error.',
