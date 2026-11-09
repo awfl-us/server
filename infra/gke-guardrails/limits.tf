@@ -18,7 +18,6 @@ resource "kubernetes_resource_quota_v1" "awfl_compute_ceiling" {
     }
   }
 
-  depends_on = [google_container_cluster.awfl]
 }
 
 resource "kubernetes_limit_range_v1" "awfl_container_ceiling" {
@@ -48,7 +47,6 @@ resource "kubernetes_limit_range_v1" "awfl_container_ceiling" {
     }
   }
 
-  depends_on = [google_container_cluster.awfl]
 }
 
 variable "gke_max_pods" {
