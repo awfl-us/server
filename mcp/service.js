@@ -26,7 +26,7 @@ function requestState(data) {
   return data?.state || 'queued';
 }
 function commandArguments(args) {
-  const fields = ['command', 'cwd', 'timeout', 'timeout_ms', 'interactive', 'pty', 'rows', 'cols'];
+  const fields = ['command', 'cwd', 'timeout', 'timeout_ms', 'interactive', 'pty', 'rows', 'cols', 'session_id'];
   return Object.fromEntries(fields.filter(k => args[k] !== undefined).map(k => [k, args[k]]));
 }
 
