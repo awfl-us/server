@@ -57,7 +57,7 @@ export class ExecutionService {
     if (!allowStopped && (ws.stopped || ws.expiresAt <= Date.now())) fail('Workspace stopped or expired');
     return ws;
   }
-  async status(userId, ws) {
+  async status(userId, ws, workspaceId = null) {
     const { lock } = await this.getLock({ userId, projectId: ws.projectId });
     const leaseActive = Boolean(lock && lock.expiresAt > Date.now());
     const runtime = lock?.runtime;
@@ -72,6 +72,20 @@ export class ExecutionService {
       heartbeat.generation === lock.acquiredAt &&
       Number.isFinite(heartbeat.at) && Date.now() - heartbeat.at < 30000);
     const ready = running && heartbeatFresh && heartbeat.connected === true;
+    let pending = null, active = null;
+    if (workspaceId) {
+      try {
+        const requests = this.ref(workspaceId).collection('mcpRequests');
+        const [queued, executing] = await Promise.all([
+          requests.where('state', 'in', ['accepted', 'queued', 'waiting_for_consumer']).count().get(),
+          requests.where('state', '==', 'running').count().get(),
+        ]);
+        pending = queued.data().count;
+        active = executing.data().count;
+      } catch {
+        // Status remains available when optional count aggregation is unavailable.
+      }
+    }
     return {
       state: !running ? 'consumer_unavailable' : ready ? 'attached' : 'starting',
       project_id: ws.projectId, session_id: ws.sessionId,
@@ -88,6 +102,7 @@ export class ExecutionService {
         capabilities: heartbeatFresh ? heartbeat.capabilities : [],
       },
       shared: true,
+      queue: { pending, running: active },
       ...(job ? { consumer_job: job } : {}),
     };
   }
@@ -117,7 +132,7 @@ export class ExecutionService {
       return { workspace_id: args.workspace_id, state: 'stopped',
         consumer_stopped: Boolean(outcome.body.consumerStopped), shared: true };
     }
-    if (name === 'environment_status') return this.status(userId, ws);
+    if (name === 'environment_status') return this.status(userId, ws, args.workspace_id);
     if (name === 'request_result') {
       const snap = await this.ref(args.workspace_id).collection('mcpRequests').doc(String(args.request_id).padStart(8, '0')).get();
       if (!snap.exists) fail('Request not found');
