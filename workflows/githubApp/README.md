@@ -97,15 +97,28 @@ Firestore stores only the installation ID and repository identity under
 
 ## 4. Runtime credential resolution
 
-`resolveGithubAppCredential` generates a GitHub App JWT, mints an
-installation token **restricted to the linked repository ID**, and caches
-it in-process until close to expiry. Installation tokens last at most one
-hour. The existing AWFL Git API and `jobs/producer/credentials.js` prefer
+`resolveGithubAppCredential` generates a GitHub App JWT, mints an installation
+token for **every repository authorized by that installation** (without a
+`repository_ids` restriction), and caches it by installation ID until close
+to expiry. Installation tokens last at most one hour. The same resolver is
+used for cloud startup and automatic credential refresh, so a workspace can
+access sibling repositories within the installation.
+
+**Security:** GitHub App installation tokens can write to *all* repositories
+covered by the installation, even if the linked AWFL project references one
+repo. Only connect an installation when all users with access to the AWFL
+project are permitted that breadth. Multi-tenant environments need additional
+org-level authorization before exposing installation-wide write credentials.
+Disconnecting a project stops new minting through that project; existing
+tokens can remain valid until expiry.
+
+The existing AWFL Git API and `jobs/producer/credentials.js` prefer
 this token for linked projects, otherwise fall back to existing PATs.
 
 The existing Python cloud consumer receives the token in `GITHUB_TOKEN`
-as before. Long-lived cloud sessions may require creating a fresh consumer
-after token expiry; an MCP workspace already has a one-hour lifetime.
+as before. Its credential refresher rotates the token file and supplies new
+subprocesses with fresh `GITHUB_TOKEN` and `GH_TOKEN`; already-running
+shells can retain their old environment values.
 
 Disconnecting the GitHub App in AWFL removes the project's binding but
 does not uninstall it from GitHub or revoke already-running consumers'
