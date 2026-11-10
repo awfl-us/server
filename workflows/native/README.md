@@ -56,3 +56,16 @@ Lease renewal and owner-scoped cancellation are available on the store.
 Cancellation fences further persistence but cannot forcibly undo already
 executed external effects. Run tests using
 `node --test workflows/native/*.test.js`.
+
+## Effect dispatcher boundary
+
+`effectDispatcher.js` accepts explicitly injected operation handlers for the
+canonical `http.get/post/patch/delete` identifiers. Unknown operations fail
+closed. It uses an execution/effect-scoped idempotency key and only records a
+successful handler outcome after the handler returns. A failed/uncertain HTTP
+operation remains unresolved in the journal. On recovered leases, the
+pre-existing intent is **not** automatically dispatched again: an explicit
+operation-specific reconciliation handler must establish the remote result.
+These are library-level tests, not production HTTP integrations. Network
+allowlists, credentials, remote idempotency and actual HTTP implementations
+remain intentionally unprovided until security and replay semantics are tested.
