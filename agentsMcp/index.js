@@ -2,7 +2,7 @@ import express from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { privateMcpMiddleware } from '../mcp/privateAuth.js';
-import { MCP_RESOURCES, OAUTH_SCOPE } from '../mcp/oauth/core.js';
+import { MCP_RESOURCES, OAUTH_SCOPE } from '../workflows/oauth/core.js';
 import { formatToolResult } from '../mcp/image.js';
 import { agentTools } from './tools.js';
 import { AgentSessionService } from './service.js';

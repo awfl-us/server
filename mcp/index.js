@@ -2,7 +2,7 @@ import express from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { privateMcpMiddleware } from './privateAuth.js';
-import { MCP_RESOURCES, OAUTH_SCOPE } from './oauth/core.js';
+import { MCP_RESOURCES, OAUTH_SCOPE } from '../workflows/oauth/core.js';
 import { tools } from './tools.js';
 import { formatToolResult } from './image.js';
 import { ENVIRONMENT_INSTRUCTIONS, ENVIRONMENT_GUIDE, ENVIRONMENT_GUIDE_URI } from './environment.js';
