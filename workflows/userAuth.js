@@ -1,13 +1,15 @@
 import { initializeApp, getApps } from 'firebase-admin/app';
 import admin from 'firebase-admin';
 import { allowSkipAuth } from './utils.js';
+import { resolveAwflIdentity } from './auth/identity.js';
 
 // Ensure Firebase Admin is initialized once
 if (!getApps().length) {
   initializeApp();
 }
 
-// Strict client-facing auth: requires a valid Firebase ID token.
+// All AWFL API routes accept either a Firebase ID token or an AWFL OAuth
+// access token. Both map to the same userId for existing policy enforcement.
 // Ignores any userId hints in body/query/headers to avoid security leaks.
 export async function clientAuth(req, res, next) {
   try {
@@ -33,8 +35,9 @@ export async function clientAuth(req, res, next) {
       return res.status(401).json({ error: 'Unauthorized: missing token' });
     }
 
-    const decoded = await admin.auth().verifyIdToken(token);
-    req.userId = decoded?.uid;
+    const identity = await resolveAwflIdentity(token);
+    req.userId = identity?.userId;
+    req.authMethod = identity?.method;
 
     if (!req.userId) return res.status(403).json({ error: 'Unauthorized: invalid token' });
 
