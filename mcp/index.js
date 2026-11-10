@@ -2,24 +2,14 @@ import express from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { requireAwflApiKey } from '../workflows/apiKeys/verify.js';
+import { privateMcpMiddleware } from './privateAuth.js';
 import { tools } from './tools.js';
 import { formatToolResult } from './image.js';
 import { ENVIRONMENT_INSTRUCTIONS, ENVIRONMENT_GUIDE, ENVIRONMENT_GUIDE_URI } from './environment.js';
 
 export function createMcpRouter(service, authenticate = requireAwflApiKey()) {
   const router = express.Router();
-  router.use(authenticate);
-  router.use(async (req, res, next) => {
-    try {
-      if (!await service.isOwner(req.userId)) return res.status(403).json({ error: 'Private execution service: owner access required' });
-    } catch {
-      return res.status(503).json({ error: 'Private owner verification unavailable' });
-    }
-    // Server-to-server clients omit Origin. Browsers must match an explicit allowlist.
-    const origins = (process.env.MCP_ALLOWED_ORIGINS || 'https://awfl.us').split(',').map(x => x.trim());
-    if (req.get('origin') && !origins.includes(req.get('origin'))) return res.status(403).json({ error: 'Origin not allowed' });
-    next();
-  });
+  router.use(...privateMcpMiddleware(service, authenticate));
   router.post('/', async (req, res) => {
     // A new SDK server/transport for every HTTP request prevents cross-user/session leakage.
     const server = new McpServer(

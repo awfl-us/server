@@ -1,5 +1,6 @@
 import express from 'express';
-import { ExecutionsClient, WorkflowsClient } from '@google-cloud/workflows';
+import { WorkflowsClient } from '@google-cloud/workflows';
+import { createWorkflowExecution } from './services/executeWorkflow.js';
 
 const router = express.Router();
 
@@ -74,59 +75,9 @@ router.post('/execute', async (req, res) => {
       return res.status(400).json({ error: 'params must be an array or object if provided' });
     }
 
-    const gcpProjectId = process.env.GCP_PROJECT || process.env.GCLOUD_PROJECT;
-    if (!gcpProjectId) {
-      return res.status(500).json({ error: 'GCP project ID is not configured' });
-    }
-
-    const region = location || process.env.WORKFLOWS_LOCATION || 'us-central1';
-    const workflowWithEnv = `${workflowName}${process.env.WORKFLOW_ENV || ''}`;
-
-    // Resolve BASE_URL from environment
-    const baseUrl = process.env.BASE_URL || process.env.WORKFLOWS_BASE_URL || process.env.PUBLIC_BASE_URL;
-    if (!baseUrl) {
-      return res.status(500).json({ error: 'WORKFLOWS_BASE_URL is not configured in environment' });
-    }
-
-    const { model, background, sessionId } = params;
-    const projectId = req.projectId;
-
-
-    // Build the argument, grouping standard env params under `env`
-    // Array params => positional: [ { env }, ...params ]
-    // Object params => named: { env, ...params }
-    const env = {
-      BASE_URL: baseUrl,
-      userId,
-      ...(model === undefined ? {} : { model }),
-      ...(background === undefined ? {} : { background }),
-      ...(projectId === undefined ? {} : { projectId }),
-      ...(sessionId === undefined ? {} : { sessionId }),
-    };
-
-    let argumentPayload;
-    if (Array.isArray(params)) {
-      argumentPayload = [{ env }, ...params];
-    } else if (params && typeof params === 'object') {
-      argumentPayload = { env, ...params };
-    } else {
-      // No params provided: default to named shape to include env explicitly
-      argumentPayload = { env };
-    }
-
-    const client = new ExecutionsClient();
-    const parent = client.workflowPath(gcpProjectId, region, workflowWithEnv);
-
-    const [execution] = await client.createExecution({
-      parent,
-      execution: {
-        // Inside your Workflow, access either positional args (args[0] is { env }, args[1], ...)
-        // or named args (args.env, args.kala, ...), depending on the shape sent.
-        argument: JSON.stringify(argumentPayload),
-      },
+    const { executionName, client } = await createWorkflowExecution({
+      userId, projectId: req.projectId, workflowName, params, location,
     });
-
-    const executionName = execution.name;
 
     // If sync is truthy, return immediately with the execution name (no polling)
     const syncRequested = sync === true || sync === 'true' || sync === 1 || sync === '1';

@@ -62,7 +62,7 @@ jobs:
       - name: Validate MCP protocol and authorization
         run: |
           npm install --ignore-scripts
-          node --test mcp/tests/*.test.js
+          node --test mcp/tests/*.test.js agentsMcp/tests/*.test.js
           node --test workflows/workspace/storageTokens.test.js
 
       - name: Authenticate to Google Cloud (WIF/OIDC)

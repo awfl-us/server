@@ -88,4 +88,30 @@ export async function getFileDefinedAgentById(id) {
   return list.find(a => a?.id === id) || null;
 }
 
+// Same persisted agent records and session mapping used by the web client.
+// Centralize these operations so MCP does not add its own agent/session store.
+export async function resolveAgent(userId, agentId, store = db) {
+  const ref = store.doc(userScopedCollectionPath(userId, `agents/${agentId}`));
+  const snapshot = await ref.get();
+  return snapshot.exists ? snapshot.data() : getFileDefinedAgentById(agentId);
+}
+
+export async function createAgentRecord(userId, { name, workflowName, description = '', tools = DEFAULT_TOOLS }, store = db) {
+  const ref = store.collection(userScopedCollectionPath(userId, 'agents')).doc();
+  const now = Date.now();
+  const agent = { id: ref.id, name: name.trim(), description, workflowName: workflowName.trim(),
+    tools, created: now, updated: now };
+  await ref.set(agent, { merge: true });
+  return agent;
+}
+
+export async function linkAgentSession(userId, projectId, sessionId, agentId, store = db) {
+  const agent = await resolveAgent(userId, agentId, store);
+  if (!agent) return null;
+  const ref = store.doc(sessionMapDocPath(userId, projectId, sessionId));
+  const now = Date.now();
+  await ref.set({ sessionId, agentId, updated: now, created: now }, { merge: true });
+  return { sessionId, agentId };
+}
+
 export { userScopedCollectionPath };

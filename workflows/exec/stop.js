@@ -10,22 +10,18 @@ const router = express.Router();
 // Body: { userId?: string, execId: string, workflow?: string, workflows?: string[], includeDescendants?: boolean }
 // Note: userId may be supplied by trusted internal callers; otherwise inferred via getUserIdFromReq
 // Traverses ancestors (parents) of the provided execId and, optionally, descendants, then attempts to cancel all corresponding Google Workflow executions.
-router.post('/stop', async (req, res) => {
-  try {
-    const userId = await getUserIdFromReq(req);
-    if (!userId) return res.status(401).json({ error: 'Unauthorized: missing or invalid user token' });
-
-    const { execId, workflow, workflows, includeDescendants } = req.body || {};
-    if (!execId || typeof execId !== 'string') {
-      return res.status(400).json({ error: 'Missing required field: execId' });
-    }
+export async function cancelExecutionChain({ userId, projectId, execId, workflow, workflows, includeDescendants }) {
+  if (!userId || !projectId) throw new Error('User and project are required');
+  if (!execId || typeof execId !== 'string') {
+    return { status: 400, body: { error: 'Missing required field: execId' } };
+  }
     const includeDesc = Boolean(includeDescendants);
 
     const db = getFirestore();
-    const linksCollection = projectScopedCollectionPath(userId, req.projectId, COLLECTIONS.links);
-    const regsCollection = projectScopedCollectionPath(userId, req.projectId, COLLECTIONS.regs);
-    const statusesCollection = projectScopedCollectionPath(userId, req.projectId, COLLECTIONS.statuses);
-    const locksCollection = projectScopedCollectionPath(userId, req.projectId, COLLECTIONS.locksConvoSession);
+    const linksCollection = projectScopedCollectionPath(userId, projectId, COLLECTIONS.links);
+    const regsCollection = projectScopedCollectionPath(userId, projectId, COLLECTIONS.regs);
+    const statusesCollection = projectScopedCollectionPath(userId, projectId, COLLECTIONS.statuses);
+    const locksCollection = projectScopedCollectionPath(userId, projectId, COLLECTIONS.locksConvoSession);
 
     // Try to resolve the originating sessionId for this execId
     const sessionIds = new Set();
@@ -85,12 +81,12 @@ router.post('/stop', async (req, res) => {
     }
 
     if (toCancel.size === 0) {
-      return res.status(404).json({ error: 'No related executions found to cancel' });
+      return { status: 404, body: { error: 'No related executions found to cancel' } };
     }
 
-    const projectId = process.env.GCP_PROJECT || process.env.GCLOUD_PROJECT;
-    if (!projectId) {
-      return res.status(500).json({ error: 'GCP project ID is not configured' });
+    const gcpProjectId = process.env.GCP_PROJECT || process.env.GCLOUD_PROJECT;
+    if (!gcpProjectId) {
+      return { status: 500, body: { error: 'GCP project ID is not configured' } };
     }
     const region = process.env.WORKFLOWS_LOCATION || 'us-central1';
 
@@ -140,10 +136,10 @@ router.post('/stop', async (req, res) => {
     const anyStatusWorkflow = Array.from(statusWorkflowByExec.values()).some((v) => Boolean(v));
 
     if (!anyStatusWorkflow && workflowsToTry.length === 0) {
-      return res.status(400).json({
+      return { status: 400, body: {
         error: 'No workflows provided, WORKFLOWS_CANCEL_WORKFLOWS not configured, and no workflow recorded in status',
         hint: 'Ensure workflowExecStatus.workflow is recorded, or pass body.workflow/workflows, or set WORKFLOWS_CANCEL_WORKFLOWS',
-      });
+      } };
     }
 
     const client = new ExecutionsClient();
@@ -175,7 +171,7 @@ router.post('/stop', async (req, res) => {
       }
 
       for (const wf of perExecCandidates) {
-        const name = client.executionPath(projectId, region, wf, id);
+        const name = client.executionPath(gcpProjectId, region, wf, id);
         try {
           await client.cancelExecution({ name });
           attempts.push({ workflow: wf, name, ok: true });
@@ -230,9 +226,19 @@ router.post('/stop', async (req, res) => {
     const anyCancelled = results.some((r) => r.cancelled);
     const status = anyCancelled ? 200 : 404;
 
-    return res
-      .status(status)
-      .json({ projectId, region, includeDescendants: includeDesc, workflowsTried: workflowsToTry, results, lockReleases });
+    return { status, body: { projectId: gcpProjectId, region, includeDescendants: includeDesc,
+      workflowsTried: workflowsToTry, results, lockReleases } };
+}
+
+router.post('/stop', async (req, res) => {
+  try {
+    const userId = await getUserIdFromReq(req);
+    if (!userId) return res.status(401).json({ error: 'Unauthorized: missing or invalid user token' });
+    const { execId, workflow, workflows, includeDescendants } = req.body || {};
+    const result = await cancelExecutionChain({
+      userId, projectId: req.projectId, execId, workflow, workflows, includeDescendants,
+    });
+    return res.status(result.status).json(result.body);
   } catch (err) {
     console.error('Error stopping exec chain:', err);
     return res.status(500).json({ error: 'Failed to stop exec chain', details: err?.message || String(err) });

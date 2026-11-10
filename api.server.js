@@ -4,6 +4,7 @@ import workflowsRoutes from './workflows/index.js'
 import { getFirestore } from 'firebase-admin/firestore'
 import { ExecutionService } from './mcp/service.js'
 import { createMcpRouter } from './mcp/index.js'
+import { createAgentsMcpRouter } from './agentsMcp/index.js'
 import { githubAppCallback } from './workflows/githubApp/index.js'
 import { googleCloudCallback } from './workflows/googleCloud/index.js'
 
@@ -117,6 +118,9 @@ app.get('/google-cloud/callback', googleCloudCallback)
 
 // MCP tool calls use an API key; consumer results use the regular Firebase-authenticated workflows API.
 const execution = new ExecutionService({ db: getFirestore() })
+// Independent Devin-style session MCP; shares the existing AWFL MCP API key,
+// owner policy, session records and workflow execution service.
+app.use('/mcp/agents', createAgentsMcpRouter({ executionService: execution }))
 app.use('/mcp', createMcpRouter(execution))
 
 // Workflows (primary mount)
