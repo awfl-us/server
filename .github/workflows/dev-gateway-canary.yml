@@ -8,6 +8,7 @@ on:
       - 'devGateway/**'
       - 'Dockerfile'
       - 'jobs.server.js'
+      - 'api.server.js'
 
 jobs:
   deploy_canary:
@@ -21,7 +22,7 @@ jobs:
       GCP_REGION: ${{ vars.GCP_REGION }}
       GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
       GCP_DEPLOY_SA: ${{ vars.GCP_DEPLOY_SA }}
-      CLOUD_RUN_JOBS_SERVICE: ${{ vars.CLOUD_RUN_JOBS_SERVICE }}
+      CLOUD_RUN_API_SERVICE: ${{ vars.CLOUD_RUN_API_SERVICE }}
     steps:
       - uses: actions/checkout@v4
       - name: Load existing deployment variables
@@ -62,20 +63,24 @@ jobs:
           docker build -t "$IMAGE_URI" .
           docker push "$IMAGE_URI"
           echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_OUTPUT"
-      - name: Deploy protected jobs canary at zero production traffic
+      - name: Deploy public API canary at zero production traffic
         shell: bash
         run: |
           set -euo pipefail
-          ROOT="$(gcloud run services describe "$CLOUD_RUN_JOBS_SERVICE" --project="$GCP_PROJECT_ID" --region="$GCP_REGION" --format='value(status.url)')"
+          ROOT="$(gcloud run services describe "$CLOUD_RUN_API_SERVICE" --project="$GCP_PROJECT_ID" --region="$GCP_REGION" --format='value(status.url)')"
           test -n "$ROOT"
-          gcloud run deploy "$CLOUD_RUN_JOBS_SERVICE" \
+          CANARY="https://dev-gateway---${ROOT#https://}"
+          gcloud run deploy "$CLOUD_RUN_API_SERVICE" \
             --project="$GCP_PROJECT_ID" \
             --region="$GCP_REGION" \
             --image="${{ steps.image.outputs.IMAGE_URI }}" \
             --no-traffic \
             --tag=dev-gateway \
-            --no-allow-unauthenticated \
-            --update-env-vars="AWFL_DEV_GATEWAY_ENABLED=true,AWFL_DEV_GATEWAY_ORIGIN=$ROOT" \
+            --update-env-vars="AWFL_DEV_GATEWAY_ENABLED=true,AWFL_DEV_GATEWAY_ORIGIN=$CANARY" \
             --quiet
-          gcloud run services describe "$CLOUD_RUN_JOBS_SERVICE" --project="$GCP_PROJECT_ID" --region="$GCP_REGION" --format=json |
-            jq -r '.status.traffic[] | select(.tag == "dev-gateway") | "Canary URL: \(.url), production traffic allocation: \(.percent // 0)%"'
+          URL="$(gcloud run services describe "$CLOUD_RUN_API_SERVICE" --project="$GCP_PROJECT_ID" --region="$GCP_REGION" --format=json |
+            jq -r '.status.traffic[] | select(.tag == "dev-gateway") | .url')"
+          test "$URL" = "$CANARY"
+          echo "Public API canary URL: $URL"
+          gcloud run services describe "$CLOUD_RUN_API_SERVICE" --project="$GCP_PROJECT_ID" --region="$GCP_REGION" --format=json |
+            jq -r '.status.traffic[] | select(.tag == "dev-gateway") | "Canary traffic allocation: \(.percent // 0)%"'
