@@ -22,6 +22,7 @@ RUN npm install
 COPY ./workflows ./workflows
 COPY ./jobs ./jobs
 COPY ./mcp ./mcp
+COPY ./agentsMcp ./agentsMcp
 COPY dev.js api.server.js jobs.server.js ./
 
 ENV NODE_ENV=development
