@@ -80,7 +80,8 @@ test('OAuth state binds a verified installation to the owned project without per
         owner: { login: 'awfl-us' }, default_branch: 'main', permissions: { push: true } },
     ] });
     if (url.endsWith('/app/installations/51/access_tokens')) {
-      assert.deepEqual(JSON.parse(options.body), { repository_ids: [456] });
+      // GitHub grants exactly the installation's current repository selection.
+      assert.equal(options.body, undefined);
       return response({ token: 'test-installation-token', expires_at: new Date(Date.now() + 3600000).toISOString() });
     }
     throw new Error('Unexpected request: ' + url);
@@ -100,6 +101,20 @@ test('OAuth state binds a verified installation to the owned project without per
     assert.equal(status.repository, 'awfl-us/server');
     const credential = await resolveGithubAppCredential({ userId: 'owner', projectId: 'project1', db, fetcher });
     assert.deepEqual(credential, { token: 'test-installation-token', owner: 'awfl-us', repo: 'server', defaultBranch: 'main' });
+    // Independent AWFL projects linked to the same GitHub installation must
+    // share its installation-wide token without accidentally narrowing scope.
+    store.set('users/owner/projects/project2',
+      { remote: 'github.com/awfl-us/compiler-rust.git', id: 'project2' });
+    store.set('users/owner/projects/project2/integrations/githubApp', {
+      ...store.get('users/owner/projects/project1/integrations/githubApp'),
+      repositoryId: 789, repo: 'compiler-rust', repoFullName: 'awfl-us/compiler-rust',
+    });
+    const second = await resolveGithubAppCredential({ userId: 'owner', projectId: 'project2', db, fetcher });
+    assert.deepEqual(second, {
+      token: 'test-installation-token', owner: 'awfl-us',
+      repo: 'compiler-rust', defaultBranch: 'main',
+    });
+    assert.equal(calls.filter(c => c.url.endsWith('/app/installations/51/access_tokens')).length, 1);
     assert.equal([...store.values()].some(doc => JSON.stringify(doc).includes('test-user-token')), false);
     assert.equal([...store.values()].some(doc => JSON.stringify(doc).includes('test-installation-token')), false);
     assert.equal(calls.some(c => c.url.endsWith('/app/installations/51/access_tokens')), true);
