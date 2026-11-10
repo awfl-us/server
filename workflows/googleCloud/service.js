@@ -6,10 +6,18 @@ const CLOUD_SCOPE = 'https://www.googleapis.com/auth/cloud-platform';
 const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const STATE_LIFETIME_MS = 10 * 60 * 1000;
+const CACHE_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 const cache = new Map();
 
 const digest = text => createHash('sha256').update(text).digest('hex');
 const callbackUrl = () => process.env.GOOGLE_CLOUD_OAUTH_CALLBACK_URL || 'https://api.awfl.us/google-cloud/callback';
+
+function resolvedToken(accessToken, cloudProjectId, expiresAt) {
+  // A cached token may be considerably older than the credential file it is
+  // about to populate. Never present its original one-hour TTL to consumers.
+  return { accessToken, cloudProjectId,
+    expiresIn: Math.max(0, Math.floor((expiresAt - Date.now()) / 1000)) };
+}
 
 export function googleCloudConfigured(env = process.env) {
   return Boolean(env.GOOGLE_CLOUD_OAUTH_CLIENT_ID && env.GOOGLE_CLOUD_OAUTH_CLIENT_SECRET && env.ENCRYPTION_SECRET_KEY);
@@ -159,8 +167,8 @@ export async function resolveGoogleCloudAccessToken({ userId, projectId, db = ge
   const data = snap.data();
   const key = userId + ':' + projectId;
   const cached = cache.get(key);
-  if (cached && cached.linkedAt === data.linkedAt && cached.expiresAt > Date.now() + 5 * 60 * 1000) {
-    return { accessToken: cached.token, cloudProjectId: data.cloudProjectId };
+  if (cached && cached.linkedAt === data.linkedAt && cached.expiresAt > Date.now() + CACHE_REFRESH_MARGIN_MS) {
+    return resolvedToken(cached.token, data.cloudProjectId, cached.expiresAt);
   }
   if (!data.refreshTokenEnc || !data.cloudProjectId) throw new Error('Invalid Google Cloud connection');
   const refreshed = await exchange({
@@ -169,12 +177,12 @@ export async function resolveGoogleCloudAccessToken({ userId, projectId, db = ge
     refresh_token: decryptString(data.refreshTokenEnc),
     grant_type: 'refresh_token',
   }, fetcher);
-  if (!refreshed.access_token || !Number.isFinite(Number(refreshed.expires_in))) {
+  if (!refreshed.access_token || !Number.isFinite(Number(refreshed.expires_in)) || Number(refreshed.expires_in) <= 0) {
     throw new Error('Google Cloud connection needs to be reauthorized');
   }
   const expiresAt = Date.now() + Number(refreshed.expires_in) * 1000;
   cache.set(key, { token: refreshed.access_token, linkedAt: data.linkedAt, expiresAt });
-  return { accessToken: refreshed.access_token, cloudProjectId: data.cloudProjectId };
+  return resolvedToken(refreshed.access_token, data.cloudProjectId, expiresAt);
 }
 
 export async function testGoogleCloud({ userId, projectId, db = getFirestore(), fetcher = fetch }) {

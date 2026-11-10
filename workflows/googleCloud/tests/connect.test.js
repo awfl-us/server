@@ -4,6 +4,16 @@ import {
   beginGoogleCloudOAuth, disconnectGoogleCloud, finishGoogleCloudOAuth,
   googleCloudConfigured, googleCloudStatus, resolveGoogleCloudAccessToken, testGoogleCloud,
 } from '../service.js';
+import { consumerCredentialPayload } from '../consumerRefresh.js';
+
+test('consumer refresh broker transmits the real TTL, including for cached tokens', () => {
+  assert.deepEqual(consumerCredentialPayload(
+    { accessToken: 'token', cloudProjectId: 'awfl-us', expiresIn: 1267 },
+    { token: 'github-token' }),
+  { accessToken: 'token', cloudProjectId: 'awfl-us', expiresIn: 1267, githubToken: 'github-token' });
+  assert.deepEqual(consumerCredentialPayload(null, { token: 'git-only' }),
+    { githubToken: 'git-only' });
+});
 
 function firestore() {
   const store = new Map([['users/testuser/projects/project1', { id: 'project1' }]]);
@@ -68,7 +78,21 @@ test('OAuth uses single-use project-bound state, PKCE, encrypted offline refresh
     assert.equal(JSON.stringify([...store.values()]).includes('refresh-sensitive'), false);
     assert.equal(JSON.stringify([...store.values()]).includes('access-one'), false);
     const cred = await resolveGoogleCloudAccessToken({ userId: 'testuser', projectId: 'project1', db, fetcher });
-    assert.deepEqual(cred, { accessToken: 'access-two', cloudProjectId: 'topaigents' });
+    assert.equal(cred.accessToken, 'access-two');
+    assert.equal(cred.cloudProjectId, 'topaigents');
+    assert.ok(cred.expiresIn > 3500 && cred.expiresIn <= 3600, 'fresh token gets its real TTL');
+    // Simulate a consumer fetching the same cached token 20 minutes later.
+    // Its reported TTL MUST have dropped to approximately 40 minutes.
+    const realNow = Date.now;
+    try {
+      Date.now = () => realNow() + 20 * 60 * 1000;
+      const cached = await resolveGoogleCloudAccessToken({ userId: 'testuser', projectId: 'project1', db, fetcher });
+      assert.equal(cached.accessToken, 'access-two');
+      assert.ok(cached.expiresIn >= 2398 && cached.expiresIn <= 2400,
+        'cached token must report remaining TTL, not original TTL');
+    } finally {
+      Date.now = realNow;
+    }
     const testResult = await testGoogleCloud({ userId: 'testuser', projectId: 'project1', db, fetcher });
     assert.deepEqual(testResult, { cloudProjectId: 'topaigents', access: 'ok' });
     await disconnectGoogleCloud({ userId: 'testuser', projectId: 'project1', db, fetcher });
