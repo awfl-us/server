@@ -1,15 +1,15 @@
 import express from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { requireAwflApiKey } from '../workflows/apiKeys/verify.js';
 import { privateMcpMiddleware } from './privateAuth.js';
+import { MCP_RESOURCES, OAUTH_SCOPE } from './oauth/core.js';
 import { tools } from './tools.js';
 import { formatToolResult } from './image.js';
 import { ENVIRONMENT_INSTRUCTIONS, ENVIRONMENT_GUIDE, ENVIRONMENT_GUIDE_URI } from './environment.js';
 
-export function createMcpRouter(service, authenticate = requireAwflApiKey()) {
+export function createMcpRouter(service, authenticate) {
   const router = express.Router();
-  router.use(...privateMcpMiddleware(service, authenticate));
+  router.use(...privateMcpMiddleware(service, authenticate, MCP_RESOURCES.terminal));
   router.post('/', async (req, res) => {
     // A new SDK server/transport for every HTTP request prevents cross-user/session leakage.
     const server = new McpServer(
@@ -25,6 +25,7 @@ export function createMcpRouter(service, authenticate = requireAwflApiKey()) {
       }));
     for (const [name, definition] of Object.entries(tools)) {
       server.registerTool(name, { description: definition.description, inputSchema: definition.schema,
+        _meta: { securitySchemes: [{ type: 'oauth2', scopes: [OAUTH_SCOPE] }] },
         annotations: { readOnlyHint: Boolean(definition.readOnly), destructiveHint: !definition.readOnly,
           idempotentHint: Boolean(definition.readOnly), openWorldHint: true } }, async args => {
         try {

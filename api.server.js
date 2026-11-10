@@ -5,6 +5,7 @@ import { getFirestore } from 'firebase-admin/firestore'
 import { ExecutionService } from './mcp/service.js'
 import { createMcpRouter } from './mcp/index.js'
 import { createAgentsMcpRouter } from './agentsMcp/index.js'
+import { createMcpOAuthRouter } from './workflows/oauth/router.js'
 import { githubAppCallback } from './workflows/githubApp/index.js'
 import { googleCloudCallback } from './workflows/googleCloud/index.js'
 
@@ -116,10 +117,12 @@ app.get('/health', (_req, res) => res.status(200).send('OK'))
 app.get('/github-app/callback', githubAppCallback)
 app.get('/google-cloud/callback', googleCloudCallback)
 
-// MCP tool calls use an API key; consumer results use the regular Firebase-authenticated workflows API.
+// AWFL API and both MCPs resolve Firebase/OAuth credentials to the same userId.
 const execution = new ExecutionService({ db: getFirestore() })
-// Independent Devin-style session MCP; shares the existing AWFL MCP API key,
-// owner policy, session records and workflow execution service.
+// OAuth consent uses existing Google/Firebase sign-in and issues API-wide AWFL tokens.
+app.use(createMcpOAuthRouter({ db: getFirestore() }))
+// Independent Devin-style session MCP; shares AWFL authentication, owner policy,
+// session records and workflow execution service.
 app.use('/mcp/agents', createAgentsMcpRouter({ executionService: execution }))
 app.use('/mcp', createMcpRouter(execution))
 

@@ -2,6 +2,7 @@ import express from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { privateMcpMiddleware } from '../mcp/privateAuth.js';
+import { MCP_RESOURCES, OAUTH_SCOPE } from '../mcp/oauth/core.js';
 import { formatToolResult } from '../mcp/image.js';
 import { agentTools } from './tools.js';
 import { AgentSessionService } from './service.js';
@@ -76,7 +77,7 @@ export function createAgentsMcpRouter({
 } = {}) {
   if (!executionService) throw new Error('Agents MCP requires the existing execution service');
   const router = express.Router();
-  router.use(...privateMcpMiddleware(executionService, authenticate));
+  router.use(...privateMcpMiddleware(executionService, authenticate, MCP_RESOURCES.agents));
   router.post('/', async (req, res) => {
     const server = new McpServer({ name: 'awfl-agents', version: '1.0.0' },
       { instructions: INSTRUCTIONS });
@@ -84,6 +85,7 @@ export function createAgentsMcpRouter({
       server.registerTool(name, {
         description: definition.description,
         inputSchema: definition.schema,
+        _meta: { securitySchemes: [{ type: 'oauth2', scopes: [OAUTH_SCOPE] }] },
         annotations: {
           readOnlyHint: Boolean(definition.readOnly),
           destructiveHint: name === 'terminate_session',
