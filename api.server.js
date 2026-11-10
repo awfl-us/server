@@ -6,9 +6,9 @@ import { ExecutionService } from './mcp/service.js'
 import { createMcpRouter } from './mcp/index.js'
 import { githubAppCallback } from './workflows/githubApp/index.js'
 import { googleCloudCallback } from './workflows/googleCloud/index.js'
+import { createDevGateway } from './devGateway/index.js'
 
 const app = express()
-app.use(express.json({ limit: '1mb' }))
 
 // --- CORS for prod (api.awfl.us) ---
 // Supports:
@@ -98,10 +98,23 @@ const cors = (req, res, next) => {
 }
 app.use(cors)
 
+// The public API provides browser previews only; Workflows always use jobs.
+// CORS must run first for the AWFL web client's preview-session requests.
+// The gateway must run before JSON parsing to preserve raw proxy requests.
+if (process.env.AWFL_DEV_GATEWAY_ENABLED === 'true') {
+  const db = getFirestore()
+  const execution = new ExecutionService({ db })
+  const gateway = createDevGateway({ db, isOwner: uid => execution.isOwner(uid), mode: 'preview' })
+  app.use('/dev', gateway.proxyRouter)
+  app.use('/dev-access', express.json({ limit: '16kb' }), gateway.accessRouter)
+}
+app.use(express.json({ limit: '1mb' }))
+
 const logging = (req, _res, next) => {
   const { method, path } = req
   // Do not log OAuth codes, state, or other query-string credentials.
-  if (!path.includes('health')) {
+  // Single-use preview tickets are credentials. Never log them in URL paths.
+  if (!path.includes('health') && !path.startsWith('/dev-access/redeem/')) {
     console.log(`[API] ${method} ${path}`)
   }
   next()
