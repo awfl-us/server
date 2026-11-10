@@ -89,6 +89,11 @@ async function getBatchClient() {
   return { kc, batch, mode };
 }
 
+// Reuse the GKE producer's tested authentication and certificate setup.
+export async function getKubeConfig() {
+  return (await getBatchClient()).kc;
+}
+
 async function fetchMetadataAccessToken({ timeoutMs = 1500 } = {}) {
   // Cloud Run/Compute/GKE metadata server token endpoint. Returns { access_token, expires_in, token_type }
   const url = 'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token';
