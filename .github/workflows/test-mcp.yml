@@ -4,6 +4,11 @@ on:
   pull_request:
     paths:
       - 'mcp/**'
+      - 'agentsMcp/**'
+      - 'workflows/services/executeWorkflow.js'
+      - 'workflows/agents/**'
+      - 'workflows/exec/**'
+      - 'workflows/workflows.js'
       - 'jobs/producer/**'
       - 'jobs/providers/openai.js'
       - 'jobs/providers/openai.test.js'
@@ -20,6 +25,11 @@ on:
     branches: [main]
     paths:
       - 'mcp/**'
+      - 'agentsMcp/**'
+      - 'workflows/services/executeWorkflow.js'
+      - 'workflows/agents/**'
+      - 'workflows/exec/**'
+      - 'workflows/workflows.js'
       - 'jobs/producer/**'
       - 'jobs/providers/openai.js'
       - 'jobs/providers/openai.test.js'
@@ -48,10 +58,12 @@ jobs:
         run: |
           python3 -m pip install --quiet PyYAML==6.0.3
           python3 -c "import yaml; doc=yaml.safe_load(open('.github/workflows/deploy-cloud-run.yml')); assert 'build_and_deploy' in doc['jobs']"
-      - run: node --test mcp/tests/*.test.js jobs/producer/tests/*.test.js workflows/googleCloud/tests/*.test.js jobs/providers/openai.test.js
+      - run: node --test mcp/tests/*.test.js agentsMcp/tests/*.test.js jobs/producer/tests/*.test.js workflows/googleCloud/tests/*.test.js jobs/providers/openai.test.js
       - run: node --check api.server.js
       - run: node --check jobs/producer/start.js
       - run: node --check mcp/index.js
+      - run: node --check agentsMcp/index.js
+      - run: node --check agentsMcp/service.js
       - run: node --check mcp/service.js
       - run: node --check workflows/callbacks/index.js
       - run: node --check scripts/mcp-smoke.js

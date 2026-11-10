@@ -1,5 +1,5 @@
 import express from 'express';
-import { db, userScopedCollectionPath, sessionMapDocPath, DEFAULT_TOOLS, getFileDefinedAgentById } from './common.js';
+import { db, userScopedCollectionPath, sessionMapDocPath, DEFAULT_TOOLS, getFileDefinedAgentById, linkAgentSession } from './common.js';
 
 const router = express.Router();
 
@@ -16,19 +16,9 @@ router.put('/session/:sessionId', async (req, res) => {
 
     const trimmedId = agentId.trim();
 
-    // Validate agent exists: DB first, then file-defined
-    const agentRef = db.doc(userScopedCollectionPath(userId, `agents/${trimmedId}`));
-    const agentSnap = await agentRef.get();
-    if (!agentSnap.exists) {
-      const fileAgent = await getFileDefinedAgentById(trimmedId);
-      if (!fileAgent) return res.status(404).json({ error: 'Agent not found' });
-    }
+    const linked = await linkAgentSession(userId, req.projectId, sessionId, trimmedId, db);
+    if (!linked) return res.status(404).json({ error: 'Agent not found' });
 
-    const docRef = db.doc(sessionMapDocPath(userId, req.projectId, sessionId));
-    const now = Date.now();
-    const data = { sessionId, agentId: trimmedId, updated: now, created: now };
-
-    await docRef.set(data, { merge: true });
     return res.status(200).json({ sessionId, agentId: trimmedId });
   } catch (err) {
     console.error('[agents] link session failed', err);
