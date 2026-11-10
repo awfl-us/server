@@ -105,6 +105,12 @@ async function fetchMetadataAccessToken({ timeoutMs = 1500 } = {}) {
   }
 }
 
+// A non-login shell preserves the image-provided PATH (gcloud, sbt, etc.).
+// /etc/profile resets it when launched with -l.
+export function consumerShellArgs(script) {
+  return ['sh', '-c', script];
+}
+
 export async function runK8sJob({ namespace, jobName, image, serviceAccountName, envPairs = [], containerName = 'main', ttlSecondsAfterFinished = 300, activeDeadlineSeconds, backoffLimit = 0, command, args, shCommand, resources }) {
   if (!namespace) return { ok: false, status: 400, error: 'Missing namespace' };
   if (!jobName) return { ok: false, status: 400, error: 'Missing jobName' };
@@ -121,7 +127,7 @@ export async function runK8sJob({ namespace, jobName, image, serviceAccountName,
     if (Array.isArray(command) && command.length) {
       container.command = command.map(String);
     } else if (typeof shCommand === 'string' && shCommand.trim()) {
-      container.command = ['sh', '-lc', shCommand];
+      container.command = consumerShellArgs(shCommand);
     }
     if (Array.isArray(args) && args.length) container.args = args.map(String);
 
