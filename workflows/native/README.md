@@ -69,3 +69,20 @@ operation-specific reconciliation handler must establish the remote result.
 These are library-level tests, not production HTTP integrations. Network
 allowlists, credentials, remote idempotency and actual HTTP implementations
 remain intentionally unprovided until security and replay semantics are tested.
+
+## Cross-repository integration test
+
+Build the `compiler-rust/fixtures/native-fold` binary with Cargo, then run:
+
+```sh
+AWFL_NATIVE_FIXTURE_BINARY=/absolute/path/to/awfl_native_fold_77054402 \\
+  node --test workflows/native/*.test.js
+```
+
+`nativeIntegration.test.js` exercises the **real generated Rust executable**
+through `runNativeArtifact` and `executePureNative` (with a mock persistence
+adapter). It covers nonempty, empty and signed inputs. Runner negative tests
+cover malformed output, nonzero exit, and output overflow. These tests do not
+validate Firestore concurrency, durable continuation, remote effects or the
+production workflow launcher. They must not be represented as end-to-end
+production execution tests.

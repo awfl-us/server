@@ -26,3 +26,20 @@ test('verified native executable receives JSON and returns result', async () => 
     await assert.rejects(executePureNative({ store, executionId: 'e1', workerId: 'w1', executable, sha256: 'f'.repeat(64) }), /pinned artifact mismatch/);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+test('runner rejects malformed JSON, nonzero exit, and output overflow', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'awfl-native-errors-'));
+  try {
+    for (const [name, code, error] of [
+      ['malformed', 'process.stdout.write("not-json")', /invalid native JSON/],
+      ['exit', 'process.stderr.write("failed"); process.exit(13)', /exited 13/],
+      ['overflow', 'process.stdout.write("x".repeat(5 * 1024 * 1024))', /output too large/],
+    ]) {
+      const executable = join(dir, name);
+      const contents = `#!/usr/bin/env node\n${code}\n`;
+      await writeFile(executable, contents); await chmod(executable, 0o700);
+      const sha256 = createHash('sha256').update(contents).digest('hex');
+      await assert.rejects(runNativeArtifact({ executable, sha256, input: {} }), error);
+    }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
