@@ -332,6 +332,14 @@ jobs:
             -t "${IMAGE_URI}" .
           docker push "${IMAGE_URI}"
 
+      - name: Verify packaged MCP modules start in the API image
+        run: |
+          set -euo pipefail
+          IMAGE_URI="${{ steps.image.outputs.IMAGE_URI }}"
+          docker run --rm --entrypoint node "${IMAGE_URI}" --check api.server.js
+          docker run --rm --entrypoint node "${IMAGE_URI}" --check agentsMcp/index.js
+          docker run --rm --entrypoint node "${IMAGE_URI}" --input-type=module -e "await import('./agentsMcp/index.js'); await import('./mcp/index.js'); console.log('Both MCP modules resolve inside the API image')"
+
       - name: Build common Cloud Run env vars
         id: common_env
         shell: bash
