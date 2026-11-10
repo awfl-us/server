@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { consumerStartupCommand } from '../paths/gke.js';
+import { consumerShellArgs } from '../gke.js';
 
 function executable(path, body) {
   writeFileSync(path, body, { mode: 0o755 });
@@ -41,7 +42,8 @@ function exerciseStartup({ importStatus = '0', gitStatus = '0', githubFilePath }
   ].join('\n'));
 
   try {
-    const result = spawnSync('sh', ['-lc', consumerStartupCommand({ refreshEnabled: true })], {
+    const [shell, ...shellArgs] = consumerShellArgs(consumerStartupCommand({ refreshEnabled: true }));
+    const result = spawnSync(shell, shellArgs, {
       env: {
         ...process.env,
         PATH: bin + ':' + process.env.PATH,
@@ -118,4 +120,14 @@ test('custom startup and non-refresh consumers keep existing behavior', () => {
     consumerStartupCommand({ startupSh: 'awfl run', refreshEnabled: false }),
     'awfl run',
   );
+});
+
+test('consumer launcher preserves image PATH for cloud and Scala SDKs', () => {
+  const sdkPath = '/opt/google-cloud-sdk/bin:/opt/sbt/bin:/usr/bin';
+  const [shell, ...args] = consumerShellArgs('printf "%s" "$PATH"');
+  const result = spawnSync(shell, args, {
+    env: { ...process.env, PATH: sdkPath }, encoding: 'utf8', timeout: 2000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, sdkPath);
 });
