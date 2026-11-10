@@ -11,8 +11,12 @@ recorded once. `claim` grants a time-limited worker lease with monotonically
 increasing epoch; all writes require the current unexpired epoch. Checkpoints
 persist the next resumable node and tagged slots at **effect boundaries**, not
 per pure instruction. `prepareEffect` persists the intended effect before
-external dispatch. `recordEffect` journals its outcome and `complete` closes
-the execution only when no effect remains unresolved.
+external dispatch. `recordEffect` writes the outcome into a dedicated Firestore
+`effects/{effectId}` subcollection document **in the same transaction** as
+updating the resumed slot and clearing the prepared intent. The root execution
+document stores an effect counter, not an ever-growing outcome map.
+`complete` closes the execution only when no effect remains unresolved.
+Input, checkpoint, effect-argument, outcome and result size limits fail closed.
 
 ## Recovery and guarantees
 
@@ -27,19 +31,20 @@ resume. Unresolved outcomes remain pending until reconciled.
 
 ## Next gates before production
 
-- Introduce a bounded document/subcollection journal for large workflows and
-  enforce Firestore document/transaction limits (this prototype stores results
-  in one document and is not suitable for unbounded effect counts).
-- Implement lease renewal, cancellation, retry/error states, orphan sweeper,
-  artifact verification, and a server-side effect dispatcher with allowlists,
-  authenticated identity, idempotency, and reconciliation.
-- Add compiled Rust worker IPC with checkpoint/resume continuation, source
-  manifest validation, and crash/replay tests against Firestore emulator.
+- Implement live-slot liveness optimization and external payload indirection
+  beyond the current bounded checkpoint/argument/outcome sizes.
+- Implement production lease heartbeats, retry/error states, orphan sweeper,
+  signed/trusted artifact registry, source-manifest validation, sandboxing,
+  authenticated identity, real allowlisted HTTP adapters, remote idempotency
+  and reconciliation.
+- Add nested native effect continuation frames for loops/branches; current
+  versioned worker IPC only supports **top-level** calls.
 - Integrate backend selection **inside** existing `createWorkflowExecution`
   shared launcher; preserve existing session status, links, callbacks and
   monitoring rather than adding a separate executor.
-- Add emulator-backed concurrency and transaction contention tests. The
-  current tests use a serial in-memory transaction mock.
+- Expand emulator-backed crash injection, transaction contention/throughput
+  load tests, and real remote effect adapters. A six-case real Firestore
+  emulator suite passes, including actual compiled Rust suspend/resume.
 
 Local test: `node --test workflows/native/executionStore.test.js`.
 
@@ -70,6 +75,41 @@ These are library-level tests, not production HTTP integrations. Network
 allowlists, credentials, remote idempotency and actual HTTP implementations
 remain intentionally unprovided until security and replay semantics are tested.
 
+## Versioned native IPC runner (opt-in library)
+
+`executeNativeStep` accepts only a preselected, SHA-verified generated native
+binary with protocol version 1 and artifact manifest `runtime_abi=2`.
+Top-level calls suspend, returning a stable operation name, arguments,
+structural node identifier, result slot and tagged continuation. A real
+Firestore transaction persists the pending intent **before** an independent
+handler is allowed to dispatch. After `recordEffect` atomically journals the
+outcome and binds the slot, the same fenced worker (or a replacement after
+lease expiry) resumes the Rust process from the saved top-level position.
+
+The generated binary never issues network requests. Dynamic nested effects,
+artifact registry, process sandbox, production authentication, cloud launcher
+integration, retries and remote idempotency remain **unimplemented**.
+
+For isolated local tests use `node --test workflows/native/*.test.js`.
+To run the real Firestore emulator tests, start an emulator on localhost and
+set `FIRESTORE_EMULATOR_HOST`; tests with no emulator skip instead of touching
+live Firestore. Optional environment variables enable the real compiled Rust
+cross-repo integration fixtures:
+
+```sh
+FIRESTORE_EMULATOR_HOST=127.0.0.1:8099 \
+AWFL_NATIVE_FIXTURE_BINARY=/absolute/path/to/native-fold-binary \
+AWFL_NATIVE_PROTOCOL_BINARY=/absolute/path/to/native-resume-binary \
+AWFL_NATIVE_MULTI_BINARY=/absolute/path/to/native-two-effects-binary \
+node --test --test-concurrency=1 workflows/native/*.test.js
+```
+
+Run these only with disposable, isolated emulator project IDs. A lightweight
+`AWFL_FIRESTORE_CLIENT_ROOT` override is supported for cloud test
+environments that install the `@google-cloud/firestore` client without
+the complete server `node_modules`; production builds use
+`firebase-admin` normally.
+
 ## Cross-repository integration test
 
 Build the `compiler-rust/fixtures/native-fold` binary with Cargo, then run:
@@ -82,7 +122,7 @@ AWFL_NATIVE_FIXTURE_BINARY=/absolute/path/to/awfl_native_fold_77054402 \\
 `nativeIntegration.test.js` exercises the **real generated Rust executable**
 through `runNativeArtifact` and `executePureNative` (with a mock persistence
 adapter). It covers nonempty, empty and signed inputs. Runner negative tests
-cover malformed output, nonzero exit, and output overflow. These tests do not
-validate Firestore concurrency, durable continuation, remote effects or the
-production workflow launcher. They must not be represented as end-to-end
-production execution tests.
+cover malformed output, nonzero exit, and output overflow. The additional
+emulator tests *do* validate Firestore transactions, durable top-level
+continuation, and locally mocked effect dispatch; they **do not** verify
+remote external side effects or production launcher integration.

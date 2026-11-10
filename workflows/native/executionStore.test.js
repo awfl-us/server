@@ -59,7 +59,8 @@ test('prepare before effects; replay same intent, record once and reject differe
   await store.prepareEffect(intent);
   const state = await store.get('e1');
   assert.equal(state.pendingEffect, null);
-  assert.equal(Object.keys(state.effectResults).length, 1);
+  assert.equal(state.effectCount, 1);
+  assert.deepEqual((await store.getEffect('e1', 'effect_1')).outcome, result);
   await store.complete({ executionId: 'e1', workerId: 'a', epoch, result: { done: true } });
   assert.deepEqual((await store.claim({ executionId: 'e1', workerId: 'b' })).result, { done: true });
 });
@@ -99,4 +100,41 @@ test('lease renewal extends ownership and cancellation fences active workers', a
   assert.equal(cancelled.status, 'cancelled');
   assert.equal((await store.claim({ executionId: 'e1', workerId: 'b' })).cancelled, true);
   await assert.rejects(store.checkpoint({ executionId: 'e1', workerId: 'a', epoch: a.epoch, nodeId: '0_1', slots: {} }), /stale worker/);
+});
+
+test('effect journal is a subcollection and does not grow the execution document', async () => {
+  const { store } = await setup();
+  const { epoch } = await store.claim({ executionId: 'e1', workerId: 'a' });
+  for (let index = 0; index < 40; index++) {
+    const effectId = 'call_' + index;
+    await store.prepareEffect({ executionId: 'e1', workerId: 'a', epoch,
+      nodeId: '0.' + index, effectId, operation: 'http.get',
+      args: { index }, slots: {} });
+    await store.recordEffect({ executionId: 'e1', workerId: 'a', epoch,
+      effectId, outcome: { index } });
+  }
+  const state = await store.get('e1');
+  assert.equal(state.effectCount, 40);
+  assert.equal(Object.hasOwn(state, 'effectResults'), false);
+  assert.equal(state.pendingEffect, null);
+  assert.deepEqual((await store.getEffect('e1', 'call_39')).outcome, { index: 39 });
+  assert.deepEqual((await store.getEffect('e1', 'call_0')).outcome, { index: 0 });
+});
+
+test('size limits reject large input and effects before persistence', async () => {
+  const { store } = await setup();
+  await assert.rejects(store.create({ executionId: 'e2', userId: 'u',
+    projectId: 'p', artifactSha256: hash, input: 'x'.repeat(300000) }), /size limit/);
+  const { epoch } = await store.claim({ executionId: 'e1', workerId: 'a' });
+  const base = { executionId: 'e1', workerId: 'a', epoch,
+    nodeId: '0.0', effectId: 'call_0', operation: 'http.post',
+    args: {}, slots: {} };
+  await assert.rejects(store.prepareEffect({ ...base,
+    args: { payload: 'x'.repeat(150000) } }), /size limit/);
+  await store.prepareEffect(base);
+  await assert.rejects(store.recordEffect({ executionId: 'e1',
+    workerId: 'a', epoch, effectId: 'call_0',
+    outcome: { payload: 'x'.repeat(150000) } }), /size limit/);
+  assert.equal((await store.get('e1')).pendingEffect.effectId, 'call_0');
+  assert.equal(await store.getEffect('e1', 'call_0'), null);
 });
