@@ -9,6 +9,16 @@ import { mintWorkspaceToken } from '../workspace/storageTokens.js';
 const router = express.Router();
 router.use((_req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
 
+export function consumerCredentialPayload(google, github) {
+  // Pass the actual remaining Google lifetime. The consumer uses this value
+  // to schedule its next refresh; hardcoded one-hour estimates are unsafe.
+  return {
+    ...(google ? { accessToken: google.accessToken, cloudProjectId: google.cloudProjectId,
+      expiresIn: google.expiresIn } : {}),
+    ...(github ? { githubToken: github.token } : {}),
+  };
+}
+
 async function authenticateConsumer(req) {
   const { userId, projectId, consumerId } = req.body || {};
   const capability = String(req.get('x-awfl-consumer-credential') || '');
@@ -38,10 +48,7 @@ router.post('/refresh', async (req, res) => {
     ]);
     if (!google && !github) return res.status(404).json({ error: 'No refreshable credentials connected' });
     // Only short-lived credentials are returned, never OAuth refresh tokens or app keys.
-    return res.json({
-      ...(google ? { accessToken: google.accessToken, cloudProjectId: google.cloudProjectId, expiresIn: 3300 } : {}),
-      ...(github ? { githubToken: github.token } : {}),
-    });
+    return res.json(consumerCredentialPayload(google, github));
   } catch (error) {
     console.warn('[consumer-credentials] refresh unavailable', error?.name || 'Error');
     return res.status(503).json({ error: 'Credential refresh unavailable' });
