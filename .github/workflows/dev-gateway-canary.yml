@@ -1,0 +1,86 @@
+name: Dev Gateway Canary (zero production traffic)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/dev-gateway-canary.yml'
+      - 'devGateway/**'
+      - 'Dockerfile'
+      - 'jobs.server.js'
+      - 'api.server.js'
+
+jobs:
+  deploy_canary:
+    if: ${{ github.event.pull_request.number == 59 && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_REGION: ${{ vars.GCP_REGION }}
+      GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+      GCP_DEPLOY_SA: ${{ vars.GCP_DEPLOY_SA }}
+      CLOUD_RUN_API_SERVICE: ${{ vars.CLOUD_RUN_API_SERVICE }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Load existing deployment variables
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f .github/actions-variables.json ]]; then
+            jq -r 'to_entries[] | [.key, (.value|tostring)] | @tsv' .github/actions-variables.json |
+              while IFS=$'\t' read -r k v; do
+                printf '%s=%s\n' "$k" "$v" >> "$GITHUB_ENV"
+              done
+          fi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check gateway and entrypoints
+        run: |
+          npm install --ignore-scripts --no-audit --no-fund
+          node --test devGateway/*.test.mjs
+          node --check jobs.server.js
+          node --check api.server.js
+      - name: Authenticate GitHub via Workload Identity
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_DEPLOY_SA }}
+          token_format: access_token
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+      - name: Build tagged image
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+          IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/app/api:devgateway-${GITHUB_SHA}"
+          docker build -t "$IMAGE_URI" .
+          docker push "$IMAGE_URI"
+          echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_OUTPUT"
+      - name: Deploy public API canary at zero production traffic
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$(gcloud run services describe "$CLOUD_RUN_API_SERVICE" --project="$GCP_PROJECT_ID" --region="$GCP_REGION" --format='value(status.url)')"
+          test -n "$ROOT"
+          CANARY="https://dev-gateway---${ROOT#https://}"
+          gcloud run deploy "$CLOUD_RUN_API_SERVICE" \
+            --project="$GCP_PROJECT_ID" \
+            --region="$GCP_REGION" \
+            --image="${{ steps.image.outputs.IMAGE_URI }}" \
+            --no-traffic \
+            --tag=dev-gateway \
+            --update-env-vars="AWFL_DEV_GATEWAY_ENABLED=true,AWFL_DEV_GATEWAY_ORIGIN=$CANARY" \
+            --quiet
+          URL="$(gcloud run services describe "$CLOUD_RUN_API_SERVICE" --project="$GCP_PROJECT_ID" --region="$GCP_REGION" --format=json |
+            jq -r '.status.traffic[] | select(.tag == "dev-gateway") | .url')"
+          test "$URL" = "$CANARY"
+          echo "Public API canary URL: $URL"
+          gcloud run services describe "$CLOUD_RUN_API_SERVICE" --project="$GCP_PROJECT_ID" --region="$GCP_REGION" --format=json |
+            jq -r '.status.traffic[] | select(.tag == "dev-gateway") | "Canary traffic allocation: \(.percent // 0)%"'
