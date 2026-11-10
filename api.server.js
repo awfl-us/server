@@ -98,13 +98,13 @@ const cors = (req, res, next) => {
 }
 app.use(cors)
 
-// The public API provides browser previews only; Workflows always use jobs.
+// The public API validates Workflow OIDC once and also serves browser previews.
 // CORS must run first for the AWFL web client's preview-session requests.
 // The gateway must run before JSON parsing to preserve raw proxy requests.
 if (process.env.AWFL_DEV_GATEWAY_ENABLED === 'true') {
   const db = getFirestore()
   const execution = new ExecutionService({ db })
-  const gateway = createDevGateway({ db, isOwner: uid => execution.isOwner(uid), mode: 'preview' })
+  const gateway = createDevGateway({ db, isOwner: uid => execution.isOwner(uid), mode: 'both' })
   app.use('/dev', gateway.proxyRouter)
   app.use('/dev-access', express.json({ limit: '16kb' }), gateway.accessRouter)
 }
