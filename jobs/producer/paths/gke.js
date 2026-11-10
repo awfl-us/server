@@ -2,6 +2,7 @@ import { runK8sJob } from '../gke.js';
 import { setConsumerRuntimeInfo } from '../../../workflows/projects/lock.js';
 import { scheduleStartupProgress } from '../progress.js';
 import { resolveConsumerImage } from '../imageProfiles.js';
+import { consumerResourcesForProfile } from '../resourceProfiles.js';
 
 // Launch the consumer with the credentials supplied by the producer immediately.
 // Refresh happens asynchronously and can fail without preventing awfl run.
@@ -203,18 +204,7 @@ export async function startGke({
     }
   }
 
-  // Keep lightweight consumers inexpensive, and provision enough disk and RAM
-  // for sbt dependency resolution and Scala incremental compilation.
-  const resources = imageProfile === 'scala' ? {
-    requests: { cpu: '1', memory: '2Gi', 'ephemeral-storage': '1Gi' },
-    limits: { cpu: '2', memory: '4Gi', 'ephemeral-storage': '2Gi' },
-  } : imageProfile === 'lightweight' ? {
-    requests: { cpu: '250m', memory: '1Gi', 'ephemeral-storage': '1Gi' },
-    limits: { cpu: '2', memory: '4Gi', 'ephemeral-storage': '2Gi' },
-  } : {
-    requests: { cpu: '500m', memory: '1536Mi', 'ephemeral-storage': '1Gi' },
-    limits: { cpu: '2', memory: '4Gi', 'ephemeral-storage': '2Gi' },
-  };
+  const resources = consumerResourcesForProfile(imageProfile);
   let cRun;
   try {
     cRun = await runK8sJob({

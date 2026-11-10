@@ -35,9 +35,11 @@ resource "kubernetes_limit_range_v1" "awfl_container_ceiling" {
         "ephemeral-storage" = var.gke_max_container_ephemeral_storage
       }
       default = {
-        cpu                 = var.gke_max_container_cpu
-        memory              = var.gke_max_container_memory
-        "ephemeral-storage" = var.gke_max_container_ephemeral_storage
+        cpu    = var.gke_max_container_cpu
+        memory = var.gke_max_container_memory
+        # Do not implicitly allocate 4Gi to unrelated Jobs with no storage
+        # settings. Profile-aware consumers specify their own equal values.
+        "ephemeral-storage" = "1Gi"
       }
       default_request = {
         cpu                 = "500m"
@@ -98,5 +100,5 @@ variable "gke_max_container_memory" {
 variable "gke_max_container_ephemeral_storage" {
   description = "Maximum ephemeral storage per container."
   type        = string
-  default     = "2Gi"
+  default     = "4Gi"
 }
