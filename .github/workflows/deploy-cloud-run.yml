@@ -15,7 +15,7 @@ jobs:
     env:
       MCP_OWNER_UID: ${{ vars.MCP_OWNER_UID }}
       GOOGLE_CLOUD_OAUTH_CLIENT_ID: ${{ vars.GOOGLE_CLOUD_OAUTH_CLIENT_ID }}
-      AWFL_CLI_REF: '0f3d56404073a7d411bc4e625ce960d521488a4c'
+      AWFL_CLI_REF: 'aceea9c616cc64ab5a2dd7880524e071b84645a0'
       CORS_ALLOW_ORIGIN: ${{ vars.CORS_ALLOW_ORIGIN }}
       # Default to repository variables; will be overridden by JSON if present
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
