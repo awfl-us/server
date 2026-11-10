@@ -15,9 +15,9 @@ const PREVIEW_LIFETIME = 15 * 60 * 1000;
 const TICKET_LIFETIME = 60 * 1000;
 
 function originFromConfig(mode) {
-  // The jobs service is IAM-protected for OIDC Workflow calls; the public API
-  // hosts browser previews. They share one forwarding implementation.
-  const fallback = mode === 'preview' ? (process.env.API_ORIGIN || 'https://api.awfl.us') :
+  // The public API accepts Workflows OIDC and separately authorized previews.
+  // The existing jobs service may continue using its IAM-protected canary.
+  const fallback = mode === 'preview' || mode === 'both' ? (process.env.API_ORIGIN || 'https://api.awfl.us') :
     (process.env.WORKFLOWS_BASE_URL || 'https://jobs.awfl.us');
   const url = new URL(process.env.AWFL_DEV_GATEWAY_ORIGIN || fallback);
   if (url.protocol !== 'https:' || url.search || url.hash || url.username || url.password) {
@@ -51,7 +51,7 @@ function parsePreviewCookie(header, workspaceId) {
 }
 
 function invalidSession(res) {
-  return res.status(401).set('Cache-Control','no-store').json({error:'Preview authorization required'});
+  return res.status(401).set('Cache-Control','no-store').json({error:'Gateway authorization required'});
 }
 
 export function createDevGateway({ db, isOwner, mode = 'workflow', getLock = getConsumerLock,
@@ -59,7 +59,7 @@ export function createDevGateway({ db, isOwner, mode = 'workflow', getLock = get
     (await googleOidc.verifyIdToken({ idToken: token, audience })).getPayload(),
   getAllowedWorkflowEmails = allowedWorkflowEmails, httpForward = forwardPodHttp } = {}) {
   if (!db || typeof isOwner !== 'function') throw new Error('Gateway needs database and owner authorization');
-  if (mode !== 'workflow' && mode !== 'preview') throw new Error('Invalid gateway mode');
+  if (!['workflow','preview','both'].includes(mode)) throw new Error('Invalid gateway mode');
   const proxyRouter = express.Router();
   const accessRouter = express.Router();
   const baseOrigin = originFromConfig(mode);
@@ -74,7 +74,7 @@ export function createDevGateway({ db, isOwner, mode = 'workflow', getLock = get
     return { workspace, consumer };
   }
 
-  accessRouter.use((_req,res,next) => mode === 'preview' ? next() : res.status(404).end());
+  accessRouter.use((_req,res,next) => mode !== 'workflow' ? next() : res.status(404).end());
   accessRouter.post('/sessions', clientAuth, async (req,res) => {
     try {
       const id = req.body?.workspace_id;
@@ -139,28 +139,31 @@ export function createDevGateway({ db, isOwner, mode = 'workflow', getLock = get
     if (!m || !validWorkspaceId(m[1]) || !validPort(m[2]) || req.url.length > 8192) return res.status(404).end();
     const id=m[1], port=Number(m[2]), path=m[3] || '/';
     try {
-      const { workspace, consumer } = await live(id);
       const authorization = req.get('authorization') || '';
       let workflowHeaders = {};
-      if (mode === 'workflow') {
+      if (mode === 'workflow' || (mode === 'both' && authorization)) {
         const bearer = /^Bearer (\S+)$/.exec(authorization);
         if (!bearer) return invalidSession(res);
-        // Cloud Run validates against the service origin before this handler
-        // sees the request. A dynamic /dev/<workspace>/<port> audience would
-        // be rejected there. Dev workflows use an optional OIDC_AUDIENCE
-        // override while keeping BASE_URL workspace-specific for routing.
-        const audience = baseOrigin;
-        const claims = await verifyGoogleToken(bearer[1],audience);
-        verifyWorkflowIdentity(claims, {audience,allowedEmails:await getAllowedWorkflowEmails()});
-        // Workflows already supply these identity headers. Never trust their
-        // values: only forward the owner and project resolved from Firestore.
-        if ((req.get('x-user-id') && req.get('x-user-id') !== workspace.userId) ||
-            (req.get('x-project-id') && req.get('x-project-id') !== workspace.projectId)) return invalidSession(res);
-        workflowHeaders = {'x-user-id':workspace.userId,'x-project-id':workspace.projectId};
+        // A publicly invokable Cloud Run API does not perform IAM token
+        // validation for us. Verify the ORIGINAL Workflows OIDC token here,
+        // against the EXACT BASE_URL sent by existing workflow-utils. The
+        // protected jobs canary still uses its service-root audience.
+        const audience = mode === 'both' ? `${baseOrigin}/dev/${id}/${port}` : baseOrigin;
+        try {
+          const claims = await verifyGoogleToken(bearer[1],audience);
+          verifyWorkflowIdentity(claims, {audience,allowedEmails:await getAllowedWorkflowEmails()});
+        } catch {
+          return invalidSession(res);
+        }
+        // These are application headers, NOT another authentication check.
+        // Preserve the Workflows request's user/project context as-is.
+        if (req.get('x-user-id')) workflowHeaders['x-user-id'] = req.get('x-user-id');
+        if (req.get('x-project-id')) workflowHeaders['x-project-id'] = req.get('x-project-id');
       } else {
         if (authorization) return invalidSession(res);
         const token = parsePreviewCookie(req.get('cookie'),id);
         if (!token) return invalidSession(res);
+        const { workspace, consumer } = await live(id);
         const session = await db.collection('devGatewaySessions').doc(sha256(token)).get();
         const value = session.data();
         if (!session.exists || value.expiresAt <= Date.now() || value.workspaceId !== id ||
@@ -170,6 +173,7 @@ export function createDevGateway({ db, isOwner, mode = 'workflow', getLock = get
         const requestOrigin = req.get('origin');
         if (requestOrigin && requestOrigin !== baseOrigin) return invalidSession(res);
       }
+      const { consumer } = await live(id);
       const kc = await kubernetes();
       const pods = (await kc.makeApiClient(CoreV1Api).listNamespacedPod(consumer.namespace)).body.items;
       const podName = readyJobPod(pods,consumer.jobName);
