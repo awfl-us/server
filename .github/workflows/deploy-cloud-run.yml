@@ -62,7 +62,7 @@ jobs:
       - name: Validate MCP protocol and authorization
         run: |
           npm install --ignore-scripts
-          node --test mcp/tests/*.test.js agentsMcp/tests/*.test.js
+          node --test mcp/tests/*.test.js workflows/oauth/tests/*.test.js agentsMcp/tests/*.test.js
           node --test workflows/workspace/storageTokens.test.js
 
       - name: Authenticate to Google Cloud (WIF/OIDC)
@@ -420,14 +420,33 @@ jobs:
             echo "Service ${service} serves its latest revision at 100%"
           done
 
-      - name: Verify deployed MCP route rejects anonymous requests
+      - name: Verify deployed MCP routes publish OAuth and reject anonymous requests
         run: |
           node --input-type=module -e "
-            const response = await fetch('https://api.awfl.us/mcp', { method: 'POST' });
-            if (response.status !== 401) {
-              throw new Error('Expected MCP authentication rejection (401), got ' + response.status);
+            const origin = 'https://api.awfl.us';
+            for (const path of ['/mcp', '/mcp/agents']) {
+              const response = await fetch(origin + path, { method: 'POST' });
+              if (response.status !== 401) {
+                throw new Error('Expected MCP authentication rejection (401) at ' + path + ', got ' + response.status);
+              }
+              if (!response.headers.get('www-authenticate')?.includes('oauth-protected-resource')) {
+                throw new Error('Missing OAuth challenge at ' + path);
+              }
             }
-            console.log('Authenticated MCP route is deployed');
+            const expected = origin;
+            for (const path of ['/.well-known/oauth-protected-resource/mcp',
+                '/.well-known/oauth-protected-resource/mcp/agents']) {
+              const response = await fetch(origin + path);
+              const metadata = await response.json();
+              if (response.status !== 200 || metadata.resource !== expected) {
+                throw new Error('Invalid shared OAuth resource at ' + path);
+              }
+            }
+            const discovery = await (await fetch(origin + '/.well-known/oauth-authorization-server')).json();
+            if (!discovery.code_challenge_methods_supported.includes('S256')) {
+              throw new Error('OAuth PKCE discovery unavailable');
+            }
+            console.log('Both MCP routes and shared OAuth metadata verified');
           "
 
 # Notes:
