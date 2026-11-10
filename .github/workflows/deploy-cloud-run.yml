@@ -364,6 +364,7 @@ jobs:
 
       - name: Deploy API service (public)
         run: |
+          set -euo pipefail
           gcloud run deploy "${CLOUD_RUN_API_SERVICE}" \
             --quiet \
             --region="${GCP_REGION}" \
@@ -373,9 +374,16 @@ jobs:
             --timeout=3600 \
             --set-env-vars="^;^${{ steps.common_env.outputs.COMMON_ENV_VARS }};SERVICE_TARGET=start:api" \
             ${{ steps.secrets.outputs.SECRET_FLAGS }}
+          # A zero-traffic tagged canary changes Cloud Run's persisted traffic
+          # targets. Without explicitly promoting the new stable revision,
+          # gcloud run deploy may create a revision that serves 0% indefinitely.
+          # --to-latest preserves tagged canary URLs with 0% default traffic.
+          gcloud run services update-traffic "${CLOUD_RUN_API_SERVICE}" \
+            --region="${GCP_REGION}" --to-latest --quiet
 
       - name: Deploy Jobs service (auth-required)
         run: |
+          set -euo pipefail
           gcloud run deploy "${CLOUD_RUN_JOBS_SERVICE}" \
             --quiet \
             --region="${GCP_REGION}" \
@@ -385,8 +393,25 @@ jobs:
             --timeout=3600 \
             --set-env-vars="^;^${{ steps.common_env.outputs.COMMON_ENV_VARS }};SERVICE_TARGET=start:jobs;CLOUD_RUN_LOCATION=${GCP_REGION}" \
             ${{ steps.secrets.outputs.SECRET_FLAGS }}
+          gcloud run services update-traffic "${CLOUD_RUN_JOBS_SERVICE}" \
+            --region="${GCP_REGION}" --to-latest --quiet
 
       # No GKE provisioning in the application deployment pipeline.
+      - name: Verify both services route 100% to the latest stable revision
+        run: |
+          set -euo pipefail
+          for service in "${CLOUD_RUN_API_SERVICE}" "${CLOUD_RUN_JOBS_SERVICE}"; do
+            gcloud run services describe "${service}" --region="${GCP_REGION}" --format=json |
+              jq -e --arg service "${service}" '
+                .status.latestReadyRevisionName as $latest |
+                any(.status.traffic[]; .revisionName == $latest and .percent == 100)
+              ' >/dev/null || {
+                echo "Service ${service} is not serving the latest revision at 100%" >&2
+                exit 1
+              }
+            echo "Service ${service} serves its latest revision at 100%"
+          done
+
       - name: Verify deployed MCP route rejects anonymous requests
         run: |
           node --input-type=module -e "
