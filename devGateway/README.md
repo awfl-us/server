@@ -1,13 +1,23 @@
 # AWFL workspace HTTP gateway (in progress)
 
-Goal: reuse the existing public HTTPS API for both development Google Workflows
-callbacks and browser previews of servers running *inside* the project-scoped
-GKE consumer. No additional workflows, workflow suffixes, public pod IPs, or
-per-workspace load balancers are needed.
+Goal: reuse the existing authenticated `jobs` Cloud Run service for Google
+Workflows development callbacks, and the already public `api` Cloud Run service
+for browser previews. Both share the same owner-scoped pod forwarding logic.
+No additional workflows, workflow suffixes, public pod IPs, or per-workspace
+load balancers are required.
 
 Proposed URL (not deployed):
 
-`https://api.awfl.us/dev/{workspace-id}/{port}/{relative-path}`
+`https://<jobs-origin>/dev/{workspace-id}/{port}/{relative-path}` for OIDC calls
+and `https://<api-origin>/dev/{workspace-id}/{port}/{relative-path}` for previews.
+
+**Important OIDC constraint:** Cloud Run checks audience *before* passing a
+request to the jobs service, so an audience including a dynamic path under
+`/dev` won't work with the default Cloud Run service audience. `BASE_URL`
+remains the workspace-specific jobs URL, but `OIDC_AUDIENCE` must be set to the
+root jobs Cloud Run URL during cloud-dev execution. The `workflow-utils` HTTP
+helpers need to accept that optional audience override while retaining their
+existing OIDC type and production fallback (`Env.BASE_URL`).
 
 - `BASE_URL` for generated `*Dev` Workflows would use this prefix. Existing
   generated YAML sets OIDC `audience` to exactly `input.env.BASE_URL`.
