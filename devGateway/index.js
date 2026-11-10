@@ -14,11 +14,9 @@ const googleOidc = new OAuth2Client();
 const PREVIEW_LIFETIME = 15 * 60 * 1000;
 const TICKET_LIFETIME = 60 * 1000;
 
-function originFromConfig(mode) {
-  // The public API accepts Workflows OIDC and separately authorized previews.
-  // The existing jobs service may continue using its IAM-protected canary.
-  const fallback = mode === 'preview' || mode === 'both' ? (process.env.API_ORIGIN || 'https://api.awfl.us') :
-    (process.env.WORKFLOWS_BASE_URL || 'https://jobs.awfl.us');
+function originFromConfig() {
+  // Workflows and previews share the public API, not the protected jobs service.
+  const fallback = process.env.API_ORIGIN || 'https://api.awfl.us';
   const url = new URL(process.env.AWFL_DEV_GATEWAY_ORIGIN || fallback);
   if (url.protocol !== 'https:' || url.search || url.hash || url.username || url.password) {
     throw new Error('Invalid jobs origin for dev gateway');
@@ -54,15 +52,14 @@ function invalidSession(res) {
   return res.status(401).set('Cache-Control','no-store').json({error:'Gateway authorization required'});
 }
 
-export function createDevGateway({ db, isOwner, mode = 'workflow', getLock = getConsumerLock,
+export function createDevGateway({ db, isOwner, getLock = getConsumerLock,
   kubernetes = getKubeConfig, verifyGoogleToken = async (token, audience) =>
     (await googleOidc.verifyIdToken({ idToken: token, audience })).getPayload(),
   getAllowedWorkflowEmails = allowedWorkflowEmails, httpForward = forwardPodHttp } = {}) {
   if (!db || typeof isOwner !== 'function') throw new Error('Gateway needs database and owner authorization');
-  if (!['workflow','preview','both'].includes(mode)) throw new Error('Invalid gateway mode');
   const proxyRouter = express.Router();
   const accessRouter = express.Router();
-  const baseOrigin = originFromConfig(mode);
+  const baseOrigin = originFromConfig();
 
   async function live(id) {
     const snap = await db.collection('mcpWorkspaces').doc(id).get();
@@ -74,7 +71,6 @@ export function createDevGateway({ db, isOwner, mode = 'workflow', getLock = get
     return { workspace, consumer };
   }
 
-  accessRouter.use((_req,res,next) => mode !== 'workflow' ? next() : res.status(404).end());
   accessRouter.post('/sessions', clientAuth, async (req,res) => {
     try {
       const id = req.body?.workspace_id;
@@ -141,14 +137,13 @@ export function createDevGateway({ db, isOwner, mode = 'workflow', getLock = get
     try {
       const authorization = req.get('authorization') || '';
       let workflowHeaders = {};
-      if (mode === 'workflow' || (mode === 'both' && authorization)) {
+      if (authorization) {
         const bearer = /^Bearer (\S+)$/.exec(authorization);
         if (!bearer) return invalidSession(res);
         // A publicly invokable Cloud Run API does not perform IAM token
         // validation for us. Verify the ORIGINAL Workflows OIDC token here,
         // against the EXACT BASE_URL sent by existing workflow-utils. The
-        // protected jobs canary still uses its service-root audience.
-        const audience = mode === 'both' ? `${baseOrigin}/dev/${id}/${port}` : baseOrigin;
+        const audience = `${baseOrigin}/dev/${id}/${port}`;
         try {
           const claims = await verifyGoogleToken(bearer[1],audience);
           verifyWorkflowIdentity(claims, {audience,allowedEmails:await getAllowedWorkflowEmails()});

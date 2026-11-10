@@ -104,7 +104,7 @@ app.use(cors)
 if (process.env.AWFL_DEV_GATEWAY_ENABLED === 'true') {
   const db = getFirestore()
   const execution = new ExecutionService({ db })
-  const gateway = createDevGateway({ db, isOwner: uid => execution.isOwner(uid), mode: 'both' })
+  const gateway = createDevGateway({ db, isOwner: uid => execution.isOwner(uid) })
   app.use('/dev', gateway.proxyRouter)
   app.use('/dev-access', express.json({ limit: '16kb' }), gateway.accessRouter)
 }

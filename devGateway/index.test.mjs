@@ -18,7 +18,7 @@ async function createHarness() {
   const verified = [];
   const forwarded = [];
   const db = {collection:name=>({doc:()=>({get:async()=>({exists:name==='mcpWorkspaces',data:()=>workspace})})})};
-  const router = createDevGateway({db,isOwner:async()=>true,mode:'both',
+  const router = createDevGateway({db,isOwner:async()=>true,
     getLock:async()=>({lock}),getAllowedWorkflowEmails:async()=>['workflow@awfl.example'],
     verifyGoogleToken:async(token,audience)=>{
       verified.push({token,audience});
