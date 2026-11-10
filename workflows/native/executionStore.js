@@ -61,6 +61,7 @@ export class NativeExecutionStore {
       if (!snap.exists) throw conflict('execution not found');
       const s = snap.data(), now = this.clock();
       if (s.status === 'completed') return { completed: true, result: s.result };
+      if (s.status === 'cancelled') return { cancelled: true };
       if (s.owner && s.leaseUntil > now) throw conflict('lease held');
       const next = { ...s, owner: workerId, epoch: s.epoch + 1,
         leaseUntil: now + leaseMs, updatedAt: now };
@@ -78,9 +79,36 @@ export class NativeExecutionStore {
       if (s.owner !== workerId || s.epoch !== epoch || s.leaseUntil <= now) {
         throw conflict('stale worker fencing token');
       }
-      if (s.status === 'completed') throw conflict('execution already completed');
+      if (s.status === 'completed' || s.status === 'cancelled') throw conflict('execution is terminal');
       const next = change(s, now);
       tx.update(ref, { ...next, updatedAt: now });
+      return next;
+    });
+  }
+
+  async renew({ executionId, workerId, epoch, leaseMs = 60_000 }) {
+    if (!Number.isSafeInteger(leaseMs) || leaseMs < 1000 || leaseMs > 3600000) {
+      throw new Error('invalid lease duration');
+    }
+    return this.mutate(executionId, workerId, epoch, (s, now) => ({
+      ...s, leaseUntil: now + leaseMs,
+    }));
+  }
+
+  // A cancelled execution is terminal. The caller must authenticate the owner;
+  // cancellation does not undo an external effect already in flight.
+  async cancel({ executionId, userId, projectId }) {
+    const ref = this.ref(executionId);
+    return this.db.runTransaction(async tx => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) throw conflict('execution not found');
+      const s = snap.data();
+      if (s.userId !== userId || s.projectId !== projectId) throw conflict('owner mismatch');
+      if (s.status === 'completed') throw conflict('execution already completed');
+      if (s.status === 'cancelled') return s;
+      const next = { ...s, status: 'cancelled', owner: null,
+        epoch: s.epoch + 1, leaseUntil: 0, updatedAt: this.clock() };
+      tx.update(ref, next);
       return next;
     });
   }

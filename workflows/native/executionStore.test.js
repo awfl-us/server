@@ -84,3 +84,19 @@ test('reject invalid identifiers, missing data, and duplicate execution', async 
   await assert.rejects(store.claim({ executionId: 'bad/path', workerId: 'a' }), /invalid/);
   await assert.rejects(store.create({ executionId: 'e2', userId: 'u', projectId: 'p', artifactSha256: 'no', input: null }), /SHA-256/);
 });
+
+
+test('lease renewal extends ownership and cancellation fences active workers', async () => {
+  const { store, advance } = await setup();
+  const a = await store.claim({ executionId: 'e1', workerId: 'a', leaseMs: 1000 });
+  advance(500);
+  const renewed = await store.renew({ executionId: 'e1', workerId: 'a', epoch: a.epoch, leaseMs: 2000 });
+  assert.equal(renewed.leaseUntil, 3500);
+  advance(600);
+  await assert.rejects(store.claim({ executionId: 'e1', workerId: 'b' }), /lease held/);
+  await assert.rejects(store.cancel({ executionId: 'e1', userId: 'intruder', projectId: 'p' }), /owner mismatch/);
+  const cancelled = await store.cancel({ executionId: 'e1', userId: 'u', projectId: 'p' });
+  assert.equal(cancelled.status, 'cancelled');
+  assert.equal((await store.claim({ executionId: 'e1', workerId: 'b' })).cancelled, true);
+  await assert.rejects(store.checkpoint({ executionId: 'e1', workerId: 'a', epoch: a.epoch, nodeId: '0_1', slots: {} }), /stale worker/);
+});

@@ -42,3 +42,17 @@ resume. Unresolved outcomes remain pending until reconciled.
   current tests use a serial in-memory transaction mock.
 
 Local test: `node --test workflows/native/executionStore.test.js`.
+
+## Pure native artifact runner (opt-in library)
+
+`runner.js` verifies the executable's SHA-256, spawns a bounded subprocess,
+passes JSON through stdin, and parses JSON stdout. `executePureNative` claims a
+fenced execution, checks the pinned artifact and completes it transactionally.
+This path only accepts workflows with no checkpoint or pending effect and does
+not yet integrate with the production launcher. The caller must select the
+executable from a **trusted artifact registry**; this library is not a sandbox
+and must not be given arbitrary user-controlled paths or untrusted binaries.
+Lease renewal and owner-scoped cancellation are available on the store.
+Cancellation fences further persistence but cannot forcibly undo already
+executed external effects. Run tests using
+`node --test workflows/native/*.test.js`.
