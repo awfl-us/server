@@ -216,15 +216,48 @@ ID. Native Jobs adapters overwrite any workflow-supplied `body.userId` and
 The same existing status/cancellation endpoints recognize native IDs.
 
 This backend remains **off by default**. The artifact bucket and the
-native Cloud Tasks queue/IAM have been provisioned in GCP with Terraform:
-the existing Workflows tracked state owns the bucket; the separate
+native Cloud Tasks queue/IAM were provisioned with Terraform: the existing
+Workflows tracked state owns the bucket; the separate
 `server/infra/native-execution` GCS-backed state owns the queue and Jobs
-invoker grants. A Scala-generated `NativePilot` binary was published to
-GCS and successfully downloaded, verified, and executed as an ABI 3
-protocol-v2 artifact. A task with OIDC credentials was accepted by the
-Cloud Tasks queue for the private Jobs service's `/health` endpoint.
-Do not enable native execution until the actual native Jobs route,
-retry/reconciliation, and existing workflow parity are verified.
+invoker grants.
+
+### November 11, 2026: live pure native canary
+
+- Server [PR #72](https://github.com/awfl-us/server/pull/72) is merged and
+  deployed (API revision `api-00137-hjd`, Jobs `jobs-00119-7gr`). Both
+  ordinary revisions have `AWFL_NATIVE_EXECUTION_ENABLED=0`.
+- A **zero-traffic** Jobs revision, `jobs-00121-jaz`, was created with native
+  execution enabled, tagged `native-rust-pilot`. The production Jobs revision
+  retains **100% of regular traffic**. OIDC's audience remains the canonical
+  Jobs service origin even when the task targets the tagged URL.
+- The initial published pilot executable used the glibc interpreter
+  `/lib64/ld-linux-x86-64.so.2`, which Alpine Jobs lacks. The real Cloud
+  Task reached Jobs, but `spawn` failed with `ENOENT`; retries returned
+  `503` / valid-worker `lease held`. The failed task was deleted.
+- Workflows [PR #3](https://github.com/awfl-us/workflows/pull/3)
+  merged a publisher that compiles and verifies **static**
+  `x86_64-unknown-linux-musl` ELF binaries and executes them in
+  `node:22-alpine` CI. The verified pilot artifact was republished at SHA-256
+  `109b82a73175a46ada8b4c5f5059b724f40017a8321b2c76edec9e62396f984e`,
+  with `protocolVersion: 2`, `runtimeAbi: 3`, `allowedOperations: []`.
+- A second **real** Cloud Tasks → tagged Jobs → Firestore canary completed:
+  execution `native_1432d417a1464e5dbc11af93e00e9f3f`, result
+  `[2,3,9,9]`, observed enqueue-to-completion **6,836 ms** (single
+  sample, not a production latency percentile). Duplicate task delivery
+  preserved the completed result and execution epoch. The scripted test is
+  `compiler-rust/scripts/live_native_pilot.py`.
+
+**Limits of this evidence:** the canary directly initialized a trusted
+Firestore execution and submitted Cloud Tasks using the injected GCP
+credential. It **did not** exercise Firebase-authenticated
+`POST /workflows/execute`, agent session/history/callback registration, or
+real HTTP effects. The GitHub App's manual workflow-dispatch attempt
+returned HTTP 403; the approved, Alpine-tested CI artifact was published
+through an existing GCP IAM identity instead. Verify the authorized release
+workflow in its intended deployment context before relying on automated
+publication. Do not enable general native routing until real HTTP effect
+reconciliation, OS confinement, crash/retry policy, and workflow parity are
+verified. Keep the normal Jobs revision at native=0 until those gates pass.
 
 ## Effect dispatcher boundary
 
