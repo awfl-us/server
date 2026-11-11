@@ -25,6 +25,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: sbt/setup-sbt@v1
+      - name: Generate real Rust Try/Raise crates from the existing Scala DSL
+        run: |
+          cd _compiler-rust/frontend
+          sbt -batch 'Test / runMain us.awfl.compiler.rust.TryRaiseSmoke'
+          cd ../..
+          test -f _compiler-rust/fixtures/native-try-raise/effect-catch/Cargo.toml
+          test -f _compiler-rust/fixtures/native-try-raise/uncaught/Cargo.toml
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: '1.99.1'
