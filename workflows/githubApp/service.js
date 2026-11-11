@@ -183,12 +183,19 @@ export async function resolveGithubAppCredential({ userId, projectId, db = getFi
   const key = String(data.installationId);
   const cached = tokenCache.get(key);
   if (cached && cached.expiresAt > Date.now() + 3 * 60 * 1000) {
-    return { token: cached.token, owner: data.owner, repo: data.repo, defaultBranch: data.defaultBranch };
+    return { token: cached.token, owner: data.owner, repo: data.repo,
+      defaultBranch: data.defaultBranch,
+      expiresIn: Math.max(0, Math.floor((cached.expiresAt - Date.now()) / 1000)) };
   }
   const jwt = appJwt({ appId: process.env.GITHUB_APP_ID, privateKeyB64: process.env.GITHUB_APP_PRIVATE_KEY_B64 });
   const result = await githubRequest('/app/installations/' + data.installationId + '/access_tokens',
     jwt, { method: 'POST', fetcher });
-  if (!result.token || !result.expires_at) throw new Error('GitHub App token response invalid');
-  tokenCache.set(key, { token: result.token, expiresAt: Date.parse(result.expires_at) });
-  return { token: result.token, owner: data.owner, repo: data.repo, defaultBranch: data.defaultBranch };
+  const expiresAt = Date.parse(result.expires_at);
+  if (!result.token || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+    throw new Error('GitHub App token response invalid');
+  }
+  tokenCache.set(key, { token: result.token, expiresAt });
+  return { token: result.token, owner: data.owner, repo: data.repo,
+    defaultBranch: data.defaultBranch,
+    expiresIn: Math.max(0, Math.floor((expiresAt - Date.now()) / 1000)) };
 }
