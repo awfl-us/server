@@ -327,3 +327,66 @@ test('emulator + generated Rust: two dependent effects per range iteration survi
   assert.equal(done.pendingEffect, null);
   for (const effectId of ids) assert.notEqual(await store.getEffect('exec1', effectId), null);
 });
+
+const switchBinary = process.env.AWFL_NATIVE_SWITCH_BINARY;
+test('emulator + generated Rust: Switch branch and second Call remain pinned after worker takeover', {
+  skip: !enabled || !switchBinary, timeout: 90_000,
+}, async () => {
+  let now = Date.now();
+  const sha256 = createHash('sha256').update(await readFile(switchBinary)).digest('hex');
+  const store = fixture(() => now);
+  await store.create({ executionId: 'exec1', userId: 'owner', projectId: 'proj',
+    artifactSha256: sha256, input: 5 });
+  let workerId = 'original';
+  let sent = 0;
+  const dispatcher = new NativeEffectDispatcher({ handlers: {
+    'http.post': async ({ args, idempotencyKey }) => {
+      if (sent === 0) {
+        assert.equal(idempotencyKey, 'exec1:call_0_s0_b0');
+        assert.deepEqual(args, { url: 'https://example.org/branch-a' });
+      } else {
+        assert.equal(idempotencyKey, 'exec1:call_0_s1_b0');
+        assert.equal(args, 'first-value');
+      }
+      return sent++ === 0 ? 'first-value' : 'second-value';
+    },
+  } });
+  for (let site = 0; site < 2; site++) {
+    const pending = await executeNativeStep({ store, executionId: 'exec1', workerId,
+      executable: switchBinary, sha256 });
+    assert.equal(pending.status, 'waiting_effect');
+    const state = await store.get('exec1');
+    assert.equal(state.checkpoint.next_step, 0);
+    assert.deepEqual(state.checkpoint.frames, [
+      { node_id: '0.0', iteration: 0 },
+      { node_id: '0.0.case0.' + site, iteration: site },
+    ]);
+    if (site === 1) {
+      assert.deepEqual(state.checkpoint.slots.s0,
+        { type: 'string', value: 'first-value' });
+    }
+    await dispatcher.dispatch({ store, executionId: 'exec1', workerId,
+      epoch: state.epoch, effectId: pending.effectId });
+    if (site === 0) {
+      now = state.leaseUntil + 1;
+      workerId = 'replacement';
+    }
+  }
+  assert.deepEqual(await executeNativeStep({ store, executionId: 'exec1', workerId,
+    executable: switchBinary, sha256 }),
+  { status: 'completed', result: 'second-value' });
+  assert.equal(sent, 2);
+  const done = await store.get('exec1');
+  assert.equal(done.effectCount, 2);
+  assert.equal(done.epoch, 2);
+  assert.deepEqual((await store.getEffect('exec1', 'call_0_s0_b0')).outcome, 'first-value');
+  assert.deepEqual((await store.getEffect('exec1', 'call_0_s1_b0')).outcome, 'second-value');
+
+  // An unmatched branch completes without preparing a remote side effect.
+  await store.create({ executionId: 'exec2', userId: 'owner', projectId: 'proj',
+    artifactSha256: sha256, input: 0 });
+  assert.deepEqual(await executeNativeStep({ store, executionId: 'exec2',
+    workerId: 'other-worker', executable: switchBinary, sha256 }),
+  { status: 'completed', result: {} });
+  assert.equal((await store.get('exec2')).effectCount, 0);
+});

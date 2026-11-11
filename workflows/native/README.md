@@ -37,15 +37,15 @@ resume. Unresolved outcomes remain pending until reconciled.
   signed/trusted artifact registry, source-manifest validation, sandboxing,
   authenticated identity, real allowlisted HTTP adapters, remote idempotency
   and reconciliation.
-- Extend the bounded range call-site frames to nested loops, branches,
-  For, and Fold. The current protocol supports top-level Calls and
-  multiple direct Calls within one top-level ForRange iteration; earlier
-  results from the unfinished iteration are journaled and restored.
+- Extend the bounded call-site frames to deeper nested loops/branches,
+  For, and Fold. The protocol supports direct Calls in top-level Switch
+  branches and multiple Calls inside one top-level ForRange iteration.
+  Previous results are journaled and restored after worker takeover.
 - Integrate backend selection **inside** existing `createWorkflowExecution`
   shared launcher; preserve existing session status, links, callbacks and
   monitoring rather than adding a separate executor.
 - Expand emulator-backed crash injection, transaction contention/throughput
-  load tests, and real remote effect adapters. An eight-case real Firestore
+  load tests, and real remote effect adapters. A nine-case real Firestore
   emulator suite passes, including actual compiled Rust suspend/resume.
 
 Local test: `node --test workflows/native/executionStore.test.js`.
@@ -106,6 +106,7 @@ AWFL_NATIVE_PROTOCOL_BINARY=/absolute/path/to/native-resume-binary \
 AWFL_NATIVE_MULTI_BINARY=/absolute/path/to/native-two-effects-binary \
 AWFL_NATIVE_RANGE_BINARY=/absolute/path/to/native-range-effect-binary \
 AWFL_NATIVE_MULTI_RANGE_BINARY=/absolute/path/to/native-range-two-effects-binary \
+AWFL_NATIVE_SWITCH_BINARY=/absolute/path/to/native-switch-effects-binary \
 node --test --test-concurrency=1 workflows/native/*.test.js
 ```
 
