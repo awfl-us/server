@@ -30,6 +30,25 @@ const enforceBytes = (value, max, description) => {
   }
 };
 
+// Firestore rejects an array directly nested inside another array. Native
+// inputs, arguments, outcomes and results can contain arbitrary JSON;
+// persist them as bounded JSON strings and hydrate the store API on reads.
+// Tagged continuation slots remain structured maps for atomic updates.
+const storedJson = (record, field) =>
+  Object.hasOwn(record, field + 'Json') ? JSON.parse(record[field + 'Json']) : record[field];
+const hydrateState = state => state && ({
+  ...state,
+  input: storedJson(state, 'input'),
+  result: storedJson(state, 'result'),
+  pendingEffect: state.pendingEffect && {
+    ...state.pendingEffect,
+    args: storedJson(state.pendingEffect, 'args'),
+  },
+});
+const hydrateJournal = journal => journal && ({
+  ...journal, outcome: storedJson(journal, 'outcome'),
+});
+
 // The Rust continuation stores tagged values. Do not silently coerce 64-bit
 // integers through JavaScript's imprecise Number representation.
 export function tagNativeValue(value) {
@@ -67,7 +86,7 @@ export class NativeExecutionStore {
   }
   async getEffect(executionId, effectId) {
     const snap = await this.effectRef(executionId, effectId).get();
-    return snap.exists ? snap.data() : null;
+    return snap.exists ? hydrateJournal(snap.data()) : null;
   }
 
   async create({ executionId, userId, projectId, artifactSha256, input }) {
@@ -83,17 +102,18 @@ export class NativeExecutionStore {
       if (snap.exists) throw conflict('execution already exists');
       const now = this.clock();
       const state = { schemaVersion: 1, executionId, userId, projectId, artifactSha256,
-        input, status: 'ready', epoch: 0, owner: null, leaseUntil: 0,
+        input: null, inputJson: JSON.stringify(input),
+        status: 'ready', epoch: 0, owner: null, leaseUntil: 0,
         checkpoint: null, pendingEffect: null, effectCount: 0, result: null,
         createdAt: now, updatedAt: now };
       tx.create(ref, state);
-      return state;
+      return hydrateState(state);
     });
   }
 
   async get(executionId) {
     const snap = await this.ref(executionId).get();
-    return snap.exists ? snap.data() : null;
+    return snap.exists ? hydrateState(snap.data()) : null;
   }
 
   async claim({ executionId, workerId, leaseMs = 60_000 }) {
@@ -106,17 +126,19 @@ export class NativeExecutionStore {
       const snap = await tx.get(ref);
       if (!snap.exists) throw conflict('execution not found');
       const s = snap.data(), now = this.clock();
-      if (s.status === 'completed') return { completed: true, result: s.result };
+      if (s.status === 'completed') return {
+        completed: true, result: storedJson(s, 'result'),
+      };
       if (s.status === 'cancelled') return { cancelled: true };
       if (s.owner && s.leaseUntil > now) {
         // Allow the same still-fenced worker to resume after a recorded effect.
-        if (s.owner === workerId) return s;
+        if (s.owner === workerId) return hydrateState(s);
         throw conflict('lease held');
       }
       const next = { ...s, owner: workerId, epoch: s.epoch + 1,
         leaseUntil: now + leaseMs, updatedAt: now };
       tx.update(ref, next);
-      return next;
+      return hydrateState(next);
     });
   }
 
@@ -134,7 +156,7 @@ export class NativeExecutionStore {
       if (s.status === 'completed' || s.status === 'cancelled') throw conflict('execution is terminal');
       const next = change(s, now, recorded, tx, effectRef);
       tx.update(ref, { ...next, updatedAt: now });
-      return next;
+      return hydrateState(next);
     });
   }
 
@@ -157,11 +179,11 @@ export class NativeExecutionStore {
       const s = snap.data();
       if (s.userId !== userId || s.projectId !== projectId) throw conflict('owner mismatch');
       if (s.status === 'completed') throw conflict('execution already completed');
-      if (s.status === 'cancelled') return s;
+      if (s.status === 'cancelled') return hydrateState(s);
       const next = { ...s, status: 'cancelled', owner: null,
         epoch: s.epoch + 1, leaseUntil: 0, updatedAt: this.clock() };
       tx.update(ref, next);
-      return next;
+      return hydrateState(next);
     });
   }
 
@@ -213,7 +235,8 @@ export class NativeExecutionStore {
       return { ...s, status: 'waiting_effect',
         checkpoint: { nodeId, slots, savedAt: now,
           ...(continuation && { next_step: continuation.next_step, frames: continuation.frames }) },
-        pendingEffect: { effectId, nodeId, operation, args, fingerprint, preparedAt: now,
+        pendingEffect: { effectId, nodeId, operation,
+          args: null, argsJson: JSON.stringify(args), fingerprint, preparedAt: now,
           ...(resultSlot && { resultSlot }) } };
     }, effectId);
   }
@@ -227,7 +250,9 @@ export class NativeExecutionStore {
     return this.mutate(executionId, workerId, epoch, (s, now, journal, tx, journalRef) => {
       const prior = journal?.exists ? journal.data() : null;
       if (prior) {
-        if (digest(prior.outcome) !== digest(outcome)) throw conflict('effect outcome differs');
+        if (digest(storedJson(prior, 'outcome')) !== digest(outcome)) {
+          throw conflict('effect outcome differs');
+        }
         return s;
       }
       if (!s.pendingEffect || s.pendingEffect.effectId !== effectId) {
@@ -242,7 +267,8 @@ export class NativeExecutionStore {
       } : s.checkpoint;
       if (checkpoint) enforceBytes(checkpoint.slots, LIMIT.checkpoint, 'native checkpoint');
       // The outcome journal and resume checkpoint commit atomically.
-      tx.create(journalRef, { effectId, fingerprint, outcome, recordedAt: now });
+      tx.create(journalRef, { effectId, fingerprint,
+        outcome: null, outcomeJson: JSON.stringify(outcome), recordedAt: now });
       return { ...s, status: 'ready', pendingEffect: null,
         checkpoint, effectCount: (s.effectCount || 0) + 1 };
     }, effectId);
@@ -253,7 +279,8 @@ export class NativeExecutionStore {
     enforceBytes(result, LIMIT.checkpoint, 'workflow result');
     return this.mutate(executionId, workerId, epoch, s => {
       if (s.pendingEffect) throw conflict('effect outcome unresolved');
-      return { ...s, status: 'completed', result, owner: null, leaseUntil: 0 };
+      return { ...s, status: 'completed',
+        result: null, resultJson: JSON.stringify(result), owner: null, leaseUntil: 0 };
     });
   }
 }

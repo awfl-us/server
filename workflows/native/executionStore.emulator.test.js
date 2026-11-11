@@ -453,3 +453,114 @@ test('emulator + native Rust: two nested Switch branches remain pinned after tak
   { status: 'completed', result: 'no-effect' });
   assert.equal((await store.get('exec2')).effectCount, 0);
 });
+
+const nestedRangeBinary = process.env.AWFL_NATIVE_NESTED_RANGE_BINARY;
+test('emulator + native Rust: two nested ranges resume their independent output prefixes', {
+  skip: !enabled || !nestedRangeBinary, timeout: 90_000,
+}, async () => {
+  let now = Date.now();
+  const sha256 = createHash('sha256').update(await readFile(nestedRangeBinary)).digest('hex');
+  const store = fixture(() => now);
+  await store.create({ executionId: 'exec1', userId: 'owner', projectId: 'proj',
+    artifactSha256: sha256, input: null });
+  let workerId = 'original';
+  let sent = 0;
+  const recorded = new Set();
+  const dispatcher = new NativeEffectDispatcher({ handlers: {
+    'http.post': async ({ args, idempotencyKey }) => {
+      const outer = Math.floor(sent / 4);
+      const inner = Math.floor((sent % 4) / 2);
+      const site = sent % 2;
+      assert.match(idempotencyKey, new RegExp('^exec1:call_0_s[0-9]+_' + outer + '_' + inner + '$'));
+      if (site === 0) assert.deepEqual(args, { url: 'https://example.org/nested-range' });
+      else assert.equal(args, 'first-' + outer + '-' + inner);
+      sent++;
+      return (site === 0 ? 'first-' : 'second-') + outer + '-' + inner;
+    },
+  } });
+  for (let outer = 0; outer < 2; outer++) {
+    for (let inner = 0; inner < 2; inner++) {
+      let firstSlot;
+      for (let site = 0; site < 2; site++) {
+        const pending = await executeNativeStep({ store, executionId: 'exec1', workerId,
+          executable: nestedRangeBinary, sha256 });
+        assert.equal(pending.status, 'waiting_effect');
+        assert.equal(recorded.has(pending.effectId), false);
+        recorded.add(pending.effectId);
+        const state = await store.get('exec1');
+        assert.equal(state.checkpoint.next_step, 0);
+        assert.deepEqual(state.checkpoint.frames, [
+          { node_id: '0.0', iteration: outer },
+          { node_id: '0.0.each.0', iteration: inner },
+          { node_id: state.pendingEffect.nodeId, iteration: site },
+        ]);
+        assert.equal(state.checkpoint.slots.__awfl_loop_0_items.value.length, outer);
+        assert.equal(state.checkpoint.slots.__awfl_loop_0_inner_items.value.length, inner);
+        if (site === 0) firstSlot = state.pendingEffect.resultSlot;
+        else assert.deepEqual(state.checkpoint.slots[firstSlot],
+          { type: 'string', value: 'first-' + outer + '-' + inner });
+        await dispatcher.dispatch({ store, executionId: 'exec1', workerId,
+          epoch: state.epoch, effectId: pending.effectId });
+        if (outer === 0 && inner === 0 && site === 0) {
+          now = state.leaseUntil + 1;
+          workerId = 'replacement-1';
+        } else if (outer === 0 && inner === 1 && site === 1) {
+          now = state.leaseUntil + 1;
+          workerId = 'replacement-2';
+        }
+      }
+    }
+  }
+  assert.deepEqual(await executeNativeStep({ store, executionId: 'exec1', workerId,
+    executable: nestedRangeBinary, sha256 }), {
+    status: 'completed',
+    result: [['second-0-0', 'second-0-1'], ['second-1-0', 'second-1-1']],
+  });
+  const done = await store.get('exec1');
+  assert.equal(sent, 8);
+  assert.equal(recorded.size, 8);
+  assert.equal(done.effectCount, 8);
+  assert.equal(done.epoch, 3);
+  assert.equal(done.pendingEffect, null);
+  for (const effectId of recorded) assert.notEqual(await store.getEffect('exec1', effectId), null);
+});
+
+test('emulator: arbitrary nested JSON payloads persist and hydrate at every native boundary', {
+  skip: !enabled, timeout: 90_000,
+}, async () => {
+  const store = fixture();
+  const input = { matrix: [[1, 2], [3]], records: [{ cells: [[true, false]] }] };
+  const args = { batches: [[{ count: 1 }], [{ count: 2 }]] };
+  const outcome = { nested: [[{ done: true }], ['ok']] };
+  const result = [['row-one', 'row-two'], ['row-three']];
+  await store.create({ executionId: 'exec1', userId: 'owner', projectId: 'proj',
+    artifactSha256: 'a'.repeat(64), input });
+  const { epoch } = await store.claim({ executionId: 'exec1', workerId: 'worker' });
+  assert.deepEqual((await store.get('exec1')).input, input);
+  const continuation = { next_step: 0,
+    frames: [{ node_id: '0.0', iteration: 0 }], slots: {} };
+  await store.prepareEffect({ executionId: 'exec1', workerId: 'worker', epoch,
+    nodeId: '0.0', effectId: 'nested_json', operation: 'http.post',
+    args, slots: {}, continuation, resultSlot: 's0' });
+  assert.deepEqual((await store.get('exec1')).pendingEffect.args, args);
+  await store.recordEffect({ executionId: 'exec1', workerId: 'worker', epoch,
+    effectId: 'nested_json', outcome });
+  assert.deepEqual((await store.getEffect('exec1', 'nested_json')).outcome, outcome);
+  // The native tagged slot remains structured and is passed back to Rust.
+  const checkpoint = (await store.get('exec1')).checkpoint;
+  assert.equal(checkpoint.slots.s0.type, 'map');
+  assert.equal(checkpoint.slots.s0.value.nested.type, 'list');
+  await store.complete({ executionId: 'exec1', workerId: 'worker', epoch, result });
+  assert.deepEqual((await store.get('exec1')).result, result);
+  assert.deepEqual((await store.claim({ executionId: 'exec1', workerId: 'new-worker' })).result,
+    result);
+  // Verify what actually reached Firestore, not merely the in-memory API.
+  const root = (await store.ref('exec1').get()).data();
+  const effect = (await store.effectRef('exec1', 'nested_json').get()).data();
+  assert.equal(root.input, null);
+  assert.equal(root.result, null);
+  assert.equal(typeof root.inputJson, 'string');
+  assert.equal(typeof root.resultJson, 'string');
+  assert.equal(effect.outcome, null);
+  assert.equal(typeof effect.outcomeJson, 'string');
+});
