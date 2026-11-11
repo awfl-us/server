@@ -34,9 +34,8 @@ resume. Unresolved outcomes remain pending until reconciled.
 - Implement live-slot liveness optimization and external payload indirection
   beyond the current bounded checkpoint/argument/outcome sizes.
 - Implement production lease heartbeats, retry/error states, orphan sweeper,
-  signed/trusted artifact registry, source-manifest validation, sandboxing,
-  authenticated identity, real allowlisted HTTP adapters, remote idempotency
-  and reconciliation.
+  source-manifest provenance, **OS-level sandboxing**, authenticated identity,
+  real allowlisted HTTP adapters, remote idempotency and reconciliation.
 - Extend the bounded call-site frames to deeper nested loops/branches,
   For, and Fold. The protocol supports direct Calls in top-level Switch
   branches, direct Calls inside a two-level nested Switch or ForRange,
@@ -70,17 +69,73 @@ Local test: `node --test workflows/native/executionStore.test.js`.
 
 ## Pure native artifact runner (opt-in library)
 
-`runner.js` verifies the executable's SHA-256, spawns a bounded subprocess,
-passes JSON through stdin, and parses JSON stdout. `executePureNative` claims a
+`runner.js` opens the executable without following symlinks, verifies its
+SHA-256, copies the verified bytes into a private temporary directory, and
+executes that immutable snapshot instead of the original mutable source
+path. It strips the inherited environment (including token paths and GCP
+secrets), sets a private working directory and enforces input/output/time
+limits. `executePureNative` claims a
 fenced execution, checks the pinned artifact and completes it transactionally.
 This path only accepts workflows with no checkpoint or pending effect and does
-not yet integrate with the production launcher. The caller must select the
-executable from a **trusted artifact registry**; this library is not a sandbox
-and must not be given arbitrary user-controlled paths or untrusted binaries.
+not yet integrate with the production launcher. The legacy raw-path
+`runNativeArtifact` / `executeNativeStep` APIs are for trusted internal
+callers and tests; they must never accept executable paths from user input.
 Lease renewal and owner-scoped cancellation are available on the store.
 Cancellation fences further persistence but cannot forcibly undo already
 executed external effects. Run tests using
 `node --test workflows/native/*.test.js`.
+
+## Signed artifact registry (experimental, not deployed)
+
+`artifactRegistry.js` implements a read-only, Ed25519-signed approval gate.
+`executeRegisteredNativeStep` reads the execution's *pinned* SHA-256 and
+protocol version from Firestore, asks the registry to resolve that exact
+artifact, and enforces the approval's declared effect-operation capabilities.
+It never accepts a user-supplied executable path.
+
+Release tooling must provision the following files into an **administrator-
+controlled, non-group/world-writable** directory:
+
+- `<sha256>.bin`: the approved native Linux ELF executable
+- `<sha256>.approval.json`: a JSON envelope with `manifest` and `signature`
+
+The signed `manifest` has exactly these fields:
+
+```json
+{
+  "schemaVersion": 1,
+  "publisherKeyId": "trusted-ci",
+  "artifactSha256": "<64 lowercase hex characters>",
+  "protocolVersion": 2,
+  "runtimeAbi": 3,
+  "allowedOperations": ["http.post"]
+}
+```
+
+`signature` is the base64-encoded Ed25519 signature over the UTF-8 bytes of
+`JSON.stringify(manifest)`. The public keys in `trustedPublishers` must come
+from trusted server deployment configuration, **not** from the approval file
+or workflow input. The signing private key must remain exclusively in the
+release service. The registry reads files without following final-component
+symlinks, validates the signature and hashes the opened binary; the runner
+revalidates and snapshots the bytes again before launching.
+
+The special `allowScriptsForTests` registry option is only for isolated
+test fixtures; the default rejects any approved binary without an ELF
+header. Unit tests cover forged approvals, wrong signer/protocol, content
+replacement, symlinks, stripped environment, and capability mismatch.
+The native ABI 3 Firestore test runs a **real** Rust executable through the
+signed registry, records eight effects, and survives worker takeover.
+
+**Security boundary:** private staging and environment scrubbing are *not*
+an operating-system sandbox. The current worker still shares its UID,
+filesystem namespace and network permissions with the native process.
+Never run user-supplied/untrusted compiled code in the server container.
+Before production use, run approved binaries in a separate restricted
+container/job with dedicated service identity, filesystem and network
+isolation, no mounted GCP credentials, bounded CPU/memory/process resources,
+and audited artifact provisioning. This code does not yet create or
+enforce such a container.
 
 ## Effect dispatcher boundary
 

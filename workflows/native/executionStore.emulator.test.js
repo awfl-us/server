@@ -3,11 +3,14 @@
 import assert from 'node:assert/strict';
 import { test, after } from 'node:test';
 import { createRequire } from 'node:module';
-import { readFile } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
+import { copyFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createHash, generateKeyPairSync, sign } from 'node:crypto';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { NativeExecutionStore } from './executionStore.js';
 import { NativeEffectDispatcher } from './effectDispatcher.js';
-import { executeNativeStep } from './runner.js';
+import { executeNativeStep, executeRegisteredNativeStep } from './runner.js';
+import { NativeArtifactRegistry } from './artifactRegistry.js';
 
 const enabled = Boolean(process.env.FIRESTORE_EMULATOR_HOST);
 let db;
@@ -457,9 +460,25 @@ test('emulator + native Rust: two nested Switch branches remain pinned after tak
 const stateMachineRangeBinary = process.env.AWFL_NATIVE_V2_NESTED_RANGE_BINARY;
 test('emulator + native ABI3: nested ForRange resumes at next CFG block after takeover', {
   skip: !enabled || !stateMachineRangeBinary, timeout: 120_000,
-}, async () => {
+}, async t => {
   let now = Date.now();
   const sha256 = createHash('sha256').update(await readFile(stateMachineRangeBinary)).digest('hex');
+  // The artifact must be signed by a known publisher and selected by the
+  // execution's pinned SHA, not by an executable path from workflow input.
+  const root = await mkdtemp(join(tmpdir(), 'awfl-native-registry-emulator-'));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+  const manifest = {
+    schemaVersion: 1, publisherKeyId: 'ci', artifactSha256: sha256,
+    protocolVersion: 2, runtimeAbi: 3, allowedOperations: ['http.post'],
+  };
+  const signature = sign(null, Buffer.from(JSON.stringify(manifest)), privateKey).toString('base64');
+  await copyFile(stateMachineRangeBinary, join(root, sha256 + '.bin'));
+  await writeFile(join(root, sha256 + '.approval.json'),
+    JSON.stringify({ manifest, signature }));
+  const registry = new NativeArtifactRegistry({
+    directory: root, trustedPublishers: { ci: publicKey },
+  });
   const store = fixture(() => now);
   await store.create({ executionId: 'exec1', userId: 'owner', projectId: 'proj',
     artifactSha256: sha256, input: null, protocolVersion: 2 });
@@ -479,8 +498,9 @@ test('emulator + native ABI3: nested ForRange resumes at next CFG block after ta
     },
   } });
   for (let i = 0; i < 8; i++) {
-    const pending = await executeNativeStep({ store, executionId: 'exec1', workerId,
-      executable: stateMachineRangeBinary, sha256 });
+    const pending = await executeRegisteredNativeStep({
+      store, registry, executionId: 'exec1', workerId,
+    });
     assert.equal(pending.status, 'waiting_effect');
     assert.equal(ids.has(pending.effectId), false, 'effect invocation must be unique');
     ids.add(pending.effectId);
@@ -498,8 +518,9 @@ test('emulator + native ABI3: nested ForRange resumes at next CFG block after ta
       workerId = 'replacement';
     }
   }
-  assert.deepEqual(await executeNativeStep({ store, executionId: 'exec1', workerId,
-    executable: stateMachineRangeBinary, sha256 }), {
+  assert.deepEqual(await executeRegisteredNativeStep({
+    store, registry, executionId: 'exec1', workerId,
+  }), {
     status: 'completed',
     result: [['second-0-0', 'second-0-1'], ['second-1-0', 'second-1-1']],
   });
