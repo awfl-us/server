@@ -366,6 +366,26 @@ jobs:
             COMMON_ENV_VARS="${BASE_ENV_VARS}"
           fi
 
+          # The Workflows Terraform root manages the native artifacts bucket,
+          # and server/infra/native-execution (separate remote state) manages
+          # the Cloud Tasks queue and Jobs invoker IAM. Native is NEVER enabled
+          # merely because the infrastructure has been provisioned.
+          NATIVE_ENABLED="${{ vars.AWFL_NATIVE_EXECUTION_ENABLED || '0' }}"
+          if [[ "$NATIVE_ENABLED" != 0 && "$NATIVE_ENABLED" != 1 ]]; then
+            echo "AWFL_NATIVE_EXECUTION_ENABLED must be 0 or 1" >&2
+            exit 1
+          fi
+          # Cloud Run OIDC audience must use the canonical run.app service
+          # origin, NOT a custom jobs domain or user-controlled workflow URL.
+          NATIVE_JOBS_URL="$(gcloud run services describe "${CLOUD_RUN_JOBS_SERVICE}" \
+            --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" \
+            --format='value(status.url)' 2>/dev/null || true)"
+          if [[ "$NATIVE_ENABLED" == 1 && -z "$NATIVE_JOBS_URL" ]]; then
+            echo "Cannot enable native execution without canonical Jobs service URL" >&2
+            exit 1
+          fi
+          COMMON_ENV_VARS="${COMMON_ENV_VARS};AWFL_NATIVE_EXECUTION_ENABLED=${NATIVE_ENABLED};AWFL_NATIVE_ARTIFACT_BUCKET=${GCP_PROJECT_ID}-native-workflows;AWFL_NATIVE_TASK_QUEUE=native-executions;AWFL_NATIVE_TASK_SERVICE_ACCOUNT=awfl-native-task-invoker@${GCP_PROJECT_ID}.iam.gserviceaccount.com;AWFL_NATIVE_JOBS_URL=${NATIVE_JOBS_URL}"
+
           COMMON_ENV_VARS="${COMMON_ENV_VARS};MCP_OWNER_UID=${MCP_OWNER_UID}"
           COMMON_ENV_VARS="${COMMON_ENV_VARS};GOOGLE_CLOUD_OAUTH_CLIENT_ID=${GOOGLE_CLOUD_OAUTH_CLIENT_ID}"
           echo "COMMON_ENV_VARS=${COMMON_ENV_VARS}" >> "$GITHUB_OUTPUT"

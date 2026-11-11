@@ -200,10 +200,15 @@ ID. Native Jobs adapters overwrite any workflow-supplied `body.userId` and
 `body.projectId`, since the middleware checks body before headers.
 The same existing status/cancellation endpoints recognize native IDs.
 
-This backend remains **off by default**, and its Terraform resources have
-not yet been applied to GCP. Terraform uses the existing Workflows state
-for the bucket and a separate server Terraform root for Cloud Tasks/IAM.
-Do not enable native execution until GCP deployment, real Jobs OIDC calls,
+This backend remains **off by default**. The artifact bucket and the
+native Cloud Tasks queue/IAM have been provisioned in GCP with Terraform:
+the existing Workflows tracked state owns the bucket; the separate
+`server/infra/native-execution` GCS-backed state owns the queue and Jobs
+invoker grants. A Scala-generated `NativePilot` binary was published to
+GCS and successfully downloaded, verified, and executed as an ABI 3
+protocol-v2 artifact. A task with OIDC credentials was accepted by the
+Cloud Tasks queue for the private Jobs service's `/health` endpoint.
+Do not enable native execution until the actual native Jobs route,
 retry/reconciliation, and existing workflow parity are verified.
 
 ## Effect dispatcher boundary

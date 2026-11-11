@@ -45,11 +45,12 @@ resource "local_file" "actions_variables" {
     CLOUD_RUN_JOBS_SERVICE = "jobs"
 
     # Native execution is opt-in. The Workflows Terraform root owns the
-    # independent native-artifact bucket; this root owns task and Jobs IAM.
+    # artifact bucket. The independent infra/native-execution root owns
+    # queue and Jobs IAM, with its own GCS remote state.
     AWFL_NATIVE_EXECUTION_ENABLED      = "0"
     AWFL_NATIVE_ARTIFACT_BUCKET        = lower("${var.project_id}-native-workflows")
-    AWFL_NATIVE_TASK_QUEUE             = google_cloud_tasks_queue.native_workflows.name
-    AWFL_NATIVE_TASK_SERVICE_ACCOUNT   = google_service_account.native_task_invoker.email
+    AWFL_NATIVE_TASK_QUEUE             = "native-executions"
+    AWFL_NATIVE_TASK_SERVICE_ACCOUNT   = "awfl-native-task-invoker@${var.project_id}.iam.gserviceaccount.com"
     AWFL_NATIVE_JOBS_URL               = var.cloud_run_services_exist ? data.google_cloud_run_service.jobs[0].status[0].url : "https://jobs.${var.root_domain}"
 
     # Shared work bucket
