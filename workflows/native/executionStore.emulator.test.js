@@ -8,9 +8,19 @@ import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { NativeExecutionStore } from './executionStore.js';
-import { NativeEffectDispatcher } from './effectDispatcher.js';
+import { NativeEffectDispatcher as BaseNativeEffectDispatcher } from './effectDispatcher.js';
 import { executeNativeStep, executeRegisteredNativeStep } from './runner.js';
 import { NativeArtifactRegistry } from './artifactRegistry.js';
+
+// Emulator tests intentionally grant their disposable fixture owner. Real
+// callers must resolve tenant/project authorization against trusted identity.
+class NativeEffectDispatcher extends BaseNativeEffectDispatcher {
+  constructor(options) {
+    super({ ...options, authorizeExecution: async ({ userId, projectId }) => ({
+      allowed: true, userId, projectId,
+    }) });
+  }
+}
 
 const enabled = Boolean(process.env.FIRESTORE_EMULATOR_HOST);
 let db;

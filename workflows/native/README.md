@@ -141,7 +141,18 @@ enforce such a container.
 
 `effectDispatcher.js` accepts explicitly injected operation handlers for the
 canonical `http.get/post/patch/delete` identifiers. Unknown operations fail
-closed. It uses an execution/effect-scoped idempotency key and only records a
+closed. **An `authorizeExecution` callback is now mandatory**, even for
+reconciliation. The trusted caller's policy must verify the stored execution
+owner and project against the authenticated worker/application context and
+return an explicit `{ allowed: true, userId, projectId }` decision.
+Missing, denied, or mismatched decisions reject dispatch without invoking a
+handler. The dispatcher rechecks the live worker epoch, lease and pending
+intent *after* the asynchronous policy call. Only sanitized `userId` and
+`projectId` are forwarded to handlers, never arbitrary policy-returned
+credentials. Disposable emulator tests use an explicitly permissive fixture
+policy; no production identity provider is configured yet.
+
+It uses an execution/effect-scoped idempotency key and only records a
 successful handler outcome after the handler returns. A failed/uncertain HTTP
 operation remains unresolved in the journal. On recovered leases, the
 pre-existing intent is **not** automatically dispatched again: an explicit

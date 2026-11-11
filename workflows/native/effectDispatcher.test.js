@@ -1,17 +1,76 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { NativeEffectDispatcher } from './effectDispatcher.js';
+import { NativeEffectDispatcher as BaseNativeEffectDispatcher } from './effectDispatcher.js';
+
+const testAuthorize = async ({ userId, projectId }) => ({
+  allowed: true, userId, projectId,
+});
+class NativeEffectDispatcher extends BaseNativeEffectDispatcher {
+  constructor(options) { super({ ...options, authorizeExecution: testAuthorize }); }
+}
 
 const pending = { effectId: 'step1', operation: 'http.post', args: { url: 'https://example.test' }, preparedAt: 10 };
 function fixture({ epoch = 1, updatedAt = 10, operation = 'http.post' } = {}) {
   const calls = [];
   const store = {
-    get: async () => ({ owner: 'worker', epoch, leaseUntil: Date.now() + 60_000,
+    get: async () => ({ owner: 'worker', userId: 'owner', projectId: 'project',
+      epoch, leaseUntil: Date.now() + 60_000,
       updatedAt, pendingEffect: { ...pending, operation } }),
     recordEffect: async args => calls.push(args),
   };
   return { store, calls };
 }
+
+test('dispatcher requires an authorization policy and never calls denied handlers', async () => {
+  assert.throws(() => new BaseNativeEffectDispatcher({
+    handlers: { 'http.post': async () => 'should not run' },
+  }), /requires an authorization policy/);
+  const { store, calls } = fixture();
+  let sent = 0;
+  const denied = new BaseNativeEffectDispatcher({
+    authorizeExecution: async () => null,
+    handlers: { 'http.post': async () => { sent++; return 'sent'; } },
+  });
+  await assert.rejects(denied.dispatch({
+    store, executionId: 'run1', workerId: 'worker', epoch: 1, effectId: 'step1',
+  }), /not authorized/);
+  assert.equal(sent, 0);
+  assert.equal(calls.length, 0);
+  const mismatched = new BaseNativeEffectDispatcher({
+    authorizeExecution: async () => ({ allowed: true, userId: 'other', projectId: 'project' }),
+    handlers: { 'http.post': async () => { sent++; return 'sent'; } },
+  });
+  await assert.rejects(mismatched.dispatch({
+    store, executionId: 'run1', workerId: 'worker', epoch: 1, effectId: 'step1',
+  }), /not authorized/);
+  assert.equal(sent, 0);
+});
+
+test('authorization uses stored owner and aborts on lease changes before dispatch', async () => {
+  const { store, calls } = fixture();
+  let state = await store.get();
+  const guarded = {
+    ...store,
+    get: async () => state,
+  };
+  let sent = 0;
+  const dispatcher = new BaseNativeEffectDispatcher({
+    authorizeExecution: async ({ userId, projectId, operation }) => {
+      assert.deepEqual({ userId, projectId, operation }, {
+        userId: 'owner', projectId: 'project', operation: 'http.post',
+      });
+      state = { ...state, epoch: 2 }; // simulates takeover during policy lookup
+      return { allowed: true, userId, projectId };
+    },
+    handlers: { 'http.post': async () => { sent++; return 'sent'; } },
+  });
+  await assert.rejects(dispatcher.dispatch({
+    store: guarded, executionId: 'run1', workerId: 'worker',
+    epoch: 1, effectId: 'step1',
+  }), /changed during authorization/);
+  assert.equal(sent, 0);
+  assert.equal(calls.length, 0);
+});
 
 test('dispatches allowed operation once with stable idempotency key', async () => {
   const { store, calls } = fixture();
