@@ -1,5 +1,5 @@
 // Firestore-backed durable native workflow control plane. No external effects
-// execute inside transactions. Deliberately not wired into production routing.
+// execute inside transactions. Production routing is explicitly opt-in.
 // All mutations are serialized on one execution document and fenced by epoch.
 import { createHash } from 'node:crypto';
 

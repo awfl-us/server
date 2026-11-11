@@ -1,8 +1,21 @@
-# Native workflow execution store (experimental, not deployed)
+# Native Rust workflow execution (experimental, opt-in)
 
-This is a transactional persistence primitive for the **existing AWFL server**.
-It is intentionally not connected to the production workflow launcher or any
-HTTP routes. Existing Google Workflows executions remain unchanged.
+The existing AWFL Workflows service has an optional native Rust execution
+backend. `createWorkflowExecution` chooses it only when
+`AWFL_NATIVE_EXECUTION_ENABLED=1` **and** a release exists for the exact
+workflow name in the IAM-controlled GCS artifact bucket. Otherwise the same
+Google Workflows execution path is used unchanged. The feature is disabled by
+default. The public Workflows API authenticates the caller; an OIDC-signed Cloud
+Tasks request reaches the existing IAM-protected Jobs service, where execution
+state, owner, artifact digest, and effect capabilities are pinned in Firestore.
+No user-provided artifact path is accepted, and native binaries receive no GCP
+authentication material.
+
+Provisioning is defined in `infra/native-execution` (independent GCS Terraform
+state) and in `awfl-us/workflows` (native artifact bucket and IAM). A pure
+`NativePilot` ABI 3/protocol 2 release is published for controlled live tests.
+This is **not** general production parity: native HTTP effects, arbitrary DSL
+control flow, and process isolation remain gated on additional work below.
 
 `NativeExecutionStore` accepts a Firestore instance; callers must authenticate
 and authorize the `userId`/`projectId` before creating or reading executions.
@@ -40,10 +53,11 @@ resume. Unresolved outcomes remain pending until reconciled.
   For, and Fold. The protocol supports direct Calls in top-level Switch
   branches, direct Calls inside a two-level nested Switch or ForRange,
   and multiple Calls inside one top-level ForRange iteration.
-  Previous results are journaled and restored after worker takeover.
-- Integrate backend selection **inside** existing `createWorkflowExecution`
-  shared launcher; preserve existing session status, links, callbacks and
-  monitoring rather than adding a separate executor.
+  Previous results are journaled and restored after worker takeover in the
+  tested subset; broader control-flow parity remains pending.
+- Verify integration with existing session status, links, callbacks, and
+  monitoring for nested and effectful workflows; the initial shared launcher,
+  per-execution status, and cancellation adapters are in place.
 - Expand emulator-backed crash injection, transaction contention/throughput
   load tests, and real remote effect adapters. The Firestore emulator tests
   include actual compiled Rust suspend/resume across both IPC versions.
@@ -62,8 +76,9 @@ the version based on untrusted workflow input.
 The generated v2 nested-range Firestore test journals eight distinct
 effect invocations and resumes after worker takeover without replay.
 Other ABI 3 conformance tests cover effectful For/Fold and mixed nested
-branch/loop control flow. Neither backend is connected to the common
-production launcher. See `compiler-rust/docs/native-ipc-v2.md`.
+branch/loop control flow. Only IAM-published protocol-v2 releases are eligible
+for the opt-in shared production launcher. See
+`compiler-rust/docs/native-ipc-v2.md`.
 
 Local test: `node --test workflows/native/executionStore.test.js`.
 

@@ -45,8 +45,11 @@ RUN mkdir -p /etc/apt/keyrings \
     && rm -rf /var/lib/apt/lists/*
 
 # Include gcloud for project-scoped Google Cloud testing. OAuth refresh tokens never enter the image or Job.
-RUN curl -fsSL https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-x86_64.tar.gz -o /tmp/gcloud.tar.gz \
-    && echo '16fda6058d66e4ec29e8575e2b6e19b0d03cea7b091e6730f7e8361209e6955f  /tmp/gcloud.tar.gz' | sha256sum -c - \
+# Pin a *versioned* archive; the unversioned /google-cloud-cli-linux-x86_64.tar.gz
+# URL changes on every upstream release and silently invalidates a SHA pin.
+ARG GCLOUD_SDK_VERSION=592.0.0
+RUN curl -fsSL --retry 3 "https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-${GCLOUD_SDK_VERSION}-linux-x86_64.tar.gz" -o /tmp/gcloud.tar.gz \
+    && echo '2d841a23a681ab94486af6841e5f1cd123cd300fb8c4be6ba5b51350fca3d50b  /tmp/gcloud.tar.gz' | sha256sum -c - \
     && tar -xzf /tmp/gcloud.tar.gz -C /opt \
     && rm /tmp/gcloud.tar.gz
 ENV PATH="/opt/google-cloud-sdk/bin:${PATH}"

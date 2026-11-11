@@ -9,10 +9,13 @@ import { consumerCredentialPayload } from '../consumerRefresh.js';
 test('consumer refresh broker transmits the real TTL, including for cached tokens', () => {
   assert.deepEqual(consumerCredentialPayload(
     { accessToken: 'token', cloudProjectId: 'awfl-us', expiresIn: 1267 },
-    { token: 'github-token' }),
-  { accessToken: 'token', cloudProjectId: 'awfl-us', expiresIn: 1267, githubToken: 'github-token' });
+    { token: 'github-token', expiresIn: 420 }),
+  { accessToken: 'token', cloudProjectId: 'awfl-us', expiresIn: 1267,
+    githubToken: 'github-token', githubExpiresIn: 420 });
   assert.deepEqual(consumerCredentialPayload(null, { token: 'git-only' }),
     { githubToken: 'git-only' });
+  assert.deepEqual(consumerCredentialPayload(null, { token: 'git-only', expiresIn: 420 }),
+    { githubToken: 'git-only', githubExpiresIn: 420 });
 });
 
 function firestore() {
