@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: awfl-us/compiler-rust
-          ref: 066b9880a505168b7c893abfe59c75c05b89ad5a
+          ref: 5bb70ec86063d15cea9396140501f1e3df46736a
           path: _compiler-rust
       - uses: actions/setup-node@v4
         with:
