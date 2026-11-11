@@ -89,13 +89,26 @@ export class NativeExecutionStore {
     return snap.exists ? hydrateJournal(snap.data()) : null;
   }
 
-  async create({ executionId, userId, projectId, artifactSha256, input, protocolVersion = 1 }) {
+  async create({ executionId, userId, projectId, artifactSha256, input,
+                 protocolVersion = 1, workflowName, allowedOperations }) {
     id(executionId);
     if (!userId || !projectId || !/^[a-f0-9]{64}$/.test(artifactSha256 || '')) {
       throw new Error('owner and pinned artifact SHA-256 required');
     }
     if (protocolVersion !== 1 && protocolVersion !== 2) {
       throw new Error('unsupported native artifact protocol version');
+    }
+    if (workflowName !== undefined &&
+        (typeof workflowName !== 'string' ||
+         !/^[A-Za-z][A-Za-z0-9_-]{0,99}$/.test(workflowName))) {
+      throw new Error('invalid pinned native workflow name');
+    }
+    const allowed = new Set(['http.get', 'http.post', 'http.patch', 'http.delete']);
+    if (allowedOperations !== undefined &&
+        (!Array.isArray(allowedOperations) ||
+         allowedOperations.some(op => !allowed.has(op)) ||
+         new Set(allowedOperations).size !== allowedOperations.length)) {
+      throw new Error('invalid pinned native operations');
     }
     requireValue(input, 'input');
     enforceBytes(input, LIMIT.input, 'workflow input');
@@ -105,6 +118,8 @@ export class NativeExecutionStore {
       if (snap.exists) throw conflict('execution already exists');
       const now = this.clock();
       const state = { schemaVersion: 1, executionId, userId, projectId, artifactSha256, protocolVersion,
+        ...(workflowName && { workflowName }),
+        ...(allowedOperations && { allowedOperations: [...allowedOperations] }),
         input: null, inputJson: JSON.stringify(input),
         status: 'ready', epoch: 0, owner: null, leaseUntil: 0,
         checkpoint: null, pendingEffect: null, effectCount: 0, result: null,

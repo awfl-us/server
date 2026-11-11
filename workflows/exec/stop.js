@@ -3,6 +3,7 @@ import { getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { ExecutionsClient } from '@google-cloud/workflows';
 import { getUserIdFromReq, projectScopedCollectionPath } from '../utils.js';
 import { COLLECTIONS, withEnvSuffix } from './shared.js';
+import { isNativeExecutionId, cancelNativeExecution } from '../native/executionApi.js';
 
 const router = express.Router();
 
@@ -18,6 +19,19 @@ export async function cancelExecutionChain({ userId, projectId, execId, workflow
     const includeDesc = Boolean(includeDescendants);
 
     const db = getFirestore();
+    if (isNativeExecutionId(execId)) {
+      try {
+        return await cancelNativeExecution({ db, execId, userId, projectId });
+      } catch (error) {
+        if (error.code === 'NOT_FOUND') {
+          return { status: 404, body: { error: 'Not found' } };
+        }
+        if (error.code === 'CONFLICT') {
+          return { status: 409, body: { error: 'Execution cannot be cancelled' } };
+        }
+        throw error;
+      }
+    }
     const linksCollection = projectScopedCollectionPath(userId, projectId, COLLECTIONS.links);
     const regsCollection = projectScopedCollectionPath(userId, projectId, COLLECTIONS.regs);
     const statusesCollection = projectScopedCollectionPath(userId, projectId, COLLECTIONS.statuses);

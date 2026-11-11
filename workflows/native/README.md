@@ -175,9 +175,36 @@ persisted execution/status mechanisms, and invoke Jobs from the trusted server
 context with that authenticated user's ID. Never expose a direct native
 execution endpoint or forward an unverified client-supplied user ID to Jobs.
 
-The GCP artifact publishing/lookup integration and native backend selection
-in the shared launcher remain pending. Keep the existing Google Workflows path
-unchanged until those integrations are implemented and tested.
+### Opt-in GCS artifact lookup and shared launcher
+
+The Workflows Terraform root defines a dedicated, private bucket:
+`<project>-native-workflows`. GitHub Actions in `awfl-us/workflows` uses
+the existing GCP Workflows deployer IAM and WIF identity to publish
+content-addressed Rust binaries under `native-workflows/artifacts/` and
+replace the active mapping under `native-workflows/active/`. This bucket is
+**not** used for shared cloud-environment storage.
+
+`gcsReleases.js` reads the GCS mapping with the server runtime's **read-only**
+IAM, verifies its schema and the pinned SHA-256 of the ELF executable, and
+never uploads or edits releases. `createWorkflowExecution` conditionally
+selects the native backend when `AWFL_NATIVE_EXECUTION_ENABLED=1` and the
+workflow has a published native mapping. Otherwise, the existing Google
+Workflows launcher is unchanged. No AWFL user deploy permission was added.
+
+The native path stores the authenticated `userId` and `projectId` alongside
+the pinned digest, creates a single GCP Cloud Task, and invokes the existing
+Cloud Run Jobs service. Its GHA deployment uses
+`--no-allow-unauthenticated`: Cloud Run IAM verifies the invoking OIDC
+service identity **before** the Jobs middleware trusts the forwarded user
+ID. Native Jobs adapters overwrite any workflow-supplied `body.userId` and
+`body.projectId`, since the middleware checks body before headers.
+The same existing status/cancellation endpoints recognize native IDs.
+
+This backend remains **off by default**, and its Terraform resources have
+not yet been applied to GCP. Terraform uses the existing Workflows state
+for the bucket and a separate server Terraform root for Cloud Tasks/IAM.
+Do not enable native execution until GCP deployment, real Jobs OIDC calls,
+retry/reconciliation, and existing workflow parity are verified.
 
 ## Effect dispatcher boundary
 
@@ -240,10 +267,10 @@ handler is allowed to dispatch. After `recordEffect` atomically journals the
 outcome and binds the slot, the same fenced worker (or a replacement after
 lease expiry) resumes the Rust process from the saved top-level position or a validated range invocation frame.
 
-The generated binary never issues network requests. Effects inside nested
-loops/branches, an artifact registry, process sandbox, production
-authentication, cloud launcher
-integration, retries and remote idempotency remain **unimplemented**.
+The generated binary never issues network requests. Nested effect execution
+is supported by the opt-in ABI 3 state machine, while `Try`/`Parallel`
+parity, process-level isolation, production retry/reconciliation and
+live remote side-effect validation remain **unfinished**.
 
 For isolated local tests use `node --test workflows/native/*.test.js`.
 To run the real Firestore emulator tests, start an emulator on localhost and
