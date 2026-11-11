@@ -137,46 +137,47 @@ isolation, no mounted GCP credentials, bounded CPU/memory/process resources,
 and audited artifact provisioning. This code does not yet create or
 enforce such a container.
 
-## Site-owner-only native deployment (experimental, not routed)
+## Deployment authority and existing service trust boundary
 
-Rust compilation/deployment must follow the same trust boundary as Google
-Workflows: a trusted CI/release pipeline builds the deployed workflow,
-ordinary users can **execute** it but cannot upload, approve, activate,
-replace, or withdraw executable artifacts.
+Native Rust deployment follows **existing Google Cloud IAM**, just like the
+Google Workflows deployment pipeline. There is **no AWFL site-owner role,
+MCP owner check, API-key permission, or separate native deployment API**.
+People and CI identities with the necessary GCP IAM privileges deploy compiled
+workflow artifacts to GCP-managed resources. Existing Workflows deployment uses
+`workflows/.github/workflows/deploy-workflows.yml` with GitHub OIDC workload
+identity and a dedicated GCP deployer service account.
 
-`NativeDeploymentService` in `deployments.js` is the server-side deployment
-policy and active-version record. It uses the existing **site-owner UID**
-configuration, `MCP_OWNER_UID`, **without** the private MCP API-key-owner
-fallback. If the site-owner UID is missing, deployment construction fails
-closed. Project ownership, project membership, a user-controlled `userId`,
-and normal API credentials never confer deployment privileges.
+The former `NativeDeploymentService` with a `MCP_OWNER_UID` check and
+Firestore write methods was removed: it duplicated GCP authorization and
+introduced a deployment capability in the application layer. Any future
+artifact publication and activation must take place using an IAM-authorized
+GCP deployment path, **not** an endpoint authenticated only as an AWFL user.
+The server/runner may **read** the published artifact mapping, verify the
+artifact digest/approval, and execute a pinned artifact, but must never accept
+workflow binaries or deployment aliases supplied by an end user.
 
-The site owner may call `deploy` / `undeploy` through a future
-authenticated, explicitly owner-restricted admin route or trusted release
-orchestrator. The `authenticatedUserId` argument must be populated from
-the server's verified Firebase/OAuth identity, never directly from client
-JSON. Deploy accepts only an approved artifact SHA-256, protocol version,
-and workflow name. It *does not* compile Rust, accept binary uploads,
-sign artifacts, or grant new capabilities. Before binding the version,
-it verifies the artifact against the **CI-signed, read-only registry**.
-The binding is stored in Firestore's site-scoped `nativeDeployments`
-collection, rather than a user's project.
+**User execution is deliberately different from deployment.** Users
+authenticate to the existing public `/workflows/execute` endpoint with
+Firebase/OAuth credentials (`clientAuth`); the API derives `req.userId`
+from that authentication. The shared `createWorkflowExecution` service passes
+that trusted `userId` and `projectId` as workflow environment values, overriding
+caller-provided `env`. The authenticated **Workflows service** launches the
+workflow using its GCP execution permissions; end users do not receive
+permissions to invoke Google Workflows or the Jobs service directly.
 
-`resolveActive` can be called on behalf of normal workflow users, without
-site-owner deployment rights, to read the active pinned SHA/protocol.
-It revalidates the CI signature, publisher and capability set on every
-resolution. Changing an active version requires another site-owner
-deployment, never a request-body backend selector. The existing shared
-launcher integration and admin route have **not** been added yet.
+The Jobs service is deployed with `--no-allow-unauthenticated`. The
+**Cloud Run IAM/OIDC boundary must authenticate the invoking workflow/service
+identity**; only *after* that boundary does `jobs/userAuth.js` trust the
+forwarded `userId` without independently verifying the user's Firebase token.
+For native workflows, preserve this exact split: accept requests only through
+the existing authenticated Workflows API, use the same shared launcher and
+persisted execution/status mechanisms, and invoke Jobs from the trusted server
+context with that authenticated user's ID. Never expose a direct native
+execution endpoint or forward an unverified client-supplied user ID to Jobs.
 
-**Production IAM/security-rule requirement:** Firebase client SDKs must have
-**no write access** to `nativeDeployments` (nor the signed artifact registry).
-Only the trusted server/release identity may write deployment records.
-Server-side authorization is not a substitute for this Firestore boundary.
-The CI signer must be restricted to the owner-controlled release pipeline,
-with protected branch/review policy and workload identity, matching the
-existing Google Workflows deployer pattern. Do not enable the deployment
-route or shared-launcher selector before these permissions are verified.
+The GCP artifact publishing/lookup integration and native backend selection
+in the shared launcher remain pending. Keep the existing Google Workflows path
+unchanged until those integrations are implemented and tested.
 
 ## Effect dispatcher boundary
 
