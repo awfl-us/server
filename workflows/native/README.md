@@ -137,6 +137,47 @@ isolation, no mounted GCP credentials, bounded CPU/memory/process resources,
 and audited artifact provisioning. This code does not yet create or
 enforce such a container.
 
+## Site-owner-only native deployment (experimental, not routed)
+
+Rust compilation/deployment must follow the same trust boundary as Google
+Workflows: a trusted CI/release pipeline builds the deployed workflow,
+ordinary users can **execute** it but cannot upload, approve, activate,
+replace, or withdraw executable artifacts.
+
+`NativeDeploymentService` in `deployments.js` is the server-side deployment
+policy and active-version record. It uses the existing **site-owner UID**
+configuration, `MCP_OWNER_UID`, **without** the private MCP API-key-owner
+fallback. If the site-owner UID is missing, deployment construction fails
+closed. Project ownership, project membership, a user-controlled `userId`,
+and normal API credentials never confer deployment privileges.
+
+The site owner may call `deploy` / `undeploy` through a future
+authenticated, explicitly owner-restricted admin route or trusted release
+orchestrator. The `authenticatedUserId` argument must be populated from
+the server's verified Firebase/OAuth identity, never directly from client
+JSON. Deploy accepts only an approved artifact SHA-256, protocol version,
+and workflow name. It *does not* compile Rust, accept binary uploads,
+sign artifacts, or grant new capabilities. Before binding the version,
+it verifies the artifact against the **CI-signed, read-only registry**.
+The binding is stored in Firestore's site-scoped `nativeDeployments`
+collection, rather than a user's project.
+
+`resolveActive` can be called on behalf of normal workflow users, without
+site-owner deployment rights, to read the active pinned SHA/protocol.
+It revalidates the CI signature, publisher and capability set on every
+resolution. Changing an active version requires another site-owner
+deployment, never a request-body backend selector. The existing shared
+launcher integration and admin route have **not** been added yet.
+
+**Production IAM/security-rule requirement:** Firebase client SDKs must have
+**no write access** to `nativeDeployments` (nor the signed artifact registry).
+Only the trusted server/release identity may write deployment records.
+Server-side authorization is not a substitute for this Firestore boundary.
+The CI signer must be restricted to the owner-controlled release pipeline,
+with protected branch/review policy and workload identity, matching the
+existing Google Workflows deployer pattern. Do not enable the deployment
+route or shared-launcher selector before these permissions are verified.
+
 ## Effect dispatcher boundary
 
 `effectDispatcher.js` accepts explicitly injected operation handlers for the
