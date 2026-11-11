@@ -216,3 +216,51 @@ test('emulator + real generated Rust: two effects each recorded exactly once', {
   assert.deepEqual((await store.getEffect('exec1', 'call_0')).outcome, 'first');
   assert.deepEqual((await store.getEffect('exec1', 'call_1')).outcome, 'second');
 });
+
+const rangeBinary = process.env.AWFL_NATIVE_RANGE_BINARY;
+test('emulator + generated Rust: framed range resumes without duplicating effects, even after takeover', {
+  skip: !enabled || !rangeBinary, timeout: 90_000,
+}, async () => {
+  let now = Date.now();
+  const sha256 = createHash('sha256').update(await readFile(rangeBinary)).digest('hex');
+  const store = fixture(() => now);
+  await store.create({ executionId: 'exec1', userId: 'owner', projectId: 'proj',
+    artifactSha256: sha256, input: null });
+  let workerId = 'original';
+  const results = ['one', 'two', 'three'];
+  let sent = 0;
+  const dispatcher = new NativeEffectDispatcher({ handlers: {
+    'http.post': async ({ idempotencyKey }) => {
+      assert.match(idempotencyKey, new RegExp('^exec1:call_0_s[0-9]+_' + sent + '$'));
+      return results[sent++];
+    },
+  } });
+  for (let iteration = 0; iteration < results.length; iteration++) {
+    const args = { store, executionId: 'exec1', workerId,
+      executable: rangeBinary, sha256 };
+    const pending = await executeNativeStep(args);
+    assert.equal(pending.status, 'waiting_effect');
+    assert.match(pending.effectId, new RegExp('^call_0_s[0-9]+_' + iteration + '$'));
+    const state = await store.get('exec1');
+    assert.equal(state.checkpoint.next_step, 0);
+    assert.deepEqual(state.checkpoint.frames, [{ node_id: '0.0', iteration }]);
+    assert.equal(state.checkpoint.slots.__awfl_loop_0_items.value.length, iteration);
+    await dispatcher.dispatch({ store, executionId: 'exec1', workerId,
+      epoch: state.epoch, effectId: pending.effectId });
+    assert.deepEqual((await store.getEffect('exec1', pending.effectId)).outcome,
+      results[iteration]);
+    if (iteration === 1) {
+      // Crash after a committed effect result; another worker must continue
+      // from the last effect without redispatching either previous intent.
+      now = state.leaseUntil + 1;
+      workerId = 'replacement';
+    }
+  }
+  assert.deepEqual(await executeNativeStep({ store, executionId: 'exec1', workerId,
+    executable: rangeBinary, sha256 }), { status: 'completed', result: results });
+  assert.equal(sent, 3);
+  const done = await store.get('exec1');
+  assert.equal(done.effectCount, 3);
+  assert.equal(done.epoch, 2);
+  assert.equal(done.pendingEffect, null);
+});

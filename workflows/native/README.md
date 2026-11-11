@@ -37,13 +37,14 @@ resume. Unresolved outcomes remain pending until reconciled.
   signed/trusted artifact registry, source-manifest validation, sandboxing,
   authenticated identity, real allowlisted HTTP adapters, remote idempotency
   and reconciliation.
-- Add nested native effect continuation frames for loops/branches; current
-  versioned worker IPC only supports **top-level** calls.
+- Extend the new single-effect range frame to multiple effect sites,
+  nested loops, branches, For, and Fold; current protocol supports top-level
+  calls and one direct Call per top-level ForRange iteration.
 - Integrate backend selection **inside** existing `createWorkflowExecution`
   shared launcher; preserve existing session status, links, callbacks and
   monitoring rather than adding a separate executor.
 - Expand emulator-backed crash injection, transaction contention/throughput
-  load tests, and real remote effect adapters. A six-case real Firestore
+  load tests, and real remote effect adapters. A seven-case real Firestore
   emulator suite passes, including actual compiled Rust suspend/resume.
 
 Local test: `node --test workflows/native/executionStore.test.js`.
@@ -84,9 +85,9 @@ structural node identifier, result slot and tagged continuation. A real
 Firestore transaction persists the pending intent **before** an independent
 handler is allowed to dispatch. After `recordEffect` atomically journals the
 outcome and binds the slot, the same fenced worker (or a replacement after
-lease expiry) resumes the Rust process from the saved top-level position.
+lease expiry) resumes the Rust process from the saved top-level position or validated range invocation frame.
 
-The generated binary never issues network requests. Dynamic nested effects,
+The generated binary never issues network requests. Multiple effects per iteration and effects inside nested loops/branches,
 artifact registry, process sandbox, production authentication, cloud launcher
 integration, retries and remote idempotency remain **unimplemented**.
 
@@ -100,7 +101,8 @@ cross-repo integration fixtures:
 FIRESTORE_EMULATOR_HOST=127.0.0.1:8099 \
 AWFL_NATIVE_FIXTURE_BINARY=/absolute/path/to/native-fold-binary \
 AWFL_NATIVE_PROTOCOL_BINARY=/absolute/path/to/native-resume-binary \
-AWFL_NATIVE_MULTI_BINARY=/absolute/path/to/native-two-effects-binary \
+AWFL_NATIVE_MULTI_BINARY=/absolute/path/to/native-two-effects-binary \\
+AWFL_NATIVE_RANGE_BINARY=/absolute/path/to/native-range-effect-binary \
 node --test --test-concurrency=1 workflows/native/*.test.js
 ```
 

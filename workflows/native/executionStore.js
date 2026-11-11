@@ -183,10 +183,17 @@ export class NativeExecutionStore {
     enforceBytes(args, LIMIT.effectArgs, 'native effect arguments');
     enforceBytes(slots, LIMIT.checkpoint, 'native checkpoint');
     if (continuation) {
-      if (!Number.isSafeInteger(continuation.next_step) || continuation.next_step < 1 ||
-          !Array.isArray(continuation.frames) || continuation.frames.length !== 0 ||
+      const validFrames = Array.isArray(continuation.frames) && continuation.frames.length <= 64 &&
+        continuation.frames.every(f => f && typeof f === 'object' &&
+          typeof f.node_id === 'string' && /^[A-Za-z0-9_.-]{1,120}$/.test(f.node_id) &&
+          Number.isSafeInteger(f.iteration) && f.iteration >= 0);
+      // A frame targets its containing top-level step, which may be step 0.
+      // Frame-free continuations still advance beyond a completed effect.
+      if (!Number.isSafeInteger(continuation.next_step) || continuation.next_step < 0 ||
+          !validFrames ||
+          (continuation.frames.length === 0 && continuation.next_step === 0) ||
           JSON.stringify(continuation.slots) !== JSON.stringify(slots)) {
-        throw new Error('invalid native top-level continuation');
+        throw new Error('invalid native continuation');
       }
       if (!/^s[0-9]+$/.test(resultSlot || '')) throw new Error('native effect result slot required');
     }

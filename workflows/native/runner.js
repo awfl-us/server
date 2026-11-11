@@ -92,8 +92,12 @@ export async function executeNativeStep({ store, executionId, workerId, executab
       !/^s[0-9]+$/.test(effect.result_slot || '') ||
       typeof effect.operation !== 'string' ||
       !next || !Number.isSafeInteger(next.next_step) ||
-      next.next_step < 1 || !Array.isArray(next.frames) ||
-      next.frames.length !== 0 || !next.slots || typeof next.slots !== 'object') {
+      next.next_step < 0 || !Array.isArray(next.frames) ||
+      next.frames.length > 64 || !next.slots || typeof next.slots !== 'object' ||
+      (next.frames.length === 0 && next.next_step === 0) ||
+      !next.frames.every(f => f && typeof f === 'object' &&
+        typeof f.node_id === 'string' && /^[A-Za-z0-9_.-]{1,120}$/.test(f.node_id) &&
+        Number.isSafeInteger(f.iteration) && f.iteration >= 0)) {
     throw new Error('invalid native effect suspension');
   }
   await store.prepareEffect({
