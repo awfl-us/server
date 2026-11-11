@@ -83,7 +83,7 @@ export async function runNativeArtifact({ executable, sha256, input, timeoutMs =
 export async function executePureNative({ store, executionId, workerId, executable, sha256, timeoutMs }) {
   const leaseMs = Math.max(60_000, (timeoutMs ?? 30_000) + 10_000);
   const state = await store.claim({ executionId, workerId, leaseMs });
-  if (state.completed || state.cancelled) return state;
+  if (state.completed || state.cancelled || state.failed) return state;
   if (state.artifactSha256 !== sha256) throw new Error('pinned artifact mismatch');
   if (state.pendingEffect || state.checkpoint) throw new Error('continuation protocol not implemented for this artifact');
   const result = await runNativeArtifact({ executable, sha256, input: state.input, timeoutMs });
@@ -99,7 +99,7 @@ export async function executeNativeStep({ store, executionId, workerId, executab
                                           timeoutMs, allowedOperations }) {
   const leaseMs = Math.max(60_000, (timeoutMs ?? 30_000) + 10_000);
   const state = await store.claim({ executionId, workerId, leaseMs });
-  if (state.completed || state.cancelled) return state;
+  if (state.completed || state.cancelled || state.failed) return state;
   if (state.artifactSha256 !== sha256) throw new Error('pinned artifact mismatch');
   const protocolVersion = state.protocolVersion || 1;
   if (protocolVersion !== 1 && protocolVersion !== 2) throw new Error('unsupported native artifact protocol');
@@ -123,6 +123,13 @@ export async function executeNativeStep({ store, executionId, workerId, executab
   if (!response || response.protocol_version !== protocolVersion) {
     throw new Error('native IPC version mismatch');
   }
+  if (response.status === 'failed') {
+    if (!Object.hasOwn(response, 'error') || state.pendingEffect) {
+      throw new Error('invalid native terminal error');
+    }
+    await store.fail({ executionId, workerId, epoch: state.epoch, error: response.error });
+    return { status: 'failed', error: response.error };
+  }
   if (response.status === 'completed') {
     if (!Object.hasOwn(response, 'result')) throw new Error('native completion missing result');
     await store.complete({ executionId, workerId, epoch: state.epoch, result: response.result });
@@ -130,6 +137,13 @@ export async function executeNativeStep({ store, executionId, workerId, executab
   }
   if (response.status !== 'suspended') throw new Error('invalid native IPC status');
   const { effect, continuation: next } = response;
+  const onError = effect?.on_error;
+  if (onError !== undefined && onError !== null &&
+      (protocolVersion !== 2 || !Number.isSafeInteger(onError.next_step) ||
+       onError.next_step < 0 || !/^s[0-9]+$/.test(onError.error_slot || '') ||
+       Object.keys(onError).some(k => !['next_step', 'error_slot'].includes(k)))) {
+    throw new Error('invalid native compiled effect error edge');
+  }
   if (allowedOperations && !allowedOperations.includes(effect?.operation)) {
     throw new Error('operation outside approved native artifact capabilities');
   }
@@ -152,6 +166,7 @@ export async function executeNativeStep({ store, executionId, workerId, executab
     effectId: effect.effect_id, operation: effect.operation,
     args: effect.args, slots: next.slots, continuation: next,
     resultSlot: effect.result_slot, protocolVersion,
+    ...(onError && { onError: { nextStep: onError.next_step, errorSlot: onError.error_slot } }),
   });
   return { status: 'waiting_effect', effectId: effect.effect_id };
 }

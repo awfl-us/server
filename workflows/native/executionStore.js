@@ -40,6 +40,7 @@ const hydrateState = state => state && ({
   ...state,
   input: storedJson(state, 'input'),
   result: storedJson(state, 'result'),
+  error: storedJson(state, 'error'),
   pendingEffect: state.pendingEffect && {
     ...state.pendingEffect,
     args: storedJson(state.pendingEffect, 'args'),
@@ -148,6 +149,7 @@ export class NativeExecutionStore {
         completed: true, result: storedJson(s, 'result'),
       };
       if (s.status === 'cancelled') return { cancelled: true };
+      if (s.status === 'failed') return { failed: true, error: storedJson(s, 'error') };
       if (s.owner && s.leaseUntil > now) {
         // Allow the same still-fenced worker to resume after a recorded effect.
         if (s.owner === workerId) return hydrateState(s);
@@ -171,7 +173,7 @@ export class NativeExecutionStore {
       if (s.owner !== workerId || s.epoch !== epoch || s.leaseUntil <= now) {
         throw conflict('stale worker fencing token');
       }
-      if (s.status === 'completed' || s.status === 'cancelled') throw conflict('execution is terminal');
+      if (s.status === 'completed' || s.status === 'cancelled' || s.status === 'failed') throw conflict('execution is terminal');
       const next = change(s, now, recorded, tx, effectRef);
       tx.update(ref, { ...next, updatedAt: now });
       return hydrateState(next);
@@ -197,6 +199,7 @@ export class NativeExecutionStore {
       const s = snap.data();
       if (s.userId !== userId || s.projectId !== projectId) throw conflict('owner mismatch');
       if (s.status === 'completed') throw conflict('execution already completed');
+      if (s.status === 'failed') throw conflict('execution already failed');
       if (s.status === 'cancelled') return hydrateState(s);
       const next = { ...s, status: 'cancelled', owner: null,
         epoch: s.epoch + 1, leaseUntil: 0, updatedAt: this.clock() };
@@ -216,10 +219,18 @@ export class NativeExecutionStore {
   }
 
   async prepareEffect({ executionId, workerId, epoch, nodeId, effectId, operation,
-                        args, slots, continuation, resultSlot, protocolVersion = 1 }) {
+                        args, slots, continuation, resultSlot, protocolVersion = 1,
+                        onError }) {
     checkNodeId(nodeId); id(effectId);
     if (protocolVersion !== 1 && protocolVersion !== 2) {
       throw new Error('unsupported native continuation protocol');
+    }
+    if (onError !== undefined &&
+        (protocolVersion !== 2 || !onError ||
+         !Number.isSafeInteger(onError.nextStep) || onError.nextStep < 0 ||
+         !/^s[0-9]+$/.test(onError.errorSlot || '') ||
+         Object.keys(onError).some(key => !['nextStep', 'errorSlot'].includes(key)))) {
+      throw new Error('invalid compiled native effect error edge');
     }
     if (!operation) throw new Error('operation required');
     requireValue(args, 'args'); requireValue(slots, 'slots');
@@ -241,7 +252,8 @@ export class NativeExecutionStore {
       }
       if (!/^s[0-9]+$/.test(resultSlot || '')) throw new Error('native effect result slot required');
     }
-    const fingerprint = digest({ nodeId, operation, args, resultSlot });
+    const fingerprint = digest({ nodeId, operation, args, resultSlot,
+      ...(onError && { onError }) });
     return this.mutate(executionId, workerId, epoch, (s, now, journal) => {
       if ((s.protocolVersion || 1) !== protocolVersion) {
         throw conflict('artifact protocol differs from pinned execution');
@@ -262,7 +274,7 @@ export class NativeExecutionStore {
           ...(continuation && { next_step: continuation.next_step, frames: continuation.frames }) },
         pendingEffect: { effectId, nodeId, operation,
           args: null, argsJson: JSON.stringify(args), fingerprint, preparedAt: now,
-          ...(resultSlot && { resultSlot }) } };
+          ...(resultSlot && { resultSlot }), ...(onError && { onError }) } };
     }, effectId);
   }
 
@@ -275,7 +287,7 @@ export class NativeExecutionStore {
     return this.mutate(executionId, workerId, epoch, (s, now, journal, tx, journalRef) => {
       const prior = journal?.exists ? journal.data() : null;
       if (prior) {
-        if (digest(storedJson(prior, 'outcome')) !== digest(outcome)) {
+        if (prior.isError === true || digest(storedJson(prior, 'outcome')) !== digest(outcome)) {
           throw conflict('effect outcome differs');
         }
         return s;
@@ -297,6 +309,56 @@ export class NativeExecutionStore {
       return { ...s, status: 'ready', pendingEffect: null,
         checkpoint, effectCount: (s.effectCount || 0) + 1 };
     }, effectId);
+  }
+
+  // Confirmed remote HTTP 4xx/5xx responses may be handled by an existing
+  // compiled Try edge. Persist the failure journal, exception value, and
+  // handler PC atomically under the same epoch fencing as successful effects.
+  // This must never handle an unknown/timeout/transport outcome.
+  async recordEffectFailure({ executionId, workerId, epoch, effectId, failure }) {
+    id(effectId);
+    if (!failure || typeof failure !== 'object' || Array.isArray(failure) ||
+        typeof failure.message !== 'string' || failure.message.length > 256 ||
+        !Number.isSafeInteger(failure.code) || failure.code < 400 || failure.code > 599 ||
+        Object.keys(failure).some(key => !['message', 'code'].includes(key))) {
+      throw new Error('confirmed native effect failure required');
+    }
+    enforceBytes(failure, LIMIT.effectOutcome, 'native effect failure');
+    return this.mutate(executionId, workerId, epoch, (s, now, journal, tx, journalRef) => {
+      const prior = journal?.exists ? journal.data() : null;
+      if (prior) {
+        if (prior.isError !== true || digest(storedJson(prior, 'outcome')) !== digest(failure)) {
+          throw conflict('effect failure differs');
+        }
+        return s;
+      }
+      if (!s.pendingEffect || s.pendingEffect.effectId !== effectId || !s.pendingEffect.onError) {
+        throw conflict('effect was not prepared with a compiled error handler');
+      }
+      const { fingerprint, onError } = s.pendingEffect;
+      if (!s.checkpoint || !Number.isSafeInteger(s.checkpoint.next_step)) {
+        throw conflict('missing native compiled continuation');
+      }
+      const checkpoint = {
+        ...s.checkpoint, next_step: onError.nextStep,
+        slots: { ...s.checkpoint.slots, [onError.errorSlot]: tagNativeValue(failure) },
+      };
+      enforceBytes(checkpoint.slots, LIMIT.checkpoint, 'native failed checkpoint');
+      tx.create(journalRef, { effectId, fingerprint, isError: true,
+        outcome: null, outcomeJson: JSON.stringify(failure), recordedAt: now });
+      return { ...s, status: 'ready', pendingEffect: null, checkpoint,
+        effectCount: (s.effectCount || 0) + 1 };
+    }, effectId);
+  }
+
+  async fail({ executionId, workerId, epoch, error }) {
+    requireValue(error, 'error');
+    enforceBytes(error, LIMIT.checkpoint, 'native workflow failure');
+    return this.mutate(executionId, workerId, epoch, s => {
+      if (s.pendingEffect) throw conflict('effect outcome unresolved');
+      return { ...s, status: 'failed', error: null, errorJson: JSON.stringify(error),
+        owner: null, leaseUntil: 0 };
+    });
   }
 
   async complete({ executionId, workerId, epoch, result }) {

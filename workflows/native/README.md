@@ -31,6 +31,45 @@ document stores an effect counter, not an ever-growing outcome map.
 `complete` closes the execution only when no effect remains unresolved.
 Input, checkpoint, effect-argument, outcome and result size limits fail closed.
 
+## Compiled Try/Raise and confirmed effect errors (ABI 3 / IPC v2)
+
+The Scala-to-Rust compiler now uses the *existing*, unchanged DSL `Try` and
+`Raise` constructors. Its compiled CFG statically links nested exception
+handlers, preserving the nearest catch and propagating explicit re-raises to
+outer handlers. Pure CEL value failures are handled inside the trusted Rust
+process; malformed native continuations and infrastructure errors remain
+uncatchable. Unhandled workflow raises produce `status: failed` and are
+persisted as terminal `Failed` executions; the existing owner-checked
+status API exposes the error, and further dispatch/cancellation is rejected.
+
+When a compiled `Try` encloses a native HTTP effect, its suspended effect
+intent can contain `on_error: {next_step,error_slot}`. The server validates
+and pins this handler with the effect fingerprint. **Only a definitively
+received HTTP 400–599 response** is a catchable failure: the restricted HTTP
+adapter returns `NativeConfirmedHttpFailure`, and the authorized dispatcher
+calls `recordEffectFailure`. Under one Firestore transaction with the current
+lease epoch, this method journals the failure, stores the tagged error object
+(`message`, `code`), switches the checkpoint to the compiled catch PC,
+clears the pending intent, and increments `effectCount`. A duplicate delivery
+cannot redispatch an already journaled failure or rewrite a different result.
+
+Socket timeouts, unknown remote outcomes, redirects, transport exceptions,
+permission failures, invalid state and unreconciled effects **never** enter
+a compiled catch handler. They remain unresolved for reconciliation. The
+handler does not retry an ambiguous external operation, and these additions
+do not enable native routing in Cloud Run. This is a *locally verified*
+IPC/Firestore-store integration, **not** a production approval of real HTTP
+transports, OS-level sandboxing, full exception parity or network behavior.
+
+Local tests: `node --test workflows/native/*.test.js` exercises the journal
+and dispatcher. To run the full compiled-binary integration, set the paths of
+`compiler-rust` generated `effect-catch` and `uncaught` Rust binaries in
+`AWFL_NATIVE_TRY_CATCH_BINARY` and `AWFL_NATIVE_UNCAUGHT_BINARY`, and run
+`node --test workflows/native/nativeTryIntegration.test.js`. The ordinary
+server tests skip only that binary-dependent test when those env vars are
+absent. The compiled Rust binaries and mock/real persistence API are tested
+together; no network requests are issued.
+
 ## Recovery and guarantees
 
 A crashed worker leaves a pending intent; a replacement worker receives the
@@ -64,8 +103,8 @@ resume. Unresolved outcomes remain pending until reconciled.
 
 ## Opt-in CFG state machine (runtime ABI 3, IPC protocol 2)
 
-`compiler-rust` also emits a generalized CFG backend via
-`RustEmitter.emitV2/writeV2`. It saves a successor **block PC** and the
+`compiler-rust` emits one generalized CFG backend via
+`RustEmitter.emit/write` (ABI 3/IPC v2). It saves a successor **block PC** and the
 live tagged slots instead of replaying nested branch or loop frames.
 At execution creation, specify `protocolVersion: 2` with an ABI 3 artifact;
 omitting it preserves the original v1 protocol. The pinned version is checked

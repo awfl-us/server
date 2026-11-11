@@ -1,0 +1,84 @@
+name: Native Rust Try/Raise integration
+
+on:
+  pull_request:
+    paths:
+      - 'workflows/native/**'
+      - '.github/workflows/test-native-try.yml'
+  push:
+    paths:
+      - 'workflows/native/**'
+      - '.github/workflows/test-native-try.yml'
+
+jobs:
+  rust-node-native-errors:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout pinned compiler ABI 3 implementation
+        uses: actions/checkout@v4
+        with:
+          repository: awfl-us/compiler-rust
+          ref: 5bb70ec86063d15cea9396140501f1e3df46736a
+          path: _compiler-rust
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # runner.test.js uses a test-only Node script with `/usr/bin/env node`.
+      # The production native runner deliberately exposes only /usr/bin:/bin,
+      # while setup-node places Node in GitHub's hosted tool cache. Mirror the
+      # production interpreter location without widening the runtime PATH.
+      - name: Make Node available to the restricted native test process
+        run: |
+          if [ ! -x /usr/bin/node ]; then
+            sudo ln -s "$(command -v node)" /usr/bin/node
+          fi
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: sbt/setup-sbt@v1
+      - name: Generate real Rust Try/Raise crates from the existing Scala DSL
+        run: |
+          cd _compiler-rust/frontend
+          sbt -batch 'Test / runMain us.awfl.compiler.rust.TryRaiseSmoke'
+          cd ../..
+          test -f _compiler-rust/fixtures/native-try-raise/effect-catch/Cargo.toml
+          test -f _compiler-rust/fixtures/native-try-raise/uncaught/Cargo.toml
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.99.1'
+      - name: Build compiled Rust Try/Raise fixtures
+        run: |
+          set -euo pipefail
+          for name in effect-catch uncaught; do
+            cargo build --manifest-path "_compiler-rust/fixtures/native-try-raise/$name/Cargo.toml" --target-dir "$RUNNER_TEMP/native-try-bin"
+          done
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import tomllib
+          root = pathlib.Path('_compiler-rust/fixtures/native-try-raise')
+          target = pathlib.Path(os.environ['RUNNER_TEMP']) / 'native-try-bin/debug'
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as output:
+              for fixture, variable in [
+                  ('effect-catch', 'AWFL_NATIVE_TRY_CATCH_BINARY'),
+                  ('uncaught', 'AWFL_NATIVE_UNCAUGHT_BINARY')]:
+                  with (root / fixture / 'Cargo.toml').open('rb') as f:
+                      package = tomllib.load(f)['package']['name']
+                  binary = (target / package).resolve()
+                  assert binary.is_file(), binary
+                  output.write(f'{variable}={binary}\n')
+          PY
+      - name: Node native effects, persistence and real Rust continuation tests
+        run: |
+          set -euo pipefail
+          node --test \
+            workflows/native/effectDispatcher.test.js \
+            workflows/native/executionStore.test.js \
+            workflows/native/executionApi.test.js \
+            workflows/native/runner.test.js \
+            workflows/native/worker.test.js \
+            workflows/native/httpEffectHandlers.test.js \
+            workflows/native/nativeTryIntegration.test.js

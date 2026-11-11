@@ -1,3 +1,4 @@
+import { NativeConfirmedHttpFailure } from './effectErrors.js';
 // Explicit effect execution boundary. Never dispatches an unknown operation or
 // retries an ambiguous external outcome automatically.
 const validOperations = new Set(['http.get', 'http.post', 'http.patch', 'http.delete']);
@@ -68,9 +69,21 @@ export class NativeEffectDispatcher {
     }
     // Handlers must enforce their own network allowlist, auth and idempotency.
     // Any transport error leaves the prepared intent unresolved.
-    const outcome = await this.handlers[intent.operation]({
-      args: intent.args, idempotencyKey: key, identity,
-    });
+    let outcome;
+    try {
+      outcome = await this.handlers[intent.operation]({
+        args: intent.args, idempotencyKey: key, identity,
+      });
+    } catch (error) {
+      if (!(error instanceof NativeConfirmedHttpFailure) ||
+          !intent.onError || typeof store.recordEffectFailure !== 'function') throw error;
+      // Only a definitive HTTP response with a compiled catch edge is safe
+      // to journal. Transport/reconciliation/policy errors stay unresolved.
+      const failure = { message: error.message, code: error.status };
+      await store.recordEffectFailure({ executionId, workerId, epoch, effectId,
+        failure });
+      return { status: 'failed_recorded', effectId, failure };
+    }
     await store.recordEffect({ executionId, workerId, epoch, effectId, outcome });
     return { status: 'recorded', effectId, outcome };
   }

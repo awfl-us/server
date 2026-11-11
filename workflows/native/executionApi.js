@@ -19,13 +19,15 @@ export async function nativeExecutionStatus({ db, execId, userId, projectId }) {
   const state = await store.get(execId);
   assertOwner(state, { userId, projectId });
   const status = state.status === 'completed' ? 'Succeeded'
-    : state.status === 'cancelled' ? 'Cancelled' : 'Running';
+    : state.status === 'cancelled' ? 'Cancelled'
+      : state.status === 'failed' ? 'Failed' : 'Running';
   return {
     id: execId,
     data: {
       status, workflow: state.workflowName,
       updated: state.updatedAt,
       ...(state.status === 'completed' ? { result: state.result } : {}),
+      ...(state.status === 'failed' ? { error: state.error } : {}),
     },
   };
 }
