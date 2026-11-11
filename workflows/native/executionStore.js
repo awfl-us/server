@@ -89,10 +89,13 @@ export class NativeExecutionStore {
     return snap.exists ? hydrateJournal(snap.data()) : null;
   }
 
-  async create({ executionId, userId, projectId, artifactSha256, input }) {
+  async create({ executionId, userId, projectId, artifactSha256, input, protocolVersion = 1 }) {
     id(executionId);
     if (!userId || !projectId || !/^[a-f0-9]{64}$/.test(artifactSha256 || '')) {
       throw new Error('owner and pinned artifact SHA-256 required');
+    }
+    if (protocolVersion !== 1 && protocolVersion !== 2) {
+      throw new Error('unsupported native artifact protocol version');
     }
     requireValue(input, 'input');
     enforceBytes(input, LIMIT.input, 'workflow input');
@@ -101,7 +104,7 @@ export class NativeExecutionStore {
       const snap = await tx.get(ref);
       if (snap.exists) throw conflict('execution already exists');
       const now = this.clock();
-      const state = { schemaVersion: 1, executionId, userId, projectId, artifactSha256,
+      const state = { schemaVersion: 1, executionId, userId, projectId, artifactSha256, protocolVersion,
         input: null, inputJson: JSON.stringify(input),
         status: 'ready', epoch: 0, owner: null, leaseUntil: 0,
         checkpoint: null, pendingEffect: null, effectCount: 0, result: null,
@@ -198,8 +201,11 @@ export class NativeExecutionStore {
   }
 
   async prepareEffect({ executionId, workerId, epoch, nodeId, effectId, operation,
-                        args, slots, continuation, resultSlot }) {
+                        args, slots, continuation, resultSlot, protocolVersion = 1 }) {
     checkNodeId(nodeId); id(effectId);
+    if (protocolVersion !== 1 && protocolVersion !== 2) {
+      throw new Error('unsupported native continuation protocol');
+    }
     if (!operation) throw new Error('operation required');
     requireValue(args, 'args'); requireValue(slots, 'slots');
     enforceBytes(args, LIMIT.effectArgs, 'native effect arguments');
@@ -213,7 +219,8 @@ export class NativeExecutionStore {
       // Frame-free continuations still advance beyond a completed effect.
       if (!Number.isSafeInteger(continuation.next_step) || continuation.next_step < 0 ||
           !validFrames ||
-          (continuation.frames.length === 0 && continuation.next_step === 0) ||
+          (protocolVersion === 1 && continuation.frames.length === 0 && continuation.next_step === 0) ||
+          (protocolVersion === 2 && continuation.frames.length !== 0) ||
           JSON.stringify(continuation.slots) !== JSON.stringify(slots)) {
         throw new Error('invalid native continuation');
       }
@@ -221,6 +228,9 @@ export class NativeExecutionStore {
     }
     const fingerprint = digest({ nodeId, operation, args, resultSlot });
     return this.mutate(executionId, workerId, epoch, (s, now, journal) => {
+      if ((s.protocolVersion || 1) !== protocolVersion) {
+        throw conflict('artifact protocol differs from pinned execution');
+      }
       const recorded = journal?.exists ? journal.data() : null;
       if (recorded) {
         if (recorded.fingerprint !== fingerprint) throw conflict('effect ID reused with different arguments');

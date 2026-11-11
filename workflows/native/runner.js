@@ -63,6 +63,8 @@ export async function executeNativeStep({ store, executionId, workerId, executab
   const state = await store.claim({ executionId, workerId, leaseMs });
   if (state.completed || state.cancelled) return state;
   if (state.artifactSha256 !== sha256) throw new Error('pinned artifact mismatch');
+  const protocolVersion = state.protocolVersion || 1;
+  if (protocolVersion !== 1 && protocolVersion !== 2) throw new Error('unsupported native artifact protocol');
   if (state.pendingEffect) {
     return { status: 'waiting_effect', effectId: state.pendingEffect.effectId };
   }
@@ -77,9 +79,12 @@ export async function executeNativeStep({ store, executionId, workerId, executab
   }
   const response = await runNativeArtifact({
     executable, sha256, timeoutMs,
-    input: { protocol_version: 1, input: state.input, ...(continuation && { continuation }) },
+    input: { protocol_version: protocolVersion, input: state.input,
+      ...(continuation && { continuation }) },
   });
-  if (!response || response.protocol_version !== 1) throw new Error('native IPC version mismatch');
+  if (!response || response.protocol_version !== protocolVersion) {
+    throw new Error('native IPC version mismatch');
+  }
   if (response.status === 'completed') {
     if (!Object.hasOwn(response, 'result')) throw new Error('native completion missing result');
     await store.complete({ executionId, workerId, epoch: state.epoch, result: response.result });
@@ -94,7 +99,8 @@ export async function executeNativeStep({ store, executionId, workerId, executab
       !next || !Number.isSafeInteger(next.next_step) ||
       next.next_step < 0 || !Array.isArray(next.frames) ||
       next.frames.length > 64 || !next.slots || typeof next.slots !== 'object' ||
-      (next.frames.length === 0 && next.next_step === 0) ||
+      (protocolVersion === 1 && next.frames.length === 0 && next.next_step === 0) ||
+      (protocolVersion === 2 && next.frames.length !== 0) ||
       !next.frames.every(f => f && typeof f === 'object' &&
         typeof f.node_id === 'string' && /^[A-Za-z0-9_.-]{1,120}$/.test(f.node_id) &&
         Number.isSafeInteger(f.iteration) && f.iteration >= 0)) {
@@ -104,7 +110,7 @@ export async function executeNativeStep({ store, executionId, workerId, executab
     executionId, workerId, epoch: state.epoch, nodeId: effect.node_id,
     effectId: effect.effect_id, operation: effect.operation,
     args: effect.args, slots: next.slots, continuation: next,
-    resultSlot: effect.result_slot,
+    resultSlot: effect.result_slot, protocolVersion,
   });
   return { status: 'waiting_effect', effectId: effect.effect_id };
 }

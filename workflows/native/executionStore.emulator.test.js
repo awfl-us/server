@@ -454,6 +454,88 @@ test('emulator + native Rust: two nested Switch branches remain pinned after tak
   assert.equal((await store.get('exec2')).effectCount, 0);
 });
 
+const stateMachineRangeBinary = process.env.AWFL_NATIVE_V2_NESTED_RANGE_BINARY;
+test('emulator + native ABI3: nested ForRange resumes at next CFG block after takeover', {
+  skip: !enabled || !stateMachineRangeBinary, timeout: 120_000,
+}, async () => {
+  let now = Date.now();
+  const sha256 = createHash('sha256').update(await readFile(stateMachineRangeBinary)).digest('hex');
+  const store = fixture(() => now);
+  await store.create({ executionId: 'exec1', userId: 'owner', projectId: 'proj',
+    artifactSha256: sha256, input: null, protocolVersion: 2 });
+  let workerId = 'first-worker';
+  let sent = 0;
+  const ids = new Set();
+  const dispatcher = new NativeEffectDispatcher({ handlers: {
+    'http.post': async ({ idempotencyKey, args }) => {
+      const outer = Math.floor(sent / 4);
+      const inner = Math.floor((sent % 4) / 2);
+      const site = sent % 2;
+      assert.equal(idempotencyKey.startsWith('exec1:call_'), true);
+      if (site === 0) assert.deepEqual(args, { url: 'https://example.org/nested-range' });
+      else assert.equal(args, 'first-' + outer + '-' + inner);
+      sent++;
+      return (site === 0 ? 'first-' : 'second-') + outer + '-' + inner;
+    },
+  } });
+  for (let i = 0; i < 8; i++) {
+    const pending = await executeNativeStep({ store, executionId: 'exec1', workerId,
+      executable: stateMachineRangeBinary, sha256 });
+    assert.equal(pending.status, 'waiting_effect');
+    assert.equal(ids.has(pending.effectId), false, 'effect invocation must be unique');
+    ids.add(pending.effectId);
+    const state = await store.get('exec1');
+    assert.equal(state.protocolVersion, 2);
+    assert.deepEqual(state.checkpoint.frames, []);
+    assert.equal(Number.isSafeInteger(state.checkpoint.next_step), true);
+    assert.equal(Object.keys(state.checkpoint.slots).some(key => key.startsWith('__awfl_pc_')), true);
+    await dispatcher.dispatch({ store, executionId: 'exec1', workerId,
+      epoch: state.epoch, effectId: pending.effectId });
+    if (i === 0) {
+      // The outcome and next-block checkpoint commit in one transaction.
+      // A replacement worker must not rerun the just-journaled first Call.
+      now = state.leaseUntil + 1;
+      workerId = 'replacement';
+    }
+  }
+  assert.deepEqual(await executeNativeStep({ store, executionId: 'exec1', workerId,
+    executable: stateMachineRangeBinary, sha256 }), {
+    status: 'completed',
+    result: [['second-0-0', 'second-0-1'], ['second-1-0', 'second-1-1']],
+  });
+  assert.equal(sent, 8);
+  const done = await store.get('exec1');
+  assert.equal(done.effectCount, 8);
+  assert.equal(done.epoch, 2);
+  for (const effectId of ids) {
+    assert.notEqual(await store.getEffect('exec1', effectId), null);
+  }
+});
+
+test('emulator: execution pins native v1/v2 protocol independently of worker', {
+  skip: !enabled, timeout: 60_000,
+}, async () => {
+  const store = fixture();
+  await assert.rejects(store.create({ executionId: 'bad', userId: 'owner',
+    projectId: 'proj', artifactSha256: 'a'.repeat(64), input: null,
+    protocolVersion: 3 }), /unsupported native artifact protocol/);
+  await store.create({ executionId: 'exec1', userId: 'owner',
+    projectId: 'proj', artifactSha256: 'a'.repeat(64), input: null,
+    protocolVersion: 2 });
+  const claimed = await store.claim({ executionId: 'exec1', workerId: 'worker' });
+  await assert.rejects(store.prepareEffect({ executionId: 'exec1', workerId: 'worker',
+    epoch: claimed.epoch, nodeId: '0.0', effectId: 'call_1', operation: 'http.post',
+    args: {}, slots: {}, resultSlot: 's0',
+    continuation: { next_step: 1, frames: [], slots: {} },
+    protocolVersion: 1 }), /artifact protocol differs from pinned execution/);
+  await store.prepareEffect({ executionId: 'exec1', workerId: 'worker',
+    epoch: claimed.epoch, nodeId: '0.0', effectId: 'call_1', operation: 'http.post',
+    args: {}, slots: {}, resultSlot: 's0',
+    continuation: { next_step: 0, frames: [], slots: {} },
+    protocolVersion: 2 });
+  assert.equal((await store.get('exec1')).checkpoint.next_step, 0);
+});
+
 const nestedRangeBinary = process.env.AWFL_NATIVE_NESTED_RANGE_BINARY;
 test('emulator + native Rust: two nested ranges resume their independent output prefixes', {
   skip: !enabled || !nestedRangeBinary, timeout: 90_000,

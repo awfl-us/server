@@ -46,8 +46,25 @@ resume. Unresolved outcomes remain pending until reconciled.
   shared launcher; preserve existing session status, links, callbacks and
   monitoring rather than adding a separate executor.
 - Expand emulator-backed crash injection, transaction contention/throughput
-  load tests, and real remote effect adapters. A twelve-case real Firestore
-  emulator suite passes, including actual compiled Rust suspend/resume.
+  load tests, and real remote effect adapters. The Firestore emulator tests
+  include actual compiled Rust suspend/resume across both IPC versions.
+
+## Opt-in CFG state machine (runtime ABI 3, IPC protocol 2)
+
+`compiler-rust` also emits a generalized CFG backend via
+`RustEmitter.emitV2/writeV2`. It saves a successor **block PC** and the
+live tagged slots instead of replaying nested branch or loop frames.
+At execution creation, specify `protocolVersion: 2` with an ABI 3 artifact;
+omitting it preserves the original v1 protocol. The pinned version is checked
+at preparation and against every executable response. A v2 continuation can
+resume at CFG PC zero with an empty frame list. The server does not select
+the version based on untrusted workflow input.
+
+The generated v2 nested-range Firestore test journals eight distinct
+effect invocations and resumes after worker takeover without replay.
+Other ABI 3 conformance tests cover effectful For/Fold and mixed nested
+branch/loop control flow. Neither backend is connected to the common
+production launcher. See `compiler-rust/docs/native-ipc-v2.md`.
 
 Local test: `node --test workflows/native/executionStore.test.js`.
 
@@ -110,6 +127,7 @@ AWFL_NATIVE_MULTI_RANGE_BINARY=/absolute/path/to/native-range-two-effects-binary
 AWFL_NATIVE_SWITCH_BINARY=/absolute/path/to/native-switch-effects-binary \
 AWFL_NATIVE_NESTED_SWITCH_BINARY=/absolute/path/to/native-nested-switch-effects-binary \
 AWFL_NATIVE_NESTED_RANGE_BINARY=/absolute/path/to/native-nested-range-effects-binary \
+AWFL_NATIVE_V2_NESTED_RANGE_BINARY=/absolute/path/to/native-v2-nested-range-effects-binary \
 node --test --test-concurrency=1 workflows/native/*.test.js
 ```
 
