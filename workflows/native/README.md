@@ -1,5 +1,14 @@
 # Native Rust workflow execution (experimental, opt-in)
 
+**Verification checkpoint (November 11, 2026).** Compiler-rust PRs #1–#7
+and server PRs #72/#78/#79 are **merged**; PR #7 fixes catch-only CFG and
+PR #79 adds restricted `log.write`, capability gates and real Rust/Node error
+journaling and crash-after-commit coverage. GitHub CI passed for both. The
+normal native routing flag is still **off**: merging code does not constitute
+a live-effect canary or production rollout. See the [cross-repository
+readiness matrix, evidence and ordered gates](https://github.com/awfl-us/compiler-rust/blob/main/docs/current-state-and-roadmap.md).
+
+
 The existing AWFL Workflows service has an optional native Rust execution
 backend. `createWorkflowExecution` chooses it only when
 `AWFL_NATIVE_EXECUTION_ENABLED=1` **and** a release exists for the exact
@@ -14,8 +23,10 @@ authentication material.
 Provisioning is defined in `infra/native-execution` (independent GCS Terraform
 state) and in `awfl-us/workflows` (native artifact bucket and IAM). A pure
 `NativePilot` ABI 3/protocol 2 release is published for controlled live tests.
-This is **not** general production parity: native HTTP effects, arbitrary DSL
-control flow, and process isolation remain gated on additional work below.
+This is **not** general production parity: the trusted HTTP adapter and
+confirmed HTTP failure-to-`Try` recovery are implemented and locally tested,
+but **live external HTTP behavior**, arbitrary DSL control flow, callbacks,
+child workflows, `Parallel`, and OS process isolation remain gated below.
 
 `NativeExecutionStore` accepts a Firestore instance; callers must authenticate
 and authorize the `userId`/`projectId` before creating or reading executions.
@@ -79,8 +90,8 @@ permit `log.write`; the dispatcher implements it via a restricted local
 structured logger (the existing `createJobsEffectHandlers` factory). **No**
 HTTP request, shell command, or arbitrary dynamic code is dispatched.
 
-The logger requires an authenticated workflow owner/project, a valid stable
-effect idempotency key, and exactly one nonempty `text` argument no larger than
+The merged logging adapter requires an authenticated workflow owner/project,
+a valid stable effect idempotency key, and exactly one nonempty `text` argument no larger than
 4 KiB as UTF-8. It emits an `INFO` log with Cloud Logging insertId equal
 to the stable execution/effect identifier. The standard fenced Firestore
 effect journal stores `null` as the successful log result; the generated Rust
@@ -95,9 +106,15 @@ checks. `nativeTryIntegration.test.js` runs a **real generated Rust binary**
 through the Node worker and Firestore-compatible execution store: it verifies
 `log.write` journaling, original error propagation, terminal `Failed`,
 tenant isolation, and crash recovery after the journal commit without
-re-dispatching. CI generates this fixture via the unchanged Scala DSL
-`TryRaiseSmoke` and builds it before invoking Node tests. No live network
-calls are issued; production native routing remains disabled.
+re-dispatching. Compiler PR #7 adds the generated `default-log` fixture to
+`TryRaiseSmoke`; merged server PR #79 CI compiles the **pinned merged compiler
+commit** before invoking Node. The locally executed focused server selection returned
+**37 total / 34 pass / 0 fail / 3 optional other-binary tests skipped**.
+It includes a simulated worker crash **after** the effect journal commit;
+resumption did not invoke `log.write` a second time, and the original error
+remained terminal. This **does not** validate a pre-journal emission crash,
+live Cloud Logging ingestion, or actual Firestore contention. No live network
+calls were issued; production native routing remains disabled.
 
 ## Recovery and guarantees
 
@@ -110,25 +127,39 @@ state; it does not stop an already dispatched HTTP request. Persisting a
 successful outcome before acknowledging the runner avoids rerunning it after
 resume. Unresolved outcomes remain pending until reconciled.
 
-## Next gates before production
+## Next gates before production (in dependency order)
 
-- Implement live-slot liveness optimization and external payload indirection
-  beyond the current bounded checkpoint/argument/outcome sizes.
-- Implement production lease heartbeats, retry/error states, orphan sweeper,
-  source-manifest provenance, **OS-level sandboxing**, authenticated identity,
-  real allowlisted HTTP adapters, remote idempotency and reconciliation.
-- Extend the bounded call-site frames to deeper nested loops/branches,
-  For, and Fold. The protocol supports direct Calls in top-level Switch
-  branches, direct Calls inside a two-level nested Switch or ForRange,
-  and multiple Calls inside one top-level ForRange iteration.
-  Previous results are journaled and restored after worker takeover in the
-  tested subset; broader control-flow parity remains pending.
-- Verify integration with existing session status, links, callbacks, and
-  monitoring for nested and effectful workflows; the initial shared launcher,
-  per-execution status, and cancellation adapters are in place.
-- Expand emulator-backed crash injection, transaction contention/throughput
-  load tests, and real remote effect adapters. The Firestore emulator tests
-  include actual compiled Rust suspend/resume across both IPC versions.
+1. **Land the current compiler/server pair.** Require green compiler PR #7
+   (Scala, Cargo, full CLI/CFG/real-workflow tests and strict Clippy). In the
+   separate server `log.write` PR, pin CI to the final merged compiler commit,
+   generate real Rust in CI, and execute the native worker integration tests
+   for log journaling, terminal error, tenant scope and crash-after-commit.
+   No normal traffic flag change.
+2. **Create real-workflow and Google differential coverage.** Maintain an
+   instantiated-AST inventory of CEL functions/Calls/raw source, including
+   helper closures. Run unchanged `LoadConversationHistory`/`Product` and
+   increasing workflow graphs against deterministic backend comparisons;
+   record missing features and exact value/error/retry behavior.
+3. **Complete server-side effect reliability.** Audit HTTP retry and uncertain
+   remote outcomes, reconciler, safe remote idempotency, worker lease renewal,
+   crash windows before/after an external effect, orphan sweeping, Firestore
+   throughput, cancellation and per-execution status. Add callback inbox,
+   child execution, and storage/Pub/Sub adapters with explicit result shapes.
+4. **Implement durable parallel orchestration.** Compiler-private lowering
+   for original DSL `Parallel`/`ParallelFor` plus server-owned bounded branch
+   scheduling, isolated slots, crash-safe join, cancellation/error propagation
+   and tested ordering. Do **not** flatten parallel constructs sequentially.
+5. **Protect and roll out.** Run ELF processes in a sandboxed container/job
+   without credentials or broad network/filesystem access; verify IAM/OIDC,
+   GCS manifest provenance, authenticated public launcher/session workflows,
+   status/cancellation, benchmark p50/p95/p99 versus Google with equal
+   durability, and demonstrable active-artifact rollback before canary traffic.
+
+The original pure test canary's **6,836 ms** enqueue-to-completion observation
+was one cold-start-including sample; it is not proof of native speedup.
+The public Google execution path must remain available for existing runs.
+For phase owners/gates and exact feature matrix use the compiler's
+[current-state-and-roadmap.md](https://github.com/awfl-us/compiler-rust/blob/main/docs/current-state-and-roadmap.md).
 
 ## Opt-in CFG state machine (runtime ABI 3, IPC protocol 2)
 
