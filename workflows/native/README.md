@@ -85,9 +85,10 @@ structural node identifier, result slot and tagged continuation. A real
 Firestore transaction persists the pending intent **before** an independent
 handler is allowed to dispatch. After `recordEffect` atomically journals the
 outcome and binds the slot, the same fenced worker (or a replacement after
-lease expiry) resumes the Rust process from the saved top-level position or validated range invocation frame.
+lease expiry) resumes the Rust process from the saved top-level position or a validated range invocation frame.
 
-The generated binary never issues network requests. Multiple effects per iteration and effects inside nested loops/branches,
+The generated binary never issues network requests. Multiple effects per
+iteration and effects inside nested loops/branches,
 artifact registry, process sandbox, production authentication, cloud launcher
 integration, retries and remote idempotency remain **unimplemented**.
 
@@ -101,7 +102,7 @@ cross-repo integration fixtures:
 FIRESTORE_EMULATOR_HOST=127.0.0.1:8099 \
 AWFL_NATIVE_FIXTURE_BINARY=/absolute/path/to/native-fold-binary \
 AWFL_NATIVE_PROTOCOL_BINARY=/absolute/path/to/native-resume-binary \
-AWFL_NATIVE_MULTI_BINARY=/absolute/path/to/native-two-effects-binary \\
+AWFL_NATIVE_MULTI_BINARY=/absolute/path/to/native-two-effects-binary \
 AWFL_NATIVE_RANGE_BINARY=/absolute/path/to/native-range-effect-binary \
 node --test --test-concurrency=1 workflows/native/*.test.js
 ```
