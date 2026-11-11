@@ -1,11 +1,13 @@
 import { ExecutionsClient } from '@google-cloud/workflows';
 import { withEnvSuffix } from '../exec/shared.js';
+import { configuredNativeBackend } from '../native/backend.js';
 
 // Shared launcher for the web /workflows/execute endpoint and Agents MCP.
 // Both paths run the same Google Workflow with identical session, agent and
 // project arguments. No additional job, queue or session executor exists.
 export async function createWorkflowExecution({
-  userId, projectId, workflowName, params = {}, location, client = new ExecutionsClient(),
+  userId, projectId, workflowName, params = {}, location,
+  client = new ExecutionsClient(), nativeBackend,
 }) {
   if (!userId || !projectId) throw new Error('User and project are required');
   if (typeof workflowName !== 'string' || !workflowName.trim()) throw new Error('workflowName is required');
@@ -29,6 +31,14 @@ export async function createWorkflowExecution({
   const argument = Array.isArray(params)
     ? [{ env }, ...params]
     : { ...params, env };
+  const backend = nativeBackend === undefined
+    ? await configuredNativeBackend() : nativeBackend;
+  if (backend) {
+    const native = await backend.maybeStart({
+      userId, projectId, workflowName: workflowName.trim(), argument,
+    });
+    if (native) return native;
+  }
   const region = location || process.env.WORKFLOWS_LOCATION || 'us-central1';
   const parent = client.workflowPath(gcpProject, region, withEnvSuffix(workflowName.trim()));
   const [execution] = await client.createExecution({

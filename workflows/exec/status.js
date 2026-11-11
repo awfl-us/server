@@ -3,6 +3,7 @@ import express from 'express';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getUserIdFromReq, projectScopedCollectionPath } from '../utils.js';
 import { COLLECTIONS, toSeconds } from './shared.js';
+import { isNativeExecutionId, nativeExecutionStatus } from '../native/executionApi.js';
 
 const router = express.Router();
 
@@ -17,6 +18,19 @@ router.get('/status/:execId', async (req, res) => {
     if (!execId) return res.status(400).json({ error: 'Missing execId' });
 
     const db = getFirestore();
+    if (isNativeExecutionId(execId)) {
+      try {
+        const status = await nativeExecutionStatus({
+          db, execId, userId, projectId: req.projectId,
+        });
+        return res.status(200).json(status);
+      } catch (error) {
+        if (error.code === 'NOT_FOUND') {
+          return res.status(404).json({ error: 'Not found' });
+        }
+        throw error;
+      }
+    }
     const statusesCollection = projectScopedCollectionPath(userId, req.projectId, COLLECTIONS.statuses);
     const ref = db.collection(statusesCollection).doc(String(execId));
     const snap = await ref.get();

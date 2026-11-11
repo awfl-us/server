@@ -1,0 +1,311 @@
+// Firestore-backed durable native workflow control plane. No external effects
+// execute inside transactions. Production routing is explicitly opt-in.
+// All mutations are serialized on one execution document and fenced by epoch.
+import { createHash } from 'node:crypto';
+
+const id = value => {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,120}$/.test(value)) {
+    throw new Error('invalid execution or effect identifier');
+  }
+  return value;
+};
+const checkNodeId = value => {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9_.-]{1,120}$/.test(value)) {
+    throw new Error('invalid native node identifier');
+  }
+  return value;
+};
+const requireValue = (value, name) => {
+  if (value === undefined) throw new Error(`${name} required`);
+  return value;
+};
+const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const conflict = message => Object.assign(new Error(message), { code: 'CONFLICT' });
+const LIMIT = { input: 256 * 1024, checkpoint: 256 * 1024,
+  effectArgs: 128 * 1024, effectOutcome: 128 * 1024 };
+const enforceBytes = (value, max, description) => {
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined || Buffer.byteLength(serialized) > max) {
+    throw new Error(description + ' exceeds native persistence size limit');
+  }
+};
+
+// Firestore rejects an array directly nested inside another array. Native
+// inputs, arguments, outcomes and results can contain arbitrary JSON;
+// persist them as bounded JSON strings and hydrate the store API on reads.
+// Tagged continuation slots remain structured maps for atomic updates.
+const storedJson = (record, field) =>
+  Object.hasOwn(record, field + 'Json') ? JSON.parse(record[field + 'Json']) : record[field];
+const hydrateState = state => state && ({
+  ...state,
+  input: storedJson(state, 'input'),
+  result: storedJson(state, 'result'),
+  pendingEffect: state.pendingEffect && {
+    ...state.pendingEffect,
+    args: storedJson(state.pendingEffect, 'args'),
+  },
+});
+const hydrateJournal = journal => journal && ({
+  ...journal, outcome: storedJson(journal, 'outcome'),
+});
+
+// The Rust continuation stores tagged values. Do not silently coerce 64-bit
+// integers through JavaScript's imprecise Number representation.
+export function tagNativeValue(value) {
+  if (value === null) return { type: 'null' };
+  if (typeof value === 'boolean') return { type: 'bool', value };
+  if (typeof value === 'string') return { type: 'string', value };
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new Error('non-finite native effect result');
+    if (Number.isInteger(value)) {
+      if (!Number.isSafeInteger(value)) throw new Error('unsafe integer native effect result');
+      return { type: 'integer', value };
+    }
+    return { type: 'float', value };
+  }
+  if (Array.isArray(value)) return { type: 'list', value: value.map(tagNativeValue) };
+  if (value && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    return { type: 'map', value: Object.fromEntries(
+      Object.entries(value).map(([key, nested]) => [key, tagNativeValue(nested)])) };
+  }
+  throw new Error('unsupported native effect result type');
+}
+
+export class NativeExecutionStore {
+  constructor({ db, clock = () => Date.now(), collection = 'nativeWorkflowExecutions' }) {
+    if (!db?.runTransaction || !db?.collection) throw new Error('Firestore required');
+    this.db = db;
+    this.clock = clock;
+    this.collectionName = collection;
+    this.collection = db.collection(collection);
+  }
+  ref(executionId) { return this.collection.doc(id(executionId)); }
+  effectRef(executionId, effectId) {
+    return this.db.collection(this.collectionName + '/' + id(executionId) + '/effects')
+      .doc(id(effectId));
+  }
+  async getEffect(executionId, effectId) {
+    const snap = await this.effectRef(executionId, effectId).get();
+    return snap.exists ? hydrateJournal(snap.data()) : null;
+  }
+
+  async create({ executionId, userId, projectId, artifactSha256, input,
+                 protocolVersion = 1, workflowName, allowedOperations }) {
+    id(executionId);
+    if (!userId || !projectId || !/^[a-f0-9]{64}$/.test(artifactSha256 || '')) {
+      throw new Error('owner and pinned artifact SHA-256 required');
+    }
+    if (protocolVersion !== 1 && protocolVersion !== 2) {
+      throw new Error('unsupported native artifact protocol version');
+    }
+    if (workflowName !== undefined &&
+        (typeof workflowName !== 'string' ||
+         !/^[A-Za-z][A-Za-z0-9_-]{0,99}$/.test(workflowName))) {
+      throw new Error('invalid pinned native workflow name');
+    }
+    const allowed = new Set(['http.get', 'http.post', 'http.patch', 'http.delete']);
+    if (allowedOperations !== undefined &&
+        (!Array.isArray(allowedOperations) ||
+         allowedOperations.some(op => !allowed.has(op)) ||
+         new Set(allowedOperations).size !== allowedOperations.length)) {
+      throw new Error('invalid pinned native operations');
+    }
+    requireValue(input, 'input');
+    enforceBytes(input, LIMIT.input, 'workflow input');
+    const ref = this.ref(executionId);
+    return this.db.runTransaction(async tx => {
+      const snap = await tx.get(ref);
+      if (snap.exists) throw conflict('execution already exists');
+      const now = this.clock();
+      const state = { schemaVersion: 1, executionId, userId, projectId, artifactSha256, protocolVersion,
+        ...(workflowName && { workflowName }),
+        ...(allowedOperations && { allowedOperations: [...allowedOperations] }),
+        input: null, inputJson: JSON.stringify(input),
+        status: 'ready', epoch: 0, owner: null, leaseUntil: 0,
+        checkpoint: null, pendingEffect: null, effectCount: 0, result: null,
+        createdAt: now, updatedAt: now };
+      tx.create(ref, state);
+      return hydrateState(state);
+    });
+  }
+
+  async get(executionId) {
+    const snap = await this.ref(executionId).get();
+    return snap.exists ? hydrateState(snap.data()) : null;
+  }
+
+  async claim({ executionId, workerId, leaseMs = 60_000 }) {
+    id(workerId);
+    if (!Number.isSafeInteger(leaseMs) || leaseMs < 1000 || leaseMs > 3600000) {
+      throw new Error('invalid lease duration');
+    }
+    const ref = this.ref(executionId);
+    return this.db.runTransaction(async tx => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) throw conflict('execution not found');
+      const s = snap.data(), now = this.clock();
+      if (s.status === 'completed') return {
+        completed: true, result: storedJson(s, 'result'),
+      };
+      if (s.status === 'cancelled') return { cancelled: true };
+      if (s.owner && s.leaseUntil > now) {
+        // Allow the same still-fenced worker to resume after a recorded effect.
+        if (s.owner === workerId) return hydrateState(s);
+        throw conflict('lease held');
+      }
+      const next = { ...s, owner: workerId, epoch: s.epoch + 1,
+        leaseUntil: now + leaseMs, updatedAt: now };
+      tx.update(ref, next);
+      return hydrateState(next);
+    });
+  }
+
+  async mutate(executionId, workerId, epoch, change, journalEffectId) {
+    const ref = this.ref(executionId);
+    const effectRef = journalEffectId ? this.effectRef(executionId, journalEffectId) : null;
+    return this.db.runTransaction(async tx => {
+      const snap = await tx.get(ref);
+      const recorded = effectRef ? await tx.get(effectRef) : null;
+      if (!snap.exists) throw conflict('execution not found');
+      const s = snap.data(), now = this.clock();
+      if (s.owner !== workerId || s.epoch !== epoch || s.leaseUntil <= now) {
+        throw conflict('stale worker fencing token');
+      }
+      if (s.status === 'completed' || s.status === 'cancelled') throw conflict('execution is terminal');
+      const next = change(s, now, recorded, tx, effectRef);
+      tx.update(ref, { ...next, updatedAt: now });
+      return hydrateState(next);
+    });
+  }
+
+  async renew({ executionId, workerId, epoch, leaseMs = 60_000 }) {
+    if (!Number.isSafeInteger(leaseMs) || leaseMs < 1000 || leaseMs > 3600000) {
+      throw new Error('invalid lease duration');
+    }
+    return this.mutate(executionId, workerId, epoch, (s, now) => ({
+      ...s, leaseUntil: now + leaseMs,
+    }));
+  }
+
+  // A cancelled execution is terminal. The caller must authenticate the owner;
+  // cancellation does not undo an external effect already in flight.
+  async cancel({ executionId, userId, projectId }) {
+    const ref = this.ref(executionId);
+    return this.db.runTransaction(async tx => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) throw conflict('execution not found');
+      const s = snap.data();
+      if (s.userId !== userId || s.projectId !== projectId) throw conflict('owner mismatch');
+      if (s.status === 'completed') throw conflict('execution already completed');
+      if (s.status === 'cancelled') return hydrateState(s);
+      const next = { ...s, status: 'cancelled', owner: null,
+        epoch: s.epoch + 1, leaseUntil: 0, updatedAt: this.clock() };
+      tx.update(ref, next);
+      return hydrateState(next);
+    });
+  }
+
+  async checkpoint({ executionId, workerId, epoch, nodeId, slots }) {
+    checkNodeId(nodeId);
+    requireValue(slots, 'slots');
+    enforceBytes(slots, LIMIT.checkpoint, 'native checkpoint');
+    return this.mutate(executionId, workerId, epoch, (s, now) => {
+      if (s.pendingEffect) throw conflict('effect pending; cannot advance checkpoint');
+      return { ...s, checkpoint: { nodeId, slots, savedAt: now } };
+    });
+  }
+
+  async prepareEffect({ executionId, workerId, epoch, nodeId, effectId, operation,
+                        args, slots, continuation, resultSlot, protocolVersion = 1 }) {
+    checkNodeId(nodeId); id(effectId);
+    if (protocolVersion !== 1 && protocolVersion !== 2) {
+      throw new Error('unsupported native continuation protocol');
+    }
+    if (!operation) throw new Error('operation required');
+    requireValue(args, 'args'); requireValue(slots, 'slots');
+    enforceBytes(args, LIMIT.effectArgs, 'native effect arguments');
+    enforceBytes(slots, LIMIT.checkpoint, 'native checkpoint');
+    if (continuation) {
+      const validFrames = Array.isArray(continuation.frames) && continuation.frames.length <= 64 &&
+        continuation.frames.every(f => f && typeof f === 'object' &&
+          typeof f.node_id === 'string' && /^[A-Za-z0-9_.-]{1,120}$/.test(f.node_id) &&
+          Number.isSafeInteger(f.iteration) && f.iteration >= 0);
+      // A frame targets its containing top-level step, which may be step 0.
+      // Frame-free continuations still advance beyond a completed effect.
+      if (!Number.isSafeInteger(continuation.next_step) || continuation.next_step < 0 ||
+          !validFrames ||
+          (protocolVersion === 1 && continuation.frames.length === 0 && continuation.next_step === 0) ||
+          (protocolVersion === 2 && continuation.frames.length !== 0) ||
+          JSON.stringify(continuation.slots) !== JSON.stringify(slots)) {
+        throw new Error('invalid native continuation');
+      }
+      if (!/^s[0-9]+$/.test(resultSlot || '')) throw new Error('native effect result slot required');
+    }
+    const fingerprint = digest({ nodeId, operation, args, resultSlot });
+    return this.mutate(executionId, workerId, epoch, (s, now, journal) => {
+      if ((s.protocolVersion || 1) !== protocolVersion) {
+        throw conflict('artifact protocol differs from pinned execution');
+      }
+      const recorded = journal?.exists ? journal.data() : null;
+      if (recorded) {
+        if (recorded.fingerprint !== fingerprint) throw conflict('effect ID reused with different arguments');
+        return s;
+      }
+      if (s.pendingEffect) {
+        if (s.pendingEffect.effectId !== effectId || s.pendingEffect.fingerprint !== fingerprint) {
+          throw conflict('different effect already pending');
+        }
+        return s;
+      }
+      return { ...s, status: 'waiting_effect',
+        checkpoint: { nodeId, slots, savedAt: now,
+          ...(continuation && { next_step: continuation.next_step, frames: continuation.frames }) },
+        pendingEffect: { effectId, nodeId, operation,
+          args: null, argsJson: JSON.stringify(args), fingerprint, preparedAt: now,
+          ...(resultSlot && { resultSlot }) } };
+    }, effectId);
+  }
+
+  // Only an effect dispatcher may record the outcome; this method NEVER invokes
+  // an HTTP API. The dispatcher must use effectId as the idempotency key where
+  // supported, and reconcile uncertain outcomes after crashes.
+  async recordEffect({ executionId, workerId, epoch, effectId, outcome }) {
+    id(effectId); requireValue(outcome, 'outcome');
+    enforceBytes(outcome, LIMIT.effectOutcome, 'native effect outcome');
+    return this.mutate(executionId, workerId, epoch, (s, now, journal, tx, journalRef) => {
+      const prior = journal?.exists ? journal.data() : null;
+      if (prior) {
+        if (digest(storedJson(prior, 'outcome')) !== digest(outcome)) {
+          throw conflict('effect outcome differs');
+        }
+        return s;
+      }
+      if (!s.pendingEffect || s.pendingEffect.effectId !== effectId) {
+        throw conflict('effect was not prepared');
+      }
+      const { fingerprint, resultSlot } = s.pendingEffect;
+      // Record the outcome and resumable slot in the SAME fenced transaction.
+      // A crash after this commit cannot require redispatching the HTTP call.
+      const checkpoint = resultSlot ? {
+        ...s.checkpoint,
+        slots: { ...s.checkpoint.slots, [resultSlot]: tagNativeValue(outcome) },
+      } : s.checkpoint;
+      if (checkpoint) enforceBytes(checkpoint.slots, LIMIT.checkpoint, 'native checkpoint');
+      // The outcome journal and resume checkpoint commit atomically.
+      tx.create(journalRef, { effectId, fingerprint,
+        outcome: null, outcomeJson: JSON.stringify(outcome), recordedAt: now });
+      return { ...s, status: 'ready', pendingEffect: null,
+        checkpoint, effectCount: (s.effectCount || 0) + 1 };
+    }, effectId);
+  }
+
+  async complete({ executionId, workerId, epoch, result }) {
+    requireValue(result, 'result');
+    enforceBytes(result, LIMIT.checkpoint, 'workflow result');
+    return this.mutate(executionId, workerId, epoch, s => {
+      if (s.pendingEffect) throw conflict('effect outcome unresolved');
+      return { ...s, status: 'completed',
+        result: null, resultJson: JSON.stringify(result), owner: null, leaseUntil: 0 };
+    });
+  }
+}
