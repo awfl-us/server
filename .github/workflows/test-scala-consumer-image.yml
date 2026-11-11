@@ -1,0 +1,34 @@
+name: Scala and Rust consumer image
+
+on:
+  pull_request:
+    paths:
+      - cloud/sse-consumer/Dockerfile
+      - cloud/sse-consumer/IMAGES.md
+      - .github/workflows/test-scala-consumer-image.yml
+  workflow_dispatch:
+
+jobs:
+  scala-rust-toolchain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build real Scala consumer image
+        run: docker build --progress plain --target scala --file cloud/sse-consumer/Dockerfile --tag awfl-scala-rust-ci cloud/sse-consumer
+      - name: Verify Scala, native C linker, Cargo and static-musl target
+        run: |
+          docker run --rm awfl-scala-rust-ci sh -c '
+            set -eu
+            test "$(id -u)" = 1000
+            java -version
+            sbt --script-version
+            rustc --version | grep -q "rustc 1.99.1"
+            cargo --version
+            cargo fmt --version
+            cargo clippy --version
+            cc --version
+            musl-gcc --version
+            rustup target list --installed | grep -qx x86_64-unknown-linux-musl
+            ! python -c "import playwright"
+          '
