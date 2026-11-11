@@ -264,3 +264,66 @@ test('emulator + generated Rust: framed range resumes without duplicating effect
   assert.equal(done.epoch, 2);
   assert.equal(done.pendingEffect, null);
 });
+
+const multiRangeBinary = process.env.AWFL_NATIVE_MULTI_RANGE_BINARY;
+test('emulator + generated Rust: two dependent effects per range iteration survive worker takeover', {
+  skip: !enabled || !multiRangeBinary, timeout: 90_000,
+}, async () => {
+  let now = Date.now();
+  const sha256 = createHash('sha256').update(await readFile(multiRangeBinary)).digest('hex');
+  const store = fixture(() => now);
+  await store.create({ executionId: 'exec1', userId: 'owner', projectId: 'proj',
+    artifactSha256: sha256, input: null });
+  const ids = new Set();
+  let sent = 0;
+  let workerId = 'original';
+  let firstSlot;
+  const dispatcher = new NativeEffectDispatcher({ handlers: {
+    'http.post': async ({ args, idempotencyKey }) => {
+      const iteration = Math.floor(sent / 2);
+      const site = sent % 2;
+      assert.match(idempotencyKey, new RegExp('^exec1:call_0_s[0-9]+_' + iteration + '$'));
+      if (site === 0) assert.deepEqual(args, { url: 'https://example.org/a' });
+      else assert.equal(args, 'first-' + iteration);
+      sent++;
+      return (site === 0 ? 'first-' : 'second-') + iteration;
+    },
+  } });
+  for (let iteration = 0; iteration < 2; iteration++) {
+    for (let site = 0; site < 2; site++) {
+      const args = { store, executionId: 'exec1', workerId,
+        executable: multiRangeBinary, sha256 };
+      const pending = await executeNativeStep(args);
+      assert.equal(pending.status, 'waiting_effect');
+      assert.equal(ids.has(pending.effectId), false);
+      ids.add(pending.effectId);
+      const state = await store.get('exec1');
+      assert.equal(state.checkpoint.next_step, 0);
+      assert.deepEqual(state.checkpoint.frames, [
+        { node_id: '0.0', iteration },
+        { node_id: state.pendingEffect.nodeId, iteration: site },
+      ]);
+      assert.equal(state.checkpoint.slots.__awfl_loop_0_items.value.length, iteration);
+      if (site === 0) firstSlot = state.pendingEffect.resultSlot;
+      else assert.deepEqual(state.checkpoint.slots[firstSlot],
+        { type: 'string', value: 'first-' + iteration });
+      await dispatcher.dispatch({ store, executionId: 'exec1', workerId,
+        epoch: state.epoch, effectId: pending.effectId });
+      // A crash immediately after committing the first result must not
+      // repeat that effect when the replacement reaches the second Call.
+      if (iteration === 0 && site === 0) {
+        now = state.leaseUntil + 1;
+        workerId = 'replacement';
+      }
+    }
+  }
+  assert.deepEqual(await executeNativeStep({ store, executionId: 'exec1', workerId,
+    executable: multiRangeBinary, sha256 }),
+  { status: 'completed', result: ['second-0', 'second-1'] });
+  assert.equal(sent, 4);
+  const done = await store.get('exec1');
+  assert.equal(done.effectCount, 4);
+  assert.equal(done.epoch, 2);
+  assert.equal(done.pendingEffect, null);
+  for (const effectId of ids) assert.notEqual(await store.getEffect('exec1', effectId), null);
+});

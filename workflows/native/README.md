@@ -37,14 +37,15 @@ resume. Unresolved outcomes remain pending until reconciled.
   signed/trusted artifact registry, source-manifest validation, sandboxing,
   authenticated identity, real allowlisted HTTP adapters, remote idempotency
   and reconciliation.
-- Extend the new single-effect range frame to multiple effect sites,
-  nested loops, branches, For, and Fold; current protocol supports top-level
-  calls and one direct Call per top-level ForRange iteration.
+- Extend the bounded range call-site frames to nested loops, branches,
+  For, and Fold. The current protocol supports top-level Calls and
+  multiple direct Calls within one top-level ForRange iteration; earlier
+  results from the unfinished iteration are journaled and restored.
 - Integrate backend selection **inside** existing `createWorkflowExecution`
   shared launcher; preserve existing session status, links, callbacks and
   monitoring rather than adding a separate executor.
 - Expand emulator-backed crash injection, transaction contention/throughput
-  load tests, and real remote effect adapters. A seven-case real Firestore
+  load tests, and real remote effect adapters. An eight-case real Firestore
   emulator suite passes, including actual compiled Rust suspend/resume.
 
 Local test: `node --test workflows/native/executionStore.test.js`.
@@ -87,9 +88,9 @@ handler is allowed to dispatch. After `recordEffect` atomically journals the
 outcome and binds the slot, the same fenced worker (or a replacement after
 lease expiry) resumes the Rust process from the saved top-level position or a validated range invocation frame.
 
-The generated binary never issues network requests. Multiple effects per
-iteration and effects inside nested loops/branches,
-artifact registry, process sandbox, production authentication, cloud launcher
+The generated binary never issues network requests. Effects inside nested
+loops/branches, an artifact registry, process sandbox, production
+authentication, cloud launcher
 integration, retries and remote idempotency remain **unimplemented**.
 
 For isolated local tests use `node --test workflows/native/*.test.js`.
@@ -104,6 +105,7 @@ AWFL_NATIVE_FIXTURE_BINARY=/absolute/path/to/native-fold-binary \
 AWFL_NATIVE_PROTOCOL_BINARY=/absolute/path/to/native-resume-binary \
 AWFL_NATIVE_MULTI_BINARY=/absolute/path/to/native-two-effects-binary \
 AWFL_NATIVE_RANGE_BINARY=/absolute/path/to/native-range-effect-binary \
+AWFL_NATIVE_MULTI_RANGE_BINARY=/absolute/path/to/native-range-two-effects-binary \
 node --test --test-concurrency=1 workflows/native/*.test.js
 ```
 
