@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: awfl-us/compiler-rust
-          ref: 5bb70ec86063d15cea9396140501f1e3df46736a
+          ref: a65cbb14dceaca9d94654644feb1d44a37c91f23
           path: _compiler-rust
       - uses: actions/setup-node@v4
         with:
@@ -46,13 +46,14 @@ jobs:
           cd ../..
           test -f _compiler-rust/fixtures/native-try-raise/effect-catch/Cargo.toml
           test -f _compiler-rust/fixtures/native-try-raise/uncaught/Cargo.toml
+          test -f _compiler-rust/fixtures/native-try-raise/default-log/Cargo.toml
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: '1.99.1'
       - name: Build compiled Rust Try/Raise fixtures
         run: |
           set -euo pipefail
-          for name in effect-catch uncaught; do
+          for name in effect-catch uncaught default-log; do
             cargo build --manifest-path "_compiler-rust/fixtures/native-try-raise/$name/Cargo.toml" --target-dir "$RUNNER_TEMP/native-try-bin"
           done
           python3 - <<'PY'
@@ -64,7 +65,8 @@ jobs:
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as output:
               for fixture, variable in [
                   ('effect-catch', 'AWFL_NATIVE_TRY_CATCH_BINARY'),
-                  ('uncaught', 'AWFL_NATIVE_UNCAUGHT_BINARY')]:
+                  ('uncaught', 'AWFL_NATIVE_UNCAUGHT_BINARY'),
+                  ('default-log', 'AWFL_NATIVE_LOG_ERROR_BINARY')]:
                   with (root / fixture / 'Cargo.toml').open('rb') as f:
                       package = tomllib.load(f)['package']['name']
                   binary = (target / package).resolve()
@@ -81,4 +83,5 @@ jobs:
             workflows/native/runner.test.js \
             workflows/native/worker.test.js \
             workflows/native/httpEffectHandlers.test.js \
+            workflows/native/logEffects.test.js \
             workflows/native/nativeTryIntegration.test.js

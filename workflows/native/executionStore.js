@@ -104,7 +104,7 @@ export class NativeExecutionStore {
          !/^[A-Za-z][A-Za-z0-9_-]{0,99}$/.test(workflowName))) {
       throw new Error('invalid pinned native workflow name');
     }
-    const allowed = new Set(['http.get', 'http.post', 'http.patch', 'http.delete']);
+    const allowed = new Set(['http.get', 'http.post', 'http.patch', 'http.delete', 'log.write']);
     if (allowedOperations !== undefined &&
         (!Array.isArray(allowedOperations) ||
          allowedOperations.some(op => !allowed.has(op)) ||

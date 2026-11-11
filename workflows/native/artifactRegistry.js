@@ -10,7 +10,7 @@ const MAX_BINARY = 64 * 1024 * 1024;
 const MAX_APPROVAL = 16 * 1024;
 const SHA256 = /^[a-f0-9]{64}$/;
 const NAME = /^[A-Za-z0-9_-]{1,80}$/;
-const METHODS = new Set(['http.get', 'http.post', 'http.patch', 'http.delete']);
+const METHODS = new Set(['http.get', 'http.post', 'http.patch', 'http.delete', 'log.write']);
 const APPROVAL_FIELDS = [
   'allowedOperations', 'artifactSha256', 'protocolVersion',
   'publisherKeyId', 'runtimeAbi', 'schemaVersion',
