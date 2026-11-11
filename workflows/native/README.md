@@ -294,6 +294,7 @@ AWFL_NATIVE_SWITCH_BINARY=/absolute/path/to/native-switch-effects-binary \
 AWFL_NATIVE_NESTED_SWITCH_BINARY=/absolute/path/to/native-nested-switch-effects-binary \
 AWFL_NATIVE_NESTED_RANGE_BINARY=/absolute/path/to/native-nested-range-effects-binary \
 AWFL_NATIVE_V2_NESTED_RANGE_BINARY=/absolute/path/to/native-v2-nested-range-effects-binary \
+AWFL_NATIVE_PILOT_BINARY=/absolute/path/to/published-NativePilot-ABI3-binary \
 node --test --test-concurrency=1 workflows/native/*.test.js
 ```
 
@@ -312,9 +313,12 @@ AWFL_NATIVE_FIXTURE_BINARY=/absolute/path/to/awfl_native_fold_77054402 \\
   node --test workflows/native/*.test.js
 ```
 
-`nativeIntegration.test.js` exercises the **real generated Rust executable**
-through `runNativeArtifact` and `executePureNative` (with a mock persistence
-adapter). It covers nonempty, empty and signed inputs. Runner negative tests
+`nativeIntegration.test.js` exercises **real generated Rust executables**
+through `runNativeArtifact`, `executePureNative`, and the protocol-v2
+`runNativeWorkflow` worker (with mock persistence adapters). The pilot binary
+test verifies its fixed result `[2,3,9,9]`, completion, duplicate task
+redelivery, and owner isolation. The older fold fixture covers nonempty, empty
+and signed inputs. Runner negative tests
 cover malformed output, nonzero exit, and output overflow. The additional
 emulator tests *do* validate Firestore transactions, durable top-level
 continuation, and locally mocked effect dispatch; they **do not** verify
