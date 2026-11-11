@@ -100,7 +100,12 @@ test('OAuth state binds a verified installation to the owned project without per
     assert.equal(status.connected, true);
     assert.equal(status.repository, 'awfl-us/server');
     const credential = await resolveGithubAppCredential({ userId: 'owner', projectId: 'project1', db, fetcher });
-    assert.deepEqual(credential, { token: 'test-installation-token', owner: 'awfl-us', repo: 'server', defaultBranch: 'main' });
+    assert.equal(credential.token, 'test-installation-token');
+    assert.deepEqual({ owner: credential.owner, repo: credential.repo,
+      defaultBranch: credential.defaultBranch },
+    { owner: 'awfl-us', repo: 'server', defaultBranch: 'main' });
+    assert.ok(credential.expiresIn >= 3598 && credential.expiresIn <= 3600,
+      'GitHub installation token must report its real remaining TTL');
     // Independent AWFL projects linked to the same GitHub installation must
     // share its installation-wide token without accidentally narrowing scope.
     store.set('users/owner/projects/project2',
@@ -110,10 +115,22 @@ test('OAuth state binds a verified installation to the owned project without per
       repositoryId: 789, repo: 'compiler-rust', repoFullName: 'awfl-us/compiler-rust',
     });
     const second = await resolveGithubAppCredential({ userId: 'owner', projectId: 'project2', db, fetcher });
-    assert.deepEqual(second, {
+    assert.deepEqual({ token: second.token, owner: second.owner,
+      repo: second.repo, defaultBranch: second.defaultBranch }, {
       token: 'test-installation-token', owner: 'awfl-us',
       repo: 'compiler-rust', defaultBranch: 'main',
     });
+    assert.ok(second.expiresIn >= 3598 && second.expiresIn <= 3600);
+    const currentTime = Date.now;
+    try {
+      Date.now = () => currentTime() + 20 * 60 * 1000;
+      const older = await resolveGithubAppCredential({ userId: 'owner', projectId: 'project2', db, fetcher });
+      assert.equal(older.token, 'test-installation-token');
+      assert.ok(older.expiresIn >= 2398 && older.expiresIn <= 2400,
+        'cached GitHub credentials must return their shrinking TTL');
+    } finally {
+      Date.now = currentTime;
+    }
     assert.equal(calls.filter(c => c.url.endsWith('/app/installations/51/access_tokens')).length, 1);
     assert.equal([...store.values()].some(doc => JSON.stringify(doc).includes('test-user-token')), false);
     assert.equal([...store.values()].some(doc => JSON.stringify(doc).includes('test-installation-token')), false);

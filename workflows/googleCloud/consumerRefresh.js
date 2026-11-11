@@ -10,12 +10,13 @@ const router = express.Router();
 router.use((_req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
 
 export function consumerCredentialPayload(google, github) {
-  // Pass the actual remaining Google lifetime. The consumer uses this value
-  // to schedule its next refresh; hardcoded one-hour estimates are unsafe.
+  // Send both actual remaining lifetimes. Either provider may expire first;
+  // the consumer must schedule to the earlier deadline.
   return {
     ...(google ? { accessToken: google.accessToken, cloudProjectId: google.cloudProjectId,
       expiresIn: google.expiresIn } : {}),
-    ...(github ? { githubToken: github.token } : {}),
+    ...(github ? { githubToken: github.token,
+      ...(Number.isFinite(github.expiresIn) ? { githubExpiresIn: github.expiresIn } : {}) } : {}),
   };
 }
 
