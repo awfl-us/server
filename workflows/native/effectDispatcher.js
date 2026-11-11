@@ -1,7 +1,7 @@
 import { NativeConfirmedHttpFailure } from './effectErrors.js';
 // Explicit effect execution boundary. Never dispatches an unknown operation or
 // retries an ambiguous external outcome automatically.
-const validOperations = new Set(['http.get', 'http.post', 'http.patch', 'http.delete']);
+const validOperations = new Set(['http.get', 'http.post', 'http.patch', 'http.delete', 'log.write']);
 
 export class NativeEffectDispatcher {
   constructor({ handlers, reconcile = {}, authorizeExecution }) {

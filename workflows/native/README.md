@@ -70,6 +70,35 @@ server tests skip only that binary-dependent test when those env vars are
 absent. The compiled Rust binaries and mock/real persistence API are tested
 together; no network requests are issued.
 
+## Native built-in `Log` effect: trusted server-only output
+
+The original Scala DSL's default `Try` handler calls `sys.log` before
+re-raising. The Rust compiler translates that exact DSL-owned call to the
+canonical `log.write` effect. The server's artifact/execution allowlists now
+permit `log.write`; the dispatcher implements it via a restricted local
+structured logger (the existing `createJobsEffectHandlers` factory). **No**
+HTTP request, shell command, or arbitrary dynamic code is dispatched.
+
+The logger requires an authenticated workflow owner/project, a valid stable
+effect idempotency key, and exactly one nonempty `text` argument no larger than
+4 KiB as UTF-8. It emits an `INFO` log with Cloud Logging insertId equal
+to the stable execution/effect identifier. The standard fenced Firestore
+effect journal stores `null` as the successful log result; the generated Rust
+can then resume and re-raise the original DSL error. Unknown operations and
+cross-tenant invocations fail closed. Log delivery is **not exactly once**:
+a crash after log emission but before journal commit could repeat the log.
+The stable insertId allows downstream deduplication; only the checkpoint
+transition and terminal failure are durable/idempotent.
+
+`logEffects.test.js` tests accepted/rejected payloads and lease/authorization
+checks. `nativeTryIntegration.test.js` runs a **real generated Rust binary**
+through the Node worker and Firestore-compatible execution store: it verifies
+`log.write` journaling, original error propagation, terminal `Failed`,
+tenant isolation, and crash recovery after the journal commit without
+re-dispatching. CI generates this fixture via the unchanged Scala DSL
+`TryRaiseSmoke` and builds it before invoking Node tests. No live network
+calls are issued; production native routing remains disabled.
+
 ## Recovery and guarantees
 
 A crashed worker leaves a pending intent; a replacement worker receives the
