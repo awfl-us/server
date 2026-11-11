@@ -237,7 +237,7 @@ jobs:
               assert page.title() == "AWFL browser smoke"
               browser.close()
           '
-          docker run --rm "$SCALA_IMG" sh -c 'java -version && command -v sbt && ! python -c "import playwright"'
+          docker run --rm "$SCALA_IMG" sh -c 'java -version && command -v sbt && rustc --version && cargo --version && cargo clippy --version && cc --version && rustup target list --installed | grep -q x86_64-unknown-linux-musl && ! python -c "import playwright"'
 
       # Artifact Registry's Image Streaming cache eliminates cold pulls after
       # image pushes. This is best-effort: a cache outage must not block deploy.

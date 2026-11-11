@@ -88,15 +88,30 @@ FROM base AS scala
 USER root
 ARG SBT_VERSION=1.11.0
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends openjdk-21-jdk-headless \
+    && apt-get install -y --no-install-recommends \
+       openjdk-21-jdk-headless \
+       build-essential \
+       musl-tools \
     && rm -rf /var/lib/apt/lists/* \
     && curl -fsSL --retry 3 "https://github.com/sbt/sbt/releases/download/v${SBT_VERSION}/sbt-${SBT_VERSION}.tgz" -o /tmp/sbt.tgz \
     && tar -xzf /tmp/sbt.tgz -C /opt \
     && rm /tmp/sbt.tgz \
     && ln -s /opt/sbt/bin/sbt /usr/local/bin/sbt
 ENV JAVA_HOME="/usr/lib/jvm/java-21-openjdk-amd64"
-ENV PATH="/opt/sbt/bin:${PATH}"
+ENV CARGO_HOME="/home/awfl/.cargo" \
+    RUSTUP_HOME="/home/awfl/.rustup"
+ENV PATH="/home/awfl/.cargo/bin:/opt/sbt/bin:${PATH}"
 USER awfl
+# Native workflow compiler development uses real Cargo and Rust tooling,
+# including a C linker for Rust proc macros and musl for static Jobs binaries.
+# Install only into the Scala image; the lightweight/browser profiles stay small.
+ARG RUST_VERSION=1.99.1
+RUN curl -fsSL --retry 3 https://sh.rustup.rs -o /tmp/rustup-init.sh \
+    && sh /tmp/rustup-init.sh -y --no-modify-path --profile minimal \
+       --default-toolchain "${RUST_VERSION}" --component rustfmt,clippy \
+       --target x86_64-unknown-linux-musl \
+    && rm /tmp/rustup-init.sh \
+    && rustc --version && cargo --version && cc --version
 
 # Default for docker build without --target.
 FROM base AS lightweight
