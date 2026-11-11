@@ -25,6 +25,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      # runner.test.js uses a test-only Node script with `/usr/bin/env node`.
+      # The production native runner deliberately exposes only /usr/bin:/bin,
+      # while setup-node places Node in GitHub's hosted tool cache. Mirror the
+      # production interpreter location without widening the runtime PATH.
+      - name: Make Node available to the restricted native test process
+        run: |
+          if [ ! -x /usr/bin/node ]; then
+            sudo ln -s "$(command -v node)" /usr/bin/node
+          fi
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
