@@ -161,6 +161,32 @@ These are library-level tests, not production HTTP integrations. Network
 allowlists, credentials, remote idempotency and actual HTTP implementations
 remain intentionally unprovided until security and replay semantics are tested.
 
+## Policy-constrained HTTP effect adapters (no live transport)
+
+`httpEffectHandlers.js` creates canonical `http.get/post/patch/delete`
+handlers only for explicitly configured, exact-match public HTTPS origins,
+allowed methods and path prefixes. It rejects IP literals, URL credentials,
+non-HTTPS URLs, custom ports, encoded path ambiguities, and workflow-supplied
+authentication or headers. It bounds JSON request/response payloads and
+forbids redirects; HTTP errors remain unresolved effects rather than being
+silently journaled as successful responses.
+
+Credential acquisition is server-side through an injected
+`credentialProvider` using the authenticated user and project. No credentials
+are read from workflow input or passed into compiled executables. Each
+request carries the stable execution/effect idempotency key. Handlers return
+`{code, body}` on successful HTTP responses. Full Google Workflows HTTP
+response, retry and exception parity is still pending.
+
+**There is deliberately no default `fetch` implementation.** The caller must
+inject a separately reviewed `transport.sendRequest` implementing pinned
+DNS/IP routing, network egress restrictions, abort/timeout handling,
+no redirects, and response-byte limits. Application-level origin matching
+cannot prevent DNS rebinding without those controls and a restrictive
+container network policy. Tests use a fake transport only; no real network
+or cloud credentials are exercised. The adapter remains unconnected to the
+production launcher.
+
 ## Versioned native IPC runner (opt-in library)
 
 `executeNativeStep` accepts only a preselected, SHA-verified generated native
