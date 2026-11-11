@@ -18,6 +18,7 @@ export async function runNativeWorkflow({
     throw new Error('native execution does not match trusted Jobs task identity');
   }
   if (initial.status === 'completed') return initial.result;
+  if (initial.status === 'failed') return { status: 'failed', error: initial.error };
   if (initial.status === 'cancelled') throw new Error('native execution cancelled');
   if (!Number.isSafeInteger(maxTransitions) || maxTransitions < 1 ||
       maxTransitions > 10000) throw new Error('invalid native transition budget');
@@ -38,6 +39,9 @@ export async function runNativeWorkflow({
       });
       if (outcome.status === 'completed' || outcome.completed) {
         return outcome.result;
+      }
+      if (outcome.status === 'failed' || outcome.failed) {
+        return { status: 'failed', error: outcome.error };
       }
       if (outcome.cancelled) throw new Error('native execution cancelled');
       if (outcome.status !== 'waiting_effect') {

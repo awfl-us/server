@@ -138,3 +138,69 @@ test('size limits reject large input and effects before persistence', async () =
   assert.equal((await store.get('e1')).pendingEffect.effectId, 'call_0');
   assert.equal(await store.getEffect('e1', 'call_0'), null);
 });
+
+
+test('confirmed remote error atomically records journal and resumes compiled catch', async () => {
+  const { store } = await setup();
+  const { epoch } = await store.claim({ executionId: 'e1', workerId: 'a' });
+  const intent = { executionId: 'e1', workerId: 'a', epoch,
+    nodeId: '0.1', effectId: 'call_1', operation: 'http.post', args: { url: 'https://example.test' },
+    slots: { s1: { type: 'integer', value: 9 } },
+    continuation: { next_step: 2, frames: [],
+      slots: { s1: { type: 'integer', value: 9 } } },
+    resultSlot: 's2', protocolVersion: 2,
+    onError: { nextStep: 5, errorSlot: 's3' },
+  };
+  // Existing execution defaults to IPC v1; the new exception edge must
+  // require a pinned v2 execution, not just a v2 caller argument.
+  await assert.rejects(store.prepareEffect(intent), /differs/);
+  const db = fakeFirestore();
+  const newer = new NativeExecutionStore({ db, clock: () => 1000 });
+  await newer.create({ executionId: 'e2', userId: 'u', projectId: 'p',
+    artifactSha256: hash, input: {}, protocolVersion: 2 });
+  const claimed = await newer.claim({ executionId: 'e2', workerId: 'a' });
+  const request = { ...intent, executionId: 'e2', epoch: claimed.epoch };
+  await newer.prepareEffect(request);
+  await assert.rejects(newer.prepareEffect({ ...request,
+    onError: { nextStep: -1, errorSlot: 's3' } }), /error edge/);
+  const failure = { message: 'HTTP 503', code: 503 };
+  await newer.recordEffectFailure({ executionId: 'e2', workerId: 'a', epoch: claimed.epoch,
+    effectId: 'call_1', failure });
+  await newer.recordEffectFailure({ executionId: 'e2', workerId: 'a', epoch: claimed.epoch,
+    effectId: 'call_1', failure });
+  const state = await newer.get('e2');
+  assert.equal(state.status, 'ready');
+  assert.equal(state.pendingEffect, null);
+  assert.equal(state.checkpoint.next_step, 5);
+  assert.equal(state.checkpoint.slots.s1.value, 9);
+  assert.deepEqual(state.checkpoint.slots.s3, {
+    type: 'map', value: {
+      message: { type: 'string', value: 'HTTP 503' },
+      code: { type: 'integer', value: 503 },
+    },
+  });
+  assert.equal(state.effectCount, 1);
+  assert.equal((await newer.getEffect('e2', 'call_1')).isError, true);
+  await assert.rejects(newer.recordEffect({ executionId: 'e2', workerId: 'a',
+    epoch: claimed.epoch, effectId: 'call_1', outcome: failure }), /differs/);
+  await assert.rejects(newer.recordEffectFailure({ executionId: 'e2', workerId: 'a',
+    epoch: claimed.epoch, effectId: 'call_1', failure: { message: 'HTTP 401', code: 401 } }), /differs/);
+  await newer.complete({ executionId: 'e2', workerId: 'a', epoch: claimed.epoch,
+    result: 'recovered' });
+  assert.equal((await newer.get('e2')).result, 'recovered');
+});
+
+test('uncaught native Raise ends with durable failed status and no redispatch', async () => {
+  const { store } = await setup();
+  const { epoch } = await store.claim({ executionId: 'e1', workerId: 'a' });
+  const error = { message: 'explicitly raised', code: null };
+  await store.fail({ executionId: 'e1', workerId: 'a', epoch, error });
+  const state = await store.get('e1');
+  assert.equal(state.status, 'failed');
+  assert.deepEqual(state.error, error);
+  assert.deepEqual(await store.claim({ executionId: 'e1', workerId: 'b' }),
+    { failed: true, error });
+  await assert.rejects(store.cancel({ executionId: 'e1', userId: 'u', projectId: 'p' }), /already failed/);
+  await assert.rejects(store.complete({ executionId: 'e1', workerId: 'a', epoch,
+    result: {} }), /stale worker|terminal/);
+});

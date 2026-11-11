@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createNativeHttpEffectHandlers } from './httpEffectHandlers.js';
+import { NativeConfirmedHttpFailure } from './effectErrors.js';
 import { NativeEffectDispatcher } from './effectDispatcher.js';
 
 const targets = [{
@@ -129,7 +130,11 @@ test('redirects, HTTP errors, bad server credentials and oversized outcomes fail
   const args = { url: 'https://api.example.org/v1/jobs' };
   await assert.rejects(handlers['http.post'](request(args)), /error or redirect/);
   status = 503;
-  await assert.rejects(handlers['http.post'](request(args)), /error or redirect/);
+  await assert.rejects(handlers['http.post'](request(args)),
+    error => error instanceof NativeConfirmedHttpFailure && error.status === 503);
+  status = 403;
+  await assert.rejects(handlers['http.post'](request(args)),
+    error => error instanceof NativeConfirmedHttpFailure && error.status === 403);
   status = 200;
   responseBody = { bulk: 'x'.repeat(140_000) };
   await assert.rejects(handlers['http.post'](request(args)), /response body too large/);

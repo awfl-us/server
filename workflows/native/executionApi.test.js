@@ -77,3 +77,14 @@ test('native status and cancellation do not reveal another user or project', asy
   }
   assert.equal(f.get().status, 'ready');
 });
+
+
+test('failed native executions are terminal and visible only to their owner', async () => {
+  const f = fixture('failed');
+  assert.deepEqual((await nativeExecutionStatus(f)).data, {
+    status: 'Failed', workflow: 'NativePilot', updated: 1234, error: undefined,
+  });
+  await assert.rejects(cancelNativeExecution(f), /already failed/);
+  await assert.rejects(nativeExecutionStatus({ ...f, userId: 'other' }),
+    { code: 'NOT_FOUND' });
+});

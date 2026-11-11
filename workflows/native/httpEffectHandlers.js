@@ -2,6 +2,7 @@
 // caller-supplied transport. No default fetch: the production transport
 // must independently enforce DNS/IP pinning and network egress policy.
 import { isIP } from 'node:net';
+import { NativeConfirmedHttpFailure } from './effectErrors.js';
 
 const METHODS = {
   'http.get': 'GET',
@@ -148,10 +149,15 @@ export function createNativeHttpEffectHandlers({
         timeoutMs, redirect: 'error', credentials: 'omit',
         maxResponseBytes: MAX_RESPONSE,
       });
-      if (!response || !Number.isSafeInteger(response.status) ||
-          response.status < 200 || response.status >= 300) {
-        // HTTP errors cannot be silently journaled as successful effects.
-        // Error/retry semantics are pending; leave the intent unresolved.
+      if (!response || !Number.isSafeInteger(response.status)) {
+        throw new Error('native HTTP response rejected; error or redirect');
+      }
+      if (response.status >= 400 && response.status <= 599) {
+        // A received response is definitive; no blind retry or guesswork.
+        // The dispatcher may route it into a compiled Try handler.
+        throw new NativeConfirmedHttpFailure(response.status);
+      }
+      if (response.status < 200 || response.status >= 300) {
         throw new Error('native HTTP response rejected; error or redirect');
       }
       const content = response.body;

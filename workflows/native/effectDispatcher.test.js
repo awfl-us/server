@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { NativeEffectDispatcher as BaseNativeEffectDispatcher } from './effectDispatcher.js';
+import { NativeConfirmedHttpFailure } from './effectErrors.js';
 
 const testAuthorize = async ({ userId, projectId }) => ({
   allowed: true, userId, projectId,
@@ -110,4 +111,37 @@ test('unknown operations fail closed and transport failures leave intent unresol
   const normal = fixture();
   await assert.rejects(dispatcher.dispatch({ store: normal.store, executionId: 'run1', workerId: 'worker', epoch: 1, effectId: 'step1' }), /timeout/);
   assert.equal(normal.calls.length, 0);
+});
+
+
+test('only definitive HTTP failure enters a compiled Try; transport failure stays pending', async () => {
+  const { store: base } = fixture();
+  const actions = [];
+  const store = {
+    ...base,
+    get: async () => ({ ...(await base.get()), pendingEffect: {
+      ...pending, fingerprint: 'digest',
+      onError: { nextStep: 7, errorSlot: 's2' },
+    } }),
+    recordEffectFailure: async args => actions.push(args),
+  };
+  const sent = new NativeEffectDispatcher({ handlers: {
+    'http.post': async () => { throw new NativeConfirmedHttpFailure(503); },
+  } });
+  const outcome = await sent.dispatch({ store, executionId: 'run1', workerId: 'worker',
+    epoch: 1, effectId: 'step1' });
+  assert.equal(outcome.status, 'failed_recorded');
+  assert.deepEqual(actions[0].failure, { message: 'HTTP 503', code: 503 });
+  const uncertain = new NativeEffectDispatcher({ handlers: {
+    'http.post': async () => { throw new Error('socket timeout'); },
+  } });
+  await assert.rejects(uncertain.dispatch({ store, executionId: 'run1', workerId: 'worker',
+    epoch: 1, effectId: 'step1' }), /socket timeout/);
+  assert.equal(actions.length, 1);
+  const noHandler = { ...store, get: async () => ({ ...(await base.get()), pendingEffect: {
+    ...pending, fingerprint: 'digest',
+  } }) };
+  await assert.rejects(sent.dispatch({ store: noHandler, executionId: 'run1',
+    workerId: 'worker', epoch: 1, effectId: 'step1' }), /HTTP 503/);
+  assert.equal(actions.length, 1);
 });
