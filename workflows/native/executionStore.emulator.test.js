@@ -390,3 +390,66 @@ test('emulator + generated Rust: Switch branch and second Call remain pinned aft
   { status: 'completed', result: {} });
   assert.equal((await store.get('exec2')).effectCount, 0);
 });
+
+const nestedSwitchBinary = process.env.AWFL_NATIVE_NESTED_SWITCH_BINARY;
+test('emulator + native Rust: two nested Switch branches remain pinned after takeover', {
+  skip: !enabled || !nestedSwitchBinary, timeout: 90_000,
+}, async () => {
+  let now = Date.now();
+  const sha256 = createHash('sha256').update(await readFile(nestedSwitchBinary)).digest('hex');
+  const store = fixture(() => now);
+  await store.create({ executionId: 'exec1', userId: 'owner', projectId: 'proj',
+    artifactSha256: sha256, input: 5 });
+  let workerId = 'original';
+  let sent = 0;
+  const dispatcher = new NativeEffectDispatcher({ handlers: {
+    'http.post': async ({ idempotencyKey, args }) => {
+      if (sent === 0) {
+        assert.equal(idempotencyKey, 'exec1:call_0_s0_b0_b0');
+        assert.deepEqual(args, { url: 'https://example.org/deep-a' });
+      } else {
+        assert.equal(idempotencyKey, 'exec1:call_0_s1_b0_b0');
+        assert.equal(args, 'nested-first');
+      }
+      return sent++ === 0 ? 'nested-first' : 'nested-second';
+    },
+  } });
+  for (let site = 0; site < 2; site++) {
+    const pending = await executeNativeStep({ store, executionId: 'exec1', workerId,
+      executable: nestedSwitchBinary, sha256 });
+    assert.equal(pending.status, 'waiting_effect');
+    const state = await store.get('exec1');
+    assert.equal(state.checkpoint.next_step, 0);
+    assert.deepEqual(state.checkpoint.frames, [
+      { node_id: '0.0', iteration: 0 },
+      { node_id: '0.0.case0.0', iteration: 0 },
+      { node_id: '0.0.case0.0.case0.' + site, iteration: site },
+    ]);
+    if (site === 1) {
+      assert.deepEqual(state.checkpoint.slots.s0,
+        { type: 'string', value: 'nested-first' });
+    }
+    await dispatcher.dispatch({ store, executionId: 'exec1', workerId,
+      epoch: state.epoch, effectId: pending.effectId });
+    if (site === 0) {
+      now = state.leaseUntil + 1;
+      workerId = 'replacement';
+    }
+  }
+  assert.deepEqual(await executeNativeStep({ store, executionId: 'exec1', workerId,
+    executable: nestedSwitchBinary, sha256 }),
+  { status: 'completed', result: 'nested-second' });
+  assert.equal(sent, 2);
+  const done = await store.get('exec1');
+  assert.equal(done.effectCount, 2);
+  assert.equal(done.epoch, 2);
+  assert.equal((await store.getEffect('exec1', 'call_0_s0_b0_b0')).outcome, 'nested-first');
+  assert.equal((await store.getEffect('exec1', 'call_0_s1_b0_b0')).outcome, 'nested-second');
+
+  await store.create({ executionId: 'exec2', userId: 'owner', projectId: 'proj',
+    artifactSha256: sha256, input: -5 });
+  assert.deepEqual(await executeNativeStep({ store, executionId: 'exec2',
+    workerId: 'other-worker', executable: nestedSwitchBinary, sha256 }),
+  { status: 'completed', result: 'no-effect' });
+  assert.equal((await store.get('exec2')).effectCount, 0);
+});
