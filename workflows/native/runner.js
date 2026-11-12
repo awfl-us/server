@@ -91,6 +91,35 @@ export async function executePureNative({ store, executionId, workerId, executab
   return { completed: true, result };
 }
 
+// The native binary is not an authentication boundary. Only the IAM-protected
+// Jobs worker may construct this envelope, from a persisted execution and
+// server-owned GCP deployment configuration. AWFL's tenant projectId and
+// caller-supplied input.env are intentionally NOT used for GCP project identity.
+export function buildNativeTrustedGlobals({
+  state, executionId,
+  gcpProject = process.env.GCP_PROJECT || process.env.GCLOUD_PROJECT,
+  region = process.env.WORKFLOWS_LOCATION || 'us-central1',
+}) {
+  if (!state?.workflowName || !gcpProject) return null; // Legacy/pure tests.
+  if (state.executionId && state.executionId !== executionId) {
+    throw new Error('persisted native execution identity mismatch');
+  }
+  if (typeof executionId !== 'string' || !/^native_[a-f0-9]{32}$/.test(executionId) ||
+      typeof gcpProject !== 'string' ||
+      !/^[a-z][a-z0-9-]{2,62}$/.test(gcpProject) ||
+      typeof region !== 'string' || !/^[a-z0-9-]{2,63}$/.test(region) ||
+      typeof state.workflowName !== 'string' ||
+      !/^[A-Za-z][A-Za-z0-9_-]{0,99}$/.test(state.workflowName)) {
+    throw new Error('invalid trusted native execution context');
+  }
+  return {
+    GOOGLE_CLOUD_WORKFLOW_ID: state.workflowName,
+    GOOGLE_CLOUD_WORKFLOW_EXECUTION_ID: executionId,
+    GOOGLE_CLOUD_PROJECT_ID: gcpProject,
+    GOOGLE_CLOUD_LOCATION: region,
+  };
+}
+
 // One opt-in native IPC transition per claim. The executable is trusted and
 // hash-verified, but it never performs external effects. A suspended intent is
 // committed before an independent authenticated dispatcher can send it.
@@ -115,9 +144,13 @@ export async function executeNativeStep({ store, executionId, workerId, executab
       !Array.isArray(continuation.frames))) {
     throw new Error('invalid native continuation checkpoint');
   }
+  const trustedGlobals = protocolVersion === 2
+    ? buildNativeTrustedGlobals({ state, executionId })
+    : null;
   const response = await runNativeArtifact({
     executable, sha256, timeoutMs,
     input: { protocol_version: protocolVersion, input: state.input,
+      ...(trustedGlobals && { trusted_globals: trustedGlobals }),
       ...(continuation && { continuation }) },
   });
   if (!response || response.protocol_version !== protocolVersion) {
