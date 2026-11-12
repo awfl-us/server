@@ -11,7 +11,8 @@ const MAX_INPUT = 1024 * 1024;
 const MAX_OUTPUT = 4 * 1024 * 1024;
 const MAX_EXECUTABLE = 64 * 1024 * 1024;
 
-export async function runNativeArtifact({ executable, sha256, input, timeoutMs = 30_000 }) {
+export async function runNativeArtifact({ executable, sha256, input, timeoutMs = 30_000,
+                                          profiler = null }) {
   if (typeof executable !== 'string' || !executable.startsWith('/') ||
       !/^[a-f0-9]{64}$/.test(sha256 || '')) throw new Error('trusted absolute executable and SHA-256 required');
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 300_000) throw new Error('invalid timeout');
@@ -38,7 +39,7 @@ export async function runNativeArtifact({ executable, sha256, input, timeoutMs =
     const stagedExecutable = join(stage, 'artifact');
     await writeFile(stagedExecutable, bytes, { flag: 'wx', mode: 0o600 });
     await chmod(stagedExecutable, 0o500);
-    return await new Promise((resolve, reject) => {
+    const run = () => new Promise((resolve, reject) => {
       // No GCP credentials, API keys, injected token locations, or caller env.
       // This is defense in depth, NOT a container/namespace security sandbox.
       const child = spawn(stagedExecutable, [], {
@@ -75,6 +76,7 @@ export async function runNativeArtifact({ executable, sha256, input, timeoutMs =
       child.stdin.on('error', error => { if (error.code !== 'EPIPE') finish(error); });
       child.stdin.end(payload);
     });
+    return profiler ? await profiler.measure('rust.spawn_io', run) : await run();
   } finally {
     await rm(stage, { recursive: true, force: true });
   }
@@ -126,7 +128,7 @@ export function buildNativeTrustedGlobals({
 // committed before an independent authenticated dispatcher can send it.
 // This path is NOT connected to the common production launcher.
 export async function executeNativeStep({ store, executionId, workerId, executable, sha256,
-                                          timeoutMs, allowedOperations, gcpProject, region }) {
+                                          timeoutMs, allowedOperations, gcpProject, region, profiler }) {
   const leaseMs = Math.max(60_000, (timeoutMs ?? 30_000) + 10_000);
   const state = await store.claim({ executionId, workerId, leaseMs });
   if (state.completed || state.cancelled || state.failed) return state;
@@ -151,12 +153,14 @@ export async function executeNativeStep({ store, executionId, workerId, executab
   const trustedGlobals = protocolVersion === 2 && state.trustedGlobalsVersion === 1
     ? buildNativeTrustedGlobals({ state, executionId, gcpProject, region })
     : null;
-  const response = await runNativeArtifact({
-    executable, sha256, timeoutMs,
+  const callArtifact = () => runNativeArtifact({
+    executable, sha256, timeoutMs, profiler,
     input: { protocol_version: protocolVersion, input: state.input,
       ...(trustedGlobals && { trusted_globals: trustedGlobals }),
       ...(continuation && { continuation }) },
   });
+  const response = profiler ? await profiler.measure('rust.verify_stage_spawn', callArtifact)
+    : await callArtifact();
   if (!response || response.protocol_version !== protocolVersion) {
     throw new Error('native IPC version mismatch');
   }

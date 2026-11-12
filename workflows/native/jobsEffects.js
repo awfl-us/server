@@ -12,6 +12,7 @@ const METHODS = Object.freeze({
 export function createJobsEffectHandlers({
   jobsOrigin, auth = new GoogleAuth(), timeoutMs = 30_000,
   logger = console,
+  profiler = null,
 }) {
   let base;
   try { base = new URL(jobsOrigin); } catch { /* validate below */ }
@@ -65,8 +66,10 @@ export function createJobsEffectHandlers({
           data = args.body;
         }
       }
-      const client = await auth.getIdTokenClient(base.origin);
-      const response = await client.request({
+      const acquireClient = () => auth.getIdTokenClient(base.origin);
+      const client = profiler ? await profiler.measure('oidc.client', acquireClient)
+        : await acquireClient();
+      const request = () => client.request({
         url: url.toString(), method,
         ...(Object.hasOwn(args, 'body') ? { data } : {}),
         headers: {
@@ -77,6 +80,8 @@ export function createJobsEffectHandlers({
         timeout: timeoutMs,
         maxRedirects: 0,
       });
+      const response = profiler ? await profiler.measure('oidc.http_request', request)
+        : await request();
       if (!Number.isInteger(response?.status) ||
           response.status < 200 || response.status >= 300) {
         throw new Error('Jobs effect HTTP status not successful');
