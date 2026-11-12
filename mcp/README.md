@@ -13,7 +13,11 @@ MCP resources/list and resources/read methods.
 
 For actual environment facts, use the following tools:
 
-1. projects_list then workspace_create with project_id.
+1. projects_list then workspace_create with project_id. The workspace ID is a
+   durable attachment; new workspaces do not have a one-hour expiration.
+   Existing legacy workspace records are not migrated. Only explicit
+   workspace_stop retires a new attachment. The consumer's one-hour *idle*
+   shutdown is separate, and an existing attachment can start it again.
 2. environment_status with workspace_id to see readiness, installed tools,
    GCP/GitHub credential availability, known token-file environment names and
    refresh configuration. This comes from the live project heartbeat.

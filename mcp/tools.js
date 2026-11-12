@@ -23,7 +23,7 @@ export const tools = {
     schema: {}, readOnly: true,
   },
   workspace_create: {
-    description: 'Attach to or start the shared project-scoped AWFL consumer. To START a new consumer, image_profile is REQUIRED: choose lightweight (1Gi), browser (2Gi), or scala (Java/sbt/Rust, 4Gi). You may omit image_profile only when attaching to an existing running consumer. An existing shared environment cannot switch images without stopping it. idle_timeout_seconds applies only to a new consumer.',
+    description: 'Attach to or start the shared project-scoped AWFL consumer. The workspace ID persists until explicitly stopped; it does NOT expire after an hour. To START a new consumer, image_profile is REQUIRED: choose lightweight (1Gi), browser (2Gi), or scala (Java/sbt/Rust, 4Gi). You may omit image_profile only when attaching to an existing running consumer. An existing shared environment cannot switch images without stopping it. idle_timeout_seconds applies only to a new consumer, not workspace IDs.',
     schema: { project_id: z.string().min(1).max(128), session_id: z.string().min(1).max(128).optional(),
       idle_timeout_seconds: z.number().int().min(60).max(86400).optional(),
       image_profile: z.enum(['lightweight', 'browser', 'scala']).optional() },

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import express from 'express';
 import { createMcpRouter } from '../index.js';
 import { tools as toolDefinitions } from '../tools.js';
-import { ExecutionService } from '../service.js';
+import { ExecutionService, executionIdFor, parseExecutionId } from '../service.js';
 import { generateApiKey, isActiveApiKeyRecord } from '../../workflows/apiKeys/core.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -156,6 +156,52 @@ test('MCP attaches to existing project consumer without starting an independent 
   const ws2 = await service.owned(userId, second.workspace_id);
   assert.equal(ws2.sessionId, 'second-conversation');
   await assert.rejects(service.owned(userId, first.workspace_id), /Workspace stopped/);
+});
+
+test('new MCP workspaces have no one-hour deadline or Firestore workspace TTL', async () => {
+  const db = memoryDb();
+  await db.collection('users').doc('owner').collection('projects').doc('repo-1').set({});
+  const service = new ExecutionService({
+    db, ownerId: 'owner',
+    startConsumer: async () => ({ state: 'attached', consumerId: 'shared' }),
+  });
+  const created = await service.invoke('owner', 'workspace_create', { project_id: 'repo-1' });
+  const record = await db.collection('mcpWorkspaces').doc(created.workspace_id).get();
+  assert.equal(record.exists, true);
+  assert.equal(Object.hasOwn(record.data(), 'expiresAt'), false);
+  assert.equal(Object.hasOwn(record.data(), 'expires_at'), false);
+  assert.equal(created.expires_at, null);
+  assert.equal((await service.owned('owner', created.workspace_id)).projectId, 'repo-1');
+  await assert.rejects(service.owned('another', created.workspace_id), /Workspace not found/);
+});
+
+test('legacy expiration no longer blocks tools but existing records are not migrated', async () => {
+  const db = memoryDb(), userId = 'owner', projectId = 'repo-1';
+  await db.collection('users').doc(userId).collection('projects').doc(projectId).set({});
+  const workspaceId = 'a'.repeat(32);
+  const expiry = new Date(Date.now() - 10_000);
+  const ref = db.collection('mcpWorkspaces').doc(workspaceId);
+  await ref.set({ userId, projectId, sessionId: 'legacy-session',
+    nextSeq: 2000, stopped: false, expiresAt: 1, expires_at: expiry });
+  const service = new ExecutionService({
+    db, ownerId: userId,
+    getLock: async () => ({ lock: { consumerId: 'shared', expiresAt: Date.now() + 60000 } }),
+    backend: () => ({ append: async event => {
+      if (event.data.tool_call) {
+        await service.complete(userId, projectId, workspaceId, 2001, { content: 'works' });
+      }
+    } }),
+  });
+  const output = await service.invoke(userId, 'read_file', {
+    workspace_id: workspaceId, path: 'README.md',
+  });
+  assert.equal(output.text, 'works');
+  assert.equal((await ref.get()).data().nextSeq, 2001);
+  assert.equal((await ref.get()).data().expiresAt, 1);
+  assert.deepEqual((await ref.get()).data().expires_at, expiry);
+  const request = (await ref.collection('mcpRequests').doc('00002001').get()).data();
+  assert.ok(request.expires_at > Date.now(), 'request TTL remains independent');
+  assert.equal(parseExecutionId(executionIdFor(workspaceId, 2001), workspaceId).seq, 2001);
 });
 
 test('MCP stop retains its workspace after consumer shutdown failure and requires explicit confirmation', async () => {
