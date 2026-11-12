@@ -3,14 +3,10 @@ import { initializeApp, getApps } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import express from 'express';
 import { Storage } from '@google-cloud/storage';
-import path from 'path';
 
 if (!getApps().length) {
   initializeApp();
 }
-const db = getFirestore();
-const router = express.Router();
-const storage = new Storage();
 
 function getLatestBranchIds(mapping) {
   let rootNode = null;
@@ -31,10 +27,17 @@ function getLatestBranchIds(mapping) {
 }
 
 // POST /loadConvoHistory
-// { "bucket": "bucket-name", "objectName": "conversations.json", "userId": "abc123" }
+// The IAM-authenticated Jobs middleware resolves the workflow user into
+// req.userId and removes body.userId. Never depend on the stripped body field.
+// The arguments are injected for deterministic test runs (no GCS/Firestore).
+export function createLoadConvoHistoryRouter({
+  db = getFirestore(), storage = new Storage(),
+} = {}) {
+const router = express.Router();
 router.post('/loadConvoHistory', async (req, res) => {
   try {
-    const { objectName, userId } = req.body;
+    const objectName = req.body?.objectName;
+    const userId = req.userId;
     if (!objectName || !userId) {
       return res.status(400).json({ error: 'Missing objectName or userId' });
     }
@@ -113,5 +116,7 @@ router.post('/loadConvoHistory', async (req, res) => {
     res.status(500).json({ error: 'Failed to load conversations: ' + err.message });
   }
 });
+return router;
+}
 
-export default router;
+export default createLoadConvoHistoryRouter();
