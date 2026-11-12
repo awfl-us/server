@@ -1,5 +1,27 @@
 # Native Rust workflow execution (experimental, opt-in)
 
+**Current server execution plan — November 12, 2026:**
+[real-workflow pilot and benchmark](https://github.com/awfl-us/compiler-rust/blob/feat/native-parallel-durable/docs/real-workflow-pilot-and-benchmark-plan.md).
+That plan supersedes the historical numbered gate lists later in this README.
+The immediate milestone is to run one **unchanged** workflow through the
+authenticated Workflows service -> Cloud Tasks -> IAM Jobs -> pinned GCS ELF
+-> Firestore path, in an isolated test deployment with routing rollback;
+then compare its behavior and latency with Google Workflows. It does **not**
+authorize a production feature-flag switch or live customer effects.
+
+**Evidence and next action:** server PR #82 at `9885751` passed GitHub run
+`43280844780`, including the new compiled `LoadConversationHistory.scala`
+worker test. Compiler PR #18 at `920ac23` passed run `43280871676`.
+Local Node regression: **68 passed / 29 skipped / 0 failed**; separate real
+Firestore emulator **7 passed / 0 failed / 0 skipped**. The unchanged
+workflow produced the expected mocked `http.post` effect, persisted one
+result and replayed without another dispatch. Local Rust IPC medians from
+40 invocations per stage: **6.15 ms** preparation / **3.53 ms** resume;
+these exclude cloud persistence, startup and network and are **not** a
+Google Workflows comparison. Preserve the Google default route and release
+pinning until a controlled authenticated run plus matched differential tests
+prove readiness.
+
 **Scope decision (November 12, 2026): keep native parallel execution simple.**
 The worker uses its existing **process-local, eight-permit FIFO budget** for
 Rust subprocess invocations and external effects; nested fork coordinators
@@ -92,7 +114,10 @@ claims also reject. This does **not**
 abort HTTP requests already sent before cancellation, nor perform a durable
 descendant tombstone sweep: child records can remain in an unfinished state
 until explicit cleanup. Orphan garbage collection and a persistent
-cross-process global concurrency cap remain separate release gates.
+cross-process global concurrency cap are **deferred operational extensions**,
+not prerequisites for the first unchanged-workflow canary. Reconsider them
+only when observed traffic or a changed branch-dispatch architecture requires
+them.
 
 Validation in the compiler-rust Scala GKE environment: Scala-generated
 `native-parallel-branches`, `native-parallel-for`, and **three-level
@@ -110,8 +135,8 @@ Firestore transactions and synthetic nested records. Local direct Rust IPC
 tests also validate three distinct nested fork IDs. CI pins the paired
 compiler-rust commit `2bbb33f6` for reproducibility. No live Cloud Run
 effectful canary or Google Workflows differential has been verified;
-distributed cross-process concurrency admission and orphan cleanup remain
-release gates.
+distributed cross-process concurrency admission and orphan cleanup are
+**explicitly out of scope** for the next unchanged-workflow milestone.
 
 
 The existing AWFL Workflows service has an optional native Rust execution
@@ -232,7 +257,19 @@ state; it does not stop an already dispatched HTTP request. Persisting a
 successful outcome before acknowledging the runner avoids rerunning it after
 resume. Unresolved outcomes remain pending until reconciled.
 
-## Next gates before production (in dependency order)
+## Next gates before production (historical broad-roadmap checklist)
+
+**Updated November 12:** the list below describes broad eventual native
+feature parity, not work that must precede the next isolated real-workflow
+pilot. The merged `Try`/logging foundation, draft `Parallel`/`ParallelFor`,
+real-workflow compilation, simulated HTTP through the actual worker, and
+seven real emulator cases are already verified. Distributed permit
+coordination was intentionally reverted: the deployed model does not launch
+separate Jobs workers for individual parallel branches. A fleet-wide quota,
+orphan sweeper, more parallel protocols, callbacks, child workflows and new
+provider adapters are **not** the next milestone unless a selected workload
+exposes a specific need. See the linked [pilot plan](https://github.com/awfl-us/compiler-rust/blob/feat/native-parallel-durable/docs/real-workflow-pilot-and-benchmark-plan.md)
+for its safety gates and measured acceptance criteria.
 
 1. **Land the current compiler/server pair.** Require green compiler PR #7
    (Scala, Cargo, full CLI/CFG/real-workflow tests and strict Clippy). In the
