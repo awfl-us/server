@@ -204,3 +204,32 @@ test('uncaught native Raise ends with durable failed status and no redispatch', 
   await assert.rejects(store.complete({ executionId: 'e1', workerId: 'a', epoch,
     result: {} }), /stale worker|terminal/);
 });
+
+test('native fork lane state pins deterministic identity and rejects changed snapshots', async () => {
+  const store = new NativeExecutionStore({ db: fakeFirestore(), clock: () => 1000 });
+  const parentId = 'native_' + 'f'.repeat(32);
+  const nodeId = '0.2', generation = '0.2_0', index = 3;
+  const input = { a: 1 };
+  const slots = { s0: { type: 'integer', value: 4 } };
+  const entry = 'branch3';
+  const { forkLaneId } = await import('./forkCoordinator.js');
+  const { createHash } = await import('node:crypto');
+  const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  const executionId = forkLaneId({ parentExecutionId: parentId, nodeId, generation, index });
+  const forkLane = {
+    parentExecutionId: parentId, nodeId, generation, index, entry, slots,
+    snapshotSha256: digest({ input, slots, entry }),
+  };
+  const create = { executionId, userId: 'owner', projectId: 'tenant', artifactSha256: hash,
+    input, protocolVersion: 2, parallelVersion: 1, workflowName: 'Workflow',
+    allowedOperations: ['http.post'], forkLane };
+  await store.create(create);
+  const persisted = await store.get(executionId);
+  assert.deepEqual(persisted.forkLane, forkLane);
+  assert.equal(persisted.parallelVersion, 1);
+  assert.equal(persisted.input.a, 1);
+  await assert.rejects(store.create({ ...create, executionId: 'native_' + 'a'.repeat(32) }), /deterministic identity/);
+  await assert.rejects(store.create({ ...create, forkLane: { ...forkLane, slots: { s0: { type: 'integer', value: 5 } } } }), /digest/);
+  await assert.rejects(store.create({ ...create, parallelVersion: undefined }), /invalid native fork lane metadata/);
+  await assert.rejects(store.create({ ...create, forkLane: { ...forkLane, entry: '../../injected' } }), /invalid native fork lane metadata/);
+});

@@ -92,7 +92,7 @@ export class NativeExecutionStore {
 
   async create({ executionId, userId, projectId, artifactSha256, input,
                  protocolVersion = 1, workflowName, allowedOperations,
-                 trustedGlobalsVersion }) {
+                 trustedGlobalsVersion, parallelVersion, forkLane }) {
     id(executionId);
     if (!userId || !projectId || !/^[a-f0-9]{64}$/.test(artifactSha256 || '')) {
       throw new Error('owner and pinned artifact SHA-256 required');
@@ -116,6 +116,30 @@ export class NativeExecutionStore {
         (trustedGlobalsVersion !== 1 || protocolVersion !== 2)) {
       throw new Error('invalid pinned native trusted globals version');
     }
+    if (parallelVersion !== undefined && (parallelVersion !== 1 || protocolVersion !== 2)) {
+      throw new Error('invalid pinned native parallel version');
+    }
+    if (forkLane !== undefined) {
+      if (parallelVersion !== 1 || !forkLane ||
+          !/^native_[a-f0-9]{32}$/.test(forkLane.parentExecutionId || '') ||
+          !/^[A-Za-z0-9_.-]{1,120}$/.test(forkLane.nodeId || '') ||
+          !/^[A-Za-z0-9_.:-]{1,160}$/.test(forkLane.generation || '') ||
+          !Number.isSafeInteger(forkLane.index) || forkLane.index < 0 || forkLane.index >= 10000 ||
+          !/^[A-Za-z0-9_.-]{1,120}$/.test(forkLane.entry || '') ||
+          !/^[a-f0-9]{64}$/.test(forkLane.snapshotSha256 || '') ||
+          !forkLane.slots || typeof forkLane.slots !== 'object' ||
+          Array.isArray(forkLane.slots)) {
+        throw new Error('invalid native fork lane metadata');
+      }
+      if (forkLane.snapshotSha256 !== digest({
+        input, slots: forkLane.slots, entry: forkLane.entry,
+      }) || executionId !== 'native_' + digest([
+        forkLane.parentExecutionId, forkLane.nodeId, forkLane.generation, forkLane.index,
+      ]).slice(0, 32)) {
+        throw new Error('native fork lane digest or deterministic identity mismatch');
+      }
+      enforceBytes(forkLane, LIMIT.checkpoint, 'native fork lane snapshot');
+    }
     requireValue(input, 'input');
     enforceBytes(input, LIMIT.input, 'workflow input');
     const ref = this.ref(executionId);
@@ -127,6 +151,8 @@ export class NativeExecutionStore {
         ...(workflowName && { workflowName }),
         ...(allowedOperations && { allowedOperations: [...allowedOperations] }),
         ...(trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
+        ...(parallelVersion === 1 && { parallelVersion: 1 }),
+        ...(forkLane && { forkLane }),
         input: null, inputJson: JSON.stringify(input),
         status: 'ready', epoch: 0, owner: null, leaseUntil: 0,
         checkpoint: null, pendingEffect: null, effectCount: 0, result: null,
