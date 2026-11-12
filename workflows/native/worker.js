@@ -7,10 +7,30 @@ import { NativeEffectDispatcher } from './effectDispatcher.js';
 import { NativeForkCoordinator } from './forkCoordinator.js';
 import { executeNativeStep } from './runner.js';
 
+// Shared by all descendants of one root execution. Fork coordinators do not
+// hold a permit while waiting on their children, avoiding nested-fork deadlocks.
+// Only native subprocess invocations and non-fork effects consume permits.
+function createExecutionBudget(maxActive = 8) {
+  let active = 0;
+  const pending = [];
+  return async work => {
+    if (active >= maxActive) {
+      await new Promise(resolve => pending.push(resolve));
+    }
+    active++;
+    try { return await work(); }
+    finally {
+      active--;
+      pending.shift()?.();
+    }
+  };
+}
+
 export async function runNativeWorkflow({
   store, releases, executionId, userId, projectId,
   handlers, workerId = 'worker_' + randomUUID().replaceAll('-', ''),
   maxTransitions = 120, sharedArtifact = null, parallelDepth = 0,
+  executionBudget = null,
 }) {
   const initial = await store.get(executionId);
   if (!initial || initial.userId !== userId ||
@@ -26,6 +46,7 @@ export async function runNativeWorkflow({
   if (!Number.isSafeInteger(parallelDepth) || parallelDepth < 0 || parallelDepth > 3) {
     throw new Error('native fork depth outside permitted range');
   }
+  const withBudget = executionBudget || createExecutionBudget(8);
   const artifact = sharedArtifact || await releases.materialize(initial.artifactSha256);
   if (artifact.sha256 !== initial.artifactSha256) {
     if (!sharedArtifact) await artifact.cleanup();
@@ -46,6 +67,18 @@ export async function runNativeWorkflow({
           parallelDepth >= 3) {
         throw new Error('unauthorized or unsupported native parallel fork');
       }
+      let heartbeatFailure = null, heartbeatPending = null;
+      const heartbeat = typeof store.renew === 'function'
+        ? setInterval(() => {
+          if (heartbeatPending || heartbeatFailure) return;
+          heartbeatPending = store.renew({
+            executionId, workerId, epoch: parent.epoch,
+            leaseMs: 120_000,
+          }).catch(error => { heartbeatFailure = error; })
+            .finally(() => { heartbeatPending = null; });
+        }, 15_000)
+        : null;
+      heartbeat?.unref();
       const coordinator = new NativeForkCoordinator({
         store,
         maxConcurrency: 8,
@@ -63,13 +96,24 @@ export async function runNativeWorkflow({
             userId, projectId, handlers,
             sharedArtifact: artifact, maxTransitions,
             parallelDepth: parallelDepth + 1,
+            executionBudget: withBudget,
           });
         },
       });
-      return coordinator.execute({
-        parent, effectId: intent.effectId, nodeId: intent.nodeId,
-        generation: args.generation, lanes: args.lanes,
-      });
+      try {
+        const results = await coordinator.execute({
+          parent, effectId: intent.effectId, nodeId: intent.nodeId,
+          generation: args.generation, lanes: args.lanes,
+        });
+        if (heartbeatPending) await heartbeatPending;
+        if (heartbeatFailure) {
+          throw new Error('native fork parent lost its fenced lease');
+        }
+        return results;
+      } finally {
+        if (heartbeat) clearInterval(heartbeat);
+        if (heartbeatPending) await heartbeatPending;
+      }
     };
     const forkHandlers = initial.parallelVersion === 1 ?
       { ...handlers, 'native.parallel': runFork } : handlers;
@@ -83,11 +127,11 @@ export async function runNativeWorkflow({
       }),
     });
     for (let i = 0; i < maxTransitions; i++) {
-      const outcome = await executeNativeStep({
+      const outcome = await withBudget(() => executeNativeStep({
         store, executionId, workerId,
         executable: artifact.executable, sha256: artifact.sha256,
         allowedOperations: initial.allowedOperations,
-      });
+      }));
       if (outcome.status === 'completed' || outcome.completed) {
         return outcome.result;
       }
@@ -107,10 +151,12 @@ export async function runNativeWorkflow({
           executionId, workerId, epoch: state.epoch, leaseMs: 60_000,
         });
       }
-      const effect = await dispatcher.dispatch({
+      const dispatch = () => dispatcher.dispatch({
         store, executionId, workerId, epoch: state.epoch,
         effectId: outcome.effectId,
       });
+      const effect = state.pendingEffect?.operation === 'native.parallel'
+        ? await dispatch() : await withBudget(dispatch);
       if (effect.status === 'uncertain') {
         // No automatic replay for an effect with an uncertain remote outcome.
         throw new Error('native effect reconciliation required');

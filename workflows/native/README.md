@@ -8,6 +8,19 @@ normal native routing flag is still **off**: merging code does not constitute
 a live-effect canary or production rollout. See the [cross-repository
 readiness matrix, evidence and ordered gates](https://github.com/awfl-us/compiler-rust/blob/main/docs/current-state-and-roadmap.md).
 
+**Parallel implementation checkpoint (November 12, 2026; draft PRs).**
+Compiler-rust #18 and server #82 now support real compiled Rust
+`Parallel`/`ParallelFor` child entrypoints, pinned child records, concurrent
+native effect dispatch, parent fork journaling, deterministic joins, and
+reconciliation after a crash between child completion and parent journaling.
+The compiled parent `Try` catches only confirmed child failures; uncertain
+remote outcomes remain unresolved. The in-process per-root permit budget
+bounds nested worker activity, but is not a distributed/global Jobs quota.
+The currently passing integration tests use a transaction-shaped Firestore
+substitute, **not the Firestore emulator or deployed Cloud Tasks/Jobs**.
+Cancellation, distributed concurrency admission, realistic workflow parity,
+and live canary testing remain gates. Native production routing stays off.
+
 
 The existing AWFL Workflows service has an optional native Rust execution
 backend. `createWorkflowExecution` chooses it only when

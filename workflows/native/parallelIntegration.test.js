@@ -34,9 +34,11 @@ function fakeFirestore() {
 const compiledBranches = process.env.AWFL_NATIVE_PARALLEL_BRANCHES_BINARY;
 const compiledEach = process.env.AWFL_NATIVE_PARALLEL_FOR_BINARY;
 
-async function createTest({ executable, input, handlers, executionId }) {
+async function createTest({ executable, input, handlers, executionId, clock }) {
   const sha256 = createHash('sha256').update(await readFile(executable)).digest('hex');
-  const store = new NativeExecutionStore({ db: fakeFirestore() });
+  const store = new NativeExecutionStore({
+    db: fakeFirestore(), ...(clock && { clock }),
+  });
   const userId = 'verified-user', projectId = 'tenant-project';
   await store.create({
     executionId, userId, projectId, workflowName: 'NativeParallelTest',
@@ -83,11 +85,18 @@ test('real compiled Parallel has truly concurrent effects, durable child result/
       },
     });
     const executing = fixture.execute();
-    await Promise.race([
-      started,
-      new Promise((_, reject) => setTimeout(() => reject(new Error(
-        'parallel effects failed to overlap')), 20_000)),
-    ]);
+    // Cancel the watchdog once both branches start: otherwise the dangling
+    // timer holds the Node test process alive for another 20 seconds.
+    let watchdog;
+    try {
+      await Promise.race([
+        started,
+        new Promise((_, reject) => { watchdog = setTimeout(() => reject(new Error(
+          'parallel effects failed to overlap')), 20_000); }),
+      ]);
+    } finally {
+      clearTimeout(watchdog);
+    }
     assert.equal(peak, 2);
     openBarrier();
     assert.deepEqual(await executing, {
@@ -119,4 +128,82 @@ test('real compiled ParallelFor runs indexed lanes and joins results in input or
       const state = await fixture.store.get('native_' + String(index + 1).repeat(32));
       assert.equal(state.status, 'completed');
     }
+  });
+
+test('fork recovery after committed child effects never redispatches them',
+  { skip: !compiledBranches }, async () => {
+    let now = Date.now(), effects = 0, injected = false;
+    const executionId = 'native_' + 'c'.repeat(32);
+    const fixture = await createTest({
+      executable: compiledBranches, input: null, executionId,
+      clock: () => now,
+      handlers: {
+        'http.post': async ({ args }) => {
+          effects++;
+          return args + '-once';
+        },
+      },
+    });
+    const record = fixture.store.recordEffect.bind(fixture.store);
+    fixture.store.recordEffect = async input => {
+      if (!injected && input.executionId === executionId &&
+          input.effectId.startsWith('fork_')) {
+        injected = true;
+        throw new Error('simulated crash after durable children, before parent journal');
+      }
+      return record(input);
+    };
+    await assert.rejects(fixture.execute(), /simulated crash/);
+    assert.equal(effects, 2);
+    const stranded = await fixture.store.get(executionId);
+    assert.equal(stranded.status, 'waiting_effect');
+    assert.equal(stranded.pendingEffect?.operation, 'native.parallel');
+    // The second Tasks delivery takes over an expired parent lease and
+    // reconciles from existing completed child records, never sending HTTP.
+    now += 130_000;
+    assert.deepEqual(await fixture.execute(), {
+      a: 'first-once', b: 'second-once',
+    });
+    assert.equal(effects, 2, 'completed child effects were never retried');
+    const completed = await fixture.store.get(executionId);
+    assert.equal(completed.status, 'completed');
+    assert.equal(completed.effectCount, 1);
+    assert.equal((await fixture.store.getEffect(executionId,
+      stranded.pendingEffect.effectId)).isError, undefined);
+  });
+
+const compiledCaught = process.env.AWFL_NATIVE_PARALLEL_CAUGHT_BINARY;
+const compiledUncaught = process.env.AWFL_NATIVE_PARALLEL_UNCAUGHT_BINARY;
+
+test('a terminal child Raise resumes the parent compiled Try catch',
+  { skip: !compiledCaught }, async () => {
+    const executionId = 'native_' + '4'.repeat(32);
+    const fixture = await createTest({
+      executable: compiledCaught, input: null,
+      executionId, handlers: {},
+    });
+    assert.equal(await fixture.execute(), 'definitive branch failure');
+    const state = await fixture.store.get(executionId);
+    assert.equal(state.status, 'completed');
+    assert.equal(state.effectCount, 1);
+    const fork = await fixture.store.getEffect(executionId, 'fork_0_0_try_0');
+    assert.equal(fork?.isError, true);
+    assert.deepEqual(await fixture.execute(), 'definitive branch failure');
+  });
+
+test('an uncaught child Raise durably fails the parent exactly once',
+  { skip: !compiledUncaught }, async () => {
+    const executionId = 'native_' + '5'.repeat(32);
+    const fixture = await createTest({
+      executable: compiledUncaught, input: null,
+      executionId, handlers: {},
+    });
+    const result = await fixture.execute();
+    assert.equal(result.status, 'failed');
+    assert.match(result.error.message, /definitive branch failure/);
+    const state = await fixture.store.get(executionId);
+    assert.equal(state.status, 'failed');
+    assert.equal(state.pendingEffect, null);
+    assert.equal(state.effectCount, 1);
+    assert.deepEqual(await fixture.execute(), result);
   });

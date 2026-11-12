@@ -67,7 +67,14 @@ test('two lanes genuinely overlap; bounded scheduler returns input-order results
   });
   const firstRun = f.coordinator.execute(args());
   // If this raced serially the second lane could not arrive before release.
-  await Promise.race([ready, new Promise((_, reject) => setTimeout(() => reject(new Error('lanes were serialized')), 2000))]);
+  let watchdog;
+  try {
+    await Promise.race([ready, new Promise((_, reject) => {
+      watchdog = setTimeout(() => reject(new Error('lanes were serialized')), 2000);
+    })]);
+  } finally {
+    clearTimeout(watchdog);
+  }
   assert.equal(peak, 2);
   release();
   assert.deepEqual(await firstRun, ['result-0', 'result-1', 'result-2']);
@@ -104,4 +111,19 @@ test('rejects untrusted forks, replay with different slot snapshot, and uncommit
   await assert.rejects(f.coordinator.execute({
     ...args(), lanes: [{ entry: 'pc_3', slots: { s0: { type: 'string', value: 'changed' } } }],
   }), /identity mismatch/);
+});
+
+test('an uncertain sibling outcome is never converted into a catchable confirmed failure', async () => {
+  const f = fixture(async ({ executionId, index }, records) => {
+    if (index === 0) {
+      records.get(executionId).status = 'failed';
+      records.get(executionId).error = { message: 'confirmed branch failure' };
+    } else {
+      throw new Error('uncertain remote outcome; must not catch');
+    }
+  });
+  await assert.rejects(f.coordinator.execute({
+    ...args(), lanes: args().lanes.slice(0, 2),
+  }), /uncertain remote outcome/);
+  assert.equal(f.creates.length, 2);
 });

@@ -50,12 +50,10 @@ function parentFields(parent, effectId, nodeId) {
 }
 
 /**
- * A future native.parallel handler calls this only after persisting the
+ * The native.parallel worker calls this only after persisting the
  * authenticated parent fork intent in the ordinary native effect journal.
- * The server's runLane callback must execute the pinned child artifact via
- * the existing NativeExecutionStore lease/journal, NEVER an unjournaled
- * direct network effect. We do not wire that callback until the compiled
- * branch selector is available.
+ * Its runLane callback executes the pinned child artifact via the existing
+ * NativeExecutionStore lease/journal, NEVER an unjournaled direct network effect.
  */
 export class NativeForkCoordinator {
   constructor({ store, runLane, maxConcurrency = 8, maxLanes = 1000 }) {
