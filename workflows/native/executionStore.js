@@ -127,6 +127,88 @@ export class NativeExecutionStore {
     this.collection = db.collection(collection);
   }
   ref(executionId) { return this.collection.doc(id(executionId)); }
+  permitRef(rootExecutionId, slot) {
+    if (!Number.isSafeInteger(slot) || slot < 0 || slot >= 8) {
+      throw new Error('invalid native distributed permit slot');
+    }
+    // Resolve lazily: ordinary status/cancel access and non-parallel workers
+    // never need to load the additional collection at all.
+    return this.db.collection(this.collectionName + 'PermitSlots')
+      .doc(id(rootExecutionId) + '_' + slot);
+  }
+  /** Try to admit one unit of actual work; null means this slot is busy.
+   * The root owner/terminal check and slot reservation are one transaction.
+   */
+  async tryAcquirePermit({ rootExecutionId, userId, projectId, permitId,
+                           slot, leaseMs = 120_000 }) {
+    id(permitId);
+    if (!Number.isSafeInteger(leaseMs) || leaseMs < 1000 || leaseMs > 600_000) {
+      throw new Error('invalid native permit lease duration');
+    }
+    const rootRef = this.ref(rootExecutionId);
+    const permitRef = this.permitRef(rootExecutionId, slot);
+    return this.db.runTransaction(async tx => {
+      const [rootSnap, permitSnap] = await Promise.all([tx.get(rootRef), tx.get(permitRef)]);
+      const root = rootSnap.exists && rootSnap.data();
+      if (!root || root.userId !== userId || root.projectId !== projectId ||
+          root.parallelVersion !== 1 || root.forkLaneJson ||
+          ['completed', 'failed', 'cancelled'].includes(root.status)) {
+        throw conflict('native distributed permit root is no longer active or authorized');
+      }
+      const now = this.clock();
+      const previous = permitSnap.exists ? permitSnap.data() : null;
+      if (previous && previous.leaseUntil > now) return null;
+      const next = { rootExecutionId, userId, projectId, slot, permitId,
+        epoch: (previous?.epoch || 0) + 1, leaseUntil: now + leaseMs,
+        updatedAt: now };
+      if (permitSnap.exists) tx.update(permitRef, next);
+      else tx.create(permitRef, next);
+      return { slot, permitId, epoch: next.epoch, leaseUntil: next.leaseUntil };
+    });
+  }
+  async renewPermit({ rootExecutionId, userId, projectId, permitId,
+                      slot, epoch, leaseMs = 120_000 }) {
+    id(permitId);
+    if (!Number.isSafeInteger(epoch) || epoch < 1 ||
+        !Number.isSafeInteger(leaseMs) || leaseMs < 1000 || leaseMs > 600_000) {
+      throw new Error('invalid native distributed permit renewal');
+    }
+    const rootRef = this.ref(rootExecutionId);
+    const permitRef = this.permitRef(rootExecutionId, slot);
+    return this.db.runTransaction(async tx => {
+      const [rootSnap, permitSnap] = await Promise.all([tx.get(rootRef), tx.get(permitRef)]);
+      const root = rootSnap.exists && rootSnap.data();
+      const current = permitSnap.exists && permitSnap.data();
+      const now = this.clock();
+      if (!root || root.userId !== userId || root.projectId !== projectId ||
+          root.parallelVersion !== 1 || root.forkLaneJson ||
+          ['completed', 'failed', 'cancelled'].includes(root.status) ||
+          !current || current.permitId !== permitId || current.epoch !== epoch ||
+          current.leaseUntil <= now || current.userId !== userId ||
+          current.projectId !== projectId) {
+        throw conflict('native distributed permit lease is stale or root is terminal');
+      }
+      const next = { ...current, leaseUntil: now + leaseMs, updatedAt: now };
+      tx.update(permitRef, next);
+      return next.leaseUntil;
+    });
+  }
+  /** A stale worker cannot release a slot another process has reclaimed. */
+  async releasePermit({ rootExecutionId, permitId, slot, epoch }) {
+    id(permitId);
+    if (!Number.isSafeInteger(epoch) || epoch < 1) {
+      throw new Error('invalid native distributed permit epoch');
+    }
+    const ref = this.permitRef(rootExecutionId, slot);
+    return this.db.runTransaction(async tx => {
+      const snap = await tx.get(ref);
+      if (!snap.exists || snap.data().permitId !== permitId ||
+          snap.data().epoch !== epoch) return false;
+      tx.update(ref, { ...snap.data(), permitId: null, leaseUntil: 0,
+        updatedAt: this.clock() });
+      return true;
+    });
+  }
   effectRef(executionId, effectId) {
     return this.db.collection(this.collectionName + '/' + id(executionId) + '/effects')
       .doc(id(effectId));

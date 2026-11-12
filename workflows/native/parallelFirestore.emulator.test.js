@@ -22,6 +22,7 @@ const nestedBinary = process.env.AWFL_NATIVE_PARALLEL_NESTED_BINARY;
 const runContender = promisify(execFile);
 const contenderScript = fileURLToPath(new URL('./parallelLeaseContender.emulator.js', import.meta.url));
 const crashScript = fileURLToPath(new URL('./parallelCrashWorker.emulator.js', import.meta.url));
+const permitScript = fileURLToPath(new URL('./parallelPermitContender.emulator.js', import.meta.url));
 const enabled = Boolean(binary && process.env.FIRESTORE_EMULATOR_HOST);
 if (process.env.AWFL_NATIVE_FIRESTORE_PARALLEL_REQUIRED === '1' && (!enabled || !eachBinary || !nestedBinary)) {
   throw new Error('real parallel Firestore tests require emulator host and both compiled Rust binaries');
@@ -331,4 +332,70 @@ test('emulator + generated Rust: actual three-level nested forks journal and rep
     assert.ok(children.every(doc => doc.data().status === 'completed'));
     assert.equal(await f.execute(f.makeStore()), 'nested-complete');
     assert.equal(calls, 4, 'a fresh worker cannot re-dispatch nested effects');
+  });
+
+test('emulator: different Node processes contend for durable admission, and crashed holders are fenced',
+  { skip: !enabled, timeout: 120_000 }, async () => {
+    const f = await fixture({ handlers: {} });
+    const permitBase = { rootExecutionId: f.executionId, userId: f.userId,
+      projectId: f.projectId };
+    const contenderArgs = (slot, holder, mode = 'try') => [permitScript,
+      f.collection, f.executionId, f.userId, f.projectId,
+      String(slot), holder, mode];
+
+    // Two distinct processes race for the exact same empty Firestore doc.
+    // One CAS must win; neither client shares a process-local semaphore.
+    const attempts = await Promise.all([
+      runContender(process.execPath, contenderArgs(0, 'first_process'), {
+        env: process.env, timeout: 30_000 }),
+      runContender(process.execPath, contenderArgs(0, 'second_process'), {
+        env: process.env, timeout: 30_000 }),
+    ]);
+    const verdicts = attempts.map(result => result.stdout.trim()).sort();
+    assert.deepEqual(verdicts, ['ADMITTED 1', 'BUSY']);
+    const winner = attempts[0].stdout.includes('ADMITTED')
+      ? 'first_process' : 'second_process';
+    assert.equal(await f.makeStore().releasePermit({ rootExecutionId: f.executionId,
+      slot: 0, permitId: winner, epoch: 1 }), true);
+
+    // All eight slots are root-wide. A ninth separate process is denied,
+    // even though it has a fresh Store and independent Node runtime.
+    const claimed = [];
+    for (let slot = 0; slot < 8; slot++) {
+      const lease = await f.makeStore().tryAcquirePermit({ ...permitBase,
+        slot, permitId: `holder_${slot}`, leaseMs: 120_000 });
+      assert.ok(lease);
+      claimed.push(lease);
+    }
+    const denied = await runContender(process.execPath,
+      contenderArgs(3, 'over_capacity'), { env: process.env, timeout: 30_000 });
+    assert.equal(denied.stdout.trim(), 'BUSY');
+    for (const lease of claimed) {
+      assert.equal(await f.makeStore().releasePermit({
+        rootExecutionId: f.executionId, ...lease }), true);
+    }
+
+    // A third independent process dies after successful claim without a
+    // release. Another process can only reclaim *after* the lease expires.
+    const crashed = await runContender(process.execPath,
+      contenderArgs(0, 'dead_process', 'crash'), {
+        env: process.env, timeout: 30_000,
+      }).then(() => null, error => error);
+    assert.equal(crashed?.code, 73, 'worker must actually terminate without release');
+    const stranded = await f.makeStore().tryAcquirePermit({ ...permitBase,
+      slot: 0, permitId: 'too_early' });
+    assert.equal(stranded, null);
+    const future = Date.now() + 130_000;
+    const survivorStore = new NativeExecutionStore({ db, collection: f.collection,
+      clock: () => future });
+    const successor = await survivorStore.tryAcquirePermit({ ...permitBase,
+      slot: 0, permitId: 'successor' });
+    assert.ok(successor.epoch >= 3);
+    assert.equal(await survivorStore.releasePermit({
+      rootExecutionId: f.executionId, slot: 0, epoch: successor.epoch - 1,
+      permitId: 'dead_process' }), false);
+    await assert.rejects(survivorStore.renewPermit({ ...permitBase,
+      slot: 0, epoch: successor.epoch - 1, permitId: 'dead_process' }), /stale/);
+    assert.equal(await survivorStore.releasePermit({
+      rootExecutionId: f.executionId, ...successor }), true);
   });

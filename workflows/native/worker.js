@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { NativeEffectDispatcher } from './effectDispatcher.js';
 import { NativeForkCoordinator } from './forkCoordinator.js';
 import { executeNativeStep } from './runner.js';
+import { createDistributedExecutionBudget } from './distributedBudget.js';
 
 // Shared by all descendants of one root execution. Fork coordinators do not
 // hold a permit while waiting on their children, avoiding nested-fork deadlocks.
@@ -53,7 +54,16 @@ export async function runNativeWorkflow({
   if (!Number.isSafeInteger(parallelDepth) || parallelDepth < 0 || parallelDepth > 3) {
     throw new Error('native fork depth outside permitted range');
   }
-  const withBudget = executionBudget || createExecutionBudget(8);
+  // Parallel branches share a local semaphore AND durable Firestore capacity.
+  // Every descendant receives the same root-scoped closure. A second Cloud
+  // Tasks/Jobs process creates a different closure but uses the same eight
+  // Firestore lease slots, so total admission remains bounded across workers.
+  const withBudget = executionBudget || (initial.parallelVersion === 1
+    ? createDistributedExecutionBudget({
+      store, rootExecutionId: initial.forkLane?.rootExecutionId || executionId,
+      userId, projectId, localBudget: createExecutionBudget(8),
+    })
+    : createExecutionBudget(8));
   const artifact = sharedArtifact || await releases.materialize(initial.artifactSha256);
   if (artifact.sha256 !== initial.artifactSha256) {
     if (!sharedArtifact) await artifact.cleanup();
