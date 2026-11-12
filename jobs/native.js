@@ -10,6 +10,10 @@ import { createJobsEffectHandlers } from '../workflows/native/jobsEffects.js';
 import { runNativeWorkflow } from '../workflows/native/worker.js';
 import { createNativeProfiler } from '../workflows/native/profiler.js';
 
+// Shared only by requests executing in the same trusted Jobs process.
+// GCS mappings remain authoritative and digest verification is repeated.
+const verifiedNativeArtifacts = new Map();
+
 export function createNativeJobsRouter({
   store, releases, handlers, execute = runNativeWorkflow,
 } = {}) {
@@ -35,6 +39,7 @@ export function createNativeJobsRouter({
       const nativeStore = store || new NativeExecutionStore({ db: getFirestore() });
       const nativeReleases = releases || new NativeGcsReleases({
         storage: new Storage(), bucket: process.env.AWFL_NATIVE_ARTIFACT_BUCKET,
+        verifiedCache: verifiedNativeArtifacts,
       });
       const nativeHandlers = handlers || createJobsEffectHandlers({
         jobsOrigin: process.env.AWFL_NATIVE_JOBS_URL,
