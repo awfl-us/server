@@ -37,6 +37,15 @@ CLI `13.35.1`, the demo-only `demo-awfl-native` project, the generated
 `AWFL_NATIVE_FIRESTORE_PARALLEL_REQUIRED=1` (so CI cannot accidentally skip
 the tests). It does not call real HTTP endpoints.
 
+The emulator's concurrent-branch test now also spawns an **independent Node
+process** (`parallelLeaseContender.emulator.js`) with its own Firestore client.
+While the parent has an active fork lease, that contender receives `CONFLICT`
+and cannot steal the parent. After the durable join, the contender observes
+the completed result rather than claiming a new execution. Both checks run
+with the generated Rust ELF and actual emulator transactions. This tests
+**cross-process parent lease fencing**, not global distributed scheduling
+permits, which remain a separate unresolved capacity gate.
+
 
 The existing AWFL Workflows service has an optional native Rust execution
 backend. `createWorkflowExecution` chooses it only when

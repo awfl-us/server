@@ -5,6 +5,9 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID, createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { initializeApp, deleteApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { NativeExecutionStore } from './executionStore.js';
@@ -12,6 +15,8 @@ import { runNativeWorkflow } from './worker.js';
 
 const binary = process.env.AWFL_NATIVE_PARALLEL_BRANCHES_BINARY;
 const eachBinary = process.env.AWFL_NATIVE_PARALLEL_FOR_BINARY;
+const runContender = promisify(execFile);
+const contenderScript = fileURLToPath(new URL('./parallelLeaseContender.emulator.js', import.meta.url));
 const enabled = Boolean(binary && process.env.FIRESTORE_EMULATOR_HOST);
 if (process.env.AWFL_NATIVE_FIRESTORE_PARALLEL_REQUIRED === '1' && (!enabled || !eachBinary)) {
   throw new Error('real parallel Firestore tests require emulator host and both compiled Rust binaries');
@@ -45,7 +50,7 @@ async function fixture({ handlers, clock, executable = binary, input = null }) {
   const execute = (activeStore = store) => runNativeWorkflow({
     store: activeStore, releases, executionId, userId, projectId, handlers,
   });
-  return { store, makeStore, execute, executionId, userId, projectId };
+  return { store, makeStore, execute, executionId, collection, userId, projectId };
 }
 
 test('emulator + real Rust: siblings overlap, fork joins once, and a new store replays without effects',
@@ -73,6 +78,12 @@ test('emulator + real Rust: siblings overlap, fork joins once, and a new store r
       })]);
       await assert.rejects(f.execute(f.makeStore()), /lease held/,
         'independent duplicate Jobs delivery cannot steal the parent lease');
+      const contender = await runContender(process.execPath,
+        [contenderScript, f.collection, f.executionId], {
+          env: process.env, timeout: 30000,
+        });
+      assert.match(contender.stdout, /ACTIVE_PARENT_LEASE_HELD/,
+        'a separate Node process must not claim the still-active parent');
     } finally {
       clearTimeout(watchdog);
       release();
@@ -83,6 +94,12 @@ test('emulator + real Rust: siblings overlap, fork joins once, and a new store r
     const state = await f.makeStore().get(f.executionId);
     assert.equal(state.status, 'completed');
     assert.equal(state.effectCount, 1);
+    const contenderAfterJoin = await runContender(process.execPath,
+      [contenderScript, f.collection, f.executionId], {
+        env: process.env, timeout: 30000,
+      });
+    assert.match(contenderAfterJoin.stdout, /ALREADY_COMPLETED/,
+      'external redelivery after join observes the completed result');
     assert.deepEqual(await f.execute(f.makeStore()),
       { a: 'first-emulated', b: 'second-emulated' });
     assert.equal(calls, 2);
