@@ -19,3 +19,10 @@ Only fixed operation names, duration, outcome, and the native execution ID
 are logged. Workflow inputs, URLs, request/response bodies, user/project
 IDs and credentials are intentionally excluded. The flag defaults to off.
 Restore it to off and remove temporary Cloud Run tags after benchmarking.
+
+`NativeGcsReleases.materialize` also supports a bounded per-instance cache of
+verified content-addressed executable bytes. Jobs keeps at most four cached
+artifacts of up to 8 MiB each, keyed by bucket/prefix/SHA-256. Each use
+still verifies its digest and stages a new private executable directory,
+which is removed when the worker finishes. The cache is process-local and
+does not alter the active release mapping or durable Firestore state.

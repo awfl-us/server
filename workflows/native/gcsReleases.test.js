@@ -14,7 +14,7 @@ const metadata = {
   runtimeAbi: 3, allowedOperations: ['http.post'],
 };
 
-function fixture({ manifest = metadata, binary = elf } = {}) {
+function fixture({ manifest = metadata, binary = elf, verifiedCache = null } = {}) {
   const objects = new Map([
     ['native-workflows/active/Example.json', Buffer.from(JSON.stringify(manifest))],
     ['native-workflows/artifacts/' + sha256 + '.bin', binary],
@@ -40,10 +40,33 @@ function fixture({ manifest = metadata, binary = elf } = {}) {
   };
   return {
     objects, reads, releases: new NativeGcsReleases({
-      storage, bucket: 'test-native-artifacts',
+      storage, bucket: 'test-native-artifacts', verifiedCache,
     }),
   };
 }
+
+test('cache stores only digest-verified bytes, keeps separate staged paths and avoids repeat GCS reads', async () => {
+  const cache = new Map();
+  const f = fixture({ verifiedCache: cache });
+  const a = await f.releases.materialize(sha256);
+  const b = await f.releases.materialize(sha256);
+  try {
+    assert.notEqual(a.executable, b.executable);
+    assert.deepEqual(await readFile(a.executable), elf);
+    assert.deepEqual(await readFile(b.executable), elf);
+    assert.deepEqual(f.reads, ['native-workflows/artifacts/' + sha256 + '.bin']);
+    const later = fixture({ verifiedCache: cache });
+    const c = await later.releases.materialize(sha256);
+    try {
+      assert.deepEqual(await readFile(c.executable), elf);
+      assert.deepEqual(later.reads, []);
+    } finally { await c.cleanup(); }
+    assert.equal(cache.size, 1);
+  } finally { await a.cleanup(); await b.cleanup(); }
+  // A cached buffer must never bypass validation on future reads.
+  cache.set(`test-native-artifacts/native-workflows/${sha256}`, Buffer.from('tampered'));
+  await assert.rejects(f.releases.materialize(sha256), /SHA-256 mismatch/);
+});
 
 test('IAM release registry resolves active workflow and verifies immutable binary digest', async () => {
   const f = fixture();

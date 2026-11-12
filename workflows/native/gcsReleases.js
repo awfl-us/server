@@ -11,6 +11,10 @@ const SHA = /^[a-f0-9]{64}$/;
 const OPERATIONS = new Set(['http.get', 'http.post', 'http.patch', 'http.delete', 'log.write', 'native.parallel']);
 const MAX_METADATA = 16 * 1024;
 const MAX_EXECUTABLE = 64 * 1024 * 1024;
+// Content-addressed artifact bytes may be cached only in the trusted Jobs
+// process. Bound the cache, and still stage a fresh private executable per run.
+const MAX_CACHED_ARTIFACT = 8 * 1024 * 1024;
+const MAX_CACHE_ENTRIES = 4;
 
 function checkName(name) {
   if (typeof name !== 'string' || !NAME.test(name)) {
@@ -72,7 +76,7 @@ async function boundedDownload(file, limit) {
 
 /** Read-only release registry, never a deployment/upload API. */
 export class NativeGcsReleases {
-  constructor({ storage, bucket, prefix = 'native-workflows' }) {
+  constructor({ storage, bucket, prefix = 'native-workflows', verifiedCache = null }) {
     if (!storage?.bucket || typeof bucket !== 'string' ||
         !/^[a-z0-9][a-z0-9._-]{2,220}$/.test(bucket) ||
         typeof prefix !== 'string' ||
@@ -80,8 +84,13 @@ export class NativeGcsReleases {
         prefix.includes('//') || prefix.includes('..') || prefix.endsWith('/')) {
       throw new Error('trusted GCS native release configuration required');
     }
+    if (verifiedCache !== null && !(verifiedCache instanceof Map)) {
+      throw new Error('verified native artifact cache must be a Map');
+    }
     this.bucket = storage.bucket(bucket);
+    this.bucketName = bucket;
     this.prefix = prefix;
+    this.verifiedCache = verifiedCache;
   }
 
   async active(workflowName) {
@@ -108,13 +117,29 @@ export class NativeGcsReleases {
     */
   async materialize(sha256) {
     if (!SHA.test(sha256 || '')) throw new Error('pinned native artifact digest required');
-    const file = this.bucket.file(this.prefix + '/artifacts/' + sha256 + '.bin');
-    const bytes = await boundedDownload(file, MAX_EXECUTABLE);
+    const cacheKey = `${this.bucketName}/${this.prefix}/${sha256}`;
+    let bytes = this.verifiedCache?.get(cacheKey);
+    if (bytes) {
+      this.verifiedCache.delete(cacheKey);
+      this.verifiedCache.set(cacheKey, bytes);
+    } else {
+      const file = this.bucket.file(this.prefix + '/artifacts/' + sha256 + '.bin');
+      bytes = await boundedDownload(file, MAX_EXECUTABLE);
+    }
     if (createHash('sha256').update(bytes).digest('hex') !== sha256) {
+      this.verifiedCache?.delete(cacheKey);
       throw new Error('native GCS executable SHA-256 mismatch');
     }
     if (!bytes.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))) {
+      this.verifiedCache?.delete(cacheKey);
       throw new Error('native GCS executable must be a Linux ELF');
+    }
+    if (this.verifiedCache && bytes.length <= MAX_CACHED_ARTIFACT &&
+        !this.verifiedCache.has(cacheKey)) {
+      while (this.verifiedCache.size >= MAX_CACHE_ENTRIES) {
+        this.verifiedCache.delete(this.verifiedCache.keys().next().value);
+      }
+      this.verifiedCache.set(cacheKey, bytes);
     }
     const directory = await mkdtemp(join(tmpdir(), 'awfl-native-release-'));
     try {
