@@ -24,7 +24,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: awfl-us/compiler-rust
-          ref: 2bbb33f6e8d9ac9d761c54baa7b8b36fd814a286
+          ref: a285f66df11efd1b2c9811fbd494dcd45541aa7e
           path: _compiler-rust
       - name: Checkout unchanged production workflow definition
         uses: actions/checkout@v4
