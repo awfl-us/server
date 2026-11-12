@@ -4,10 +4,12 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID, createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, rm } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { initializeApp, deleteApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { NativeExecutionStore } from './executionStore.js';
@@ -17,6 +19,7 @@ const binary = process.env.AWFL_NATIVE_PARALLEL_BRANCHES_BINARY;
 const eachBinary = process.env.AWFL_NATIVE_PARALLEL_FOR_BINARY;
 const runContender = promisify(execFile);
 const contenderScript = fileURLToPath(new URL('./parallelLeaseContender.emulator.js', import.meta.url));
+const crashScript = fileURLToPath(new URL('./parallelCrashWorker.emulator.js', import.meta.url));
 const enabled = Boolean(binary && process.env.FIRESTORE_EMULATOR_HOST);
 if (process.env.AWFL_NATIVE_FIRESTORE_PARALLEL_REQUIRED === '1' && (!enabled || !eachBinary)) {
   throw new Error('real parallel Firestore tests require emulator host and both compiled Rust binaries');
@@ -178,4 +181,46 @@ test('emulator + real Rust: cancelling the root fences its pending join and re-d
     assert.equal(cancelled.owner, null);
     await assert.rejects(f.execute(f.makeStore()), /cancelled/);
     assert.equal(calls, 2, 're-delivery cannot send more child effects');
+  });
+
+test('emulator + real Rust: killed worker leaves fork journal empty; successor takes fenced lease',
+  { skip: !enabled, timeout: 120_000 }, async () => {
+    let now = Date.now(), replaySends = 0;
+    const f = await fixture({ clock: () => now, handlers: {
+      'http.post': async () => { replaySends++; throw new Error('duplicate remote effect'); },
+    } });
+    const directory = await mkdtemp(join(tmpdir(), 'awfl-native-killed-worker-'));
+    const marker = join(directory, 'external-effects.jsonl');
+    try {
+      const crashed = await runContender(process.execPath,
+        [crashScript, f.collection, f.executionId, binary, marker], {
+          env: process.env, timeout: 60000,
+        }).then(() => null, error => error);
+      assert.equal(crashed?.code, 73,
+        `child process must exit after child commit: ${crashed?.message}`);
+      assert.deepEqual((await readFile(marker, 'utf8')).trim().split('\n').sort(),
+        ['"first"', '"second"']);
+      const stranded = await f.makeStore().get(f.executionId);
+      assert.equal(stranded.status, 'waiting_effect');
+      assert.equal(stranded.pendingEffect.operation, 'native.parallel');
+      assert.equal(stranded.epoch, 1);
+      await assert.rejects(f.execute(f.makeStore()), /lease held/,
+        'successor cannot steal nonexpired parent lease');
+      now += 130_000;
+      assert.deepEqual(await f.execute(f.makeStore()), {
+        a: 'first-killed', b: 'second-killed',
+      });
+      const recovered = await f.makeStore().get(f.executionId);
+      assert.equal(recovered.epoch, 2);
+      assert.equal(recovered.status, 'completed');
+      assert.equal(replaySends, 0, 'committed children must not resend effects');
+      assert.equal((await readFile(marker, 'utf8')).trim().split('\n').length, 2);
+      await assert.rejects(f.makeStore().recordEffect({
+        executionId: f.executionId, workerId: stranded.owner,
+        epoch: stranded.epoch, effectId: stranded.pendingEffect.effectId,
+        outcome: ['stale'],
+      }), /stale worker/);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
