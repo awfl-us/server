@@ -4,12 +4,13 @@
 // trusts only the persisted owner and artifact, not client-chosen binaries.
 import { randomUUID } from 'node:crypto';
 import { NativeEffectDispatcher } from './effectDispatcher.js';
+import { NativeForkCoordinator } from './forkCoordinator.js';
 import { executeNativeStep } from './runner.js';
 
 export async function runNativeWorkflow({
   store, releases, executionId, userId, projectId,
   handlers, workerId = 'worker_' + randomUUID().replaceAll('-', ''),
-  maxTransitions = 120,
+  maxTransitions = 120, sharedArtifact = null, parallelDepth = 0,
 }) {
   const initial = await store.get(executionId);
   if (!initial || initial.userId !== userId ||
@@ -22,10 +23,60 @@ export async function runNativeWorkflow({
   if (initial.status === 'cancelled') throw new Error('native execution cancelled');
   if (!Number.isSafeInteger(maxTransitions) || maxTransitions < 1 ||
       maxTransitions > 10000) throw new Error('invalid native transition budget');
-  const artifact = await releases.materialize(initial.artifactSha256);
+  if (!Number.isSafeInteger(parallelDepth) || parallelDepth < 0 || parallelDepth > 3) {
+    throw new Error('native fork depth outside permitted range');
+  }
+  const artifact = sharedArtifact || await releases.materialize(initial.artifactSha256);
+  if (artifact.sha256 !== initial.artifactSha256) {
+    if (!sharedArtifact) await artifact.cleanup();
+    throw new Error('native fork artifact digest differs from its parent');
+  }
   try {
+    // A fork is itself an authorized, journaled native effect. Running a
+    // child re-enters this same owner-checked worker with an independently
+    // persisted continuation and effect journal. No second interpreter.
+    const runFork = async ({ args }) => {
+      const parent = await store.get(executionId);
+      const intent = parent?.pendingEffect;
+      if (initial.parallelVersion !== 1 ||
+          parent?.parallelVersion !== 1 ||
+          !parent.allowedOperations?.includes('native.parallel') ||
+          intent?.operation !== 'native.parallel' ||
+          intent?.effectId !== args?.generation ||
+          parallelDepth >= 3) {
+        throw new Error('unauthorized or unsupported native parallel fork');
+      }
+      const coordinator = new NativeForkCoordinator({
+        store,
+        maxConcurrency: 8,
+        runLane: async ({ executionId: laneId }) => {
+          // The parent still owns the durable fork intent while its child
+          // runs. Extend the parent's fenced lease before starting a child.
+          if (typeof store.renew === 'function') {
+            await store.renew({
+              executionId, workerId, epoch: parent.epoch,
+              leaseMs: 120_000,
+            });
+          }
+          return runNativeWorkflow({
+            store, releases, executionId: laneId,
+            userId, projectId, handlers,
+            sharedArtifact: artifact, maxTransitions,
+            parallelDepth: parallelDepth + 1,
+          });
+        },
+      });
+      return coordinator.execute({
+        parent, effectId: intent.effectId, nodeId: intent.nodeId,
+        generation: args.generation, lanes: args.lanes,
+      });
+    };
+    const forkHandlers = initial.parallelVersion === 1 ?
+      { ...handlers, 'native.parallel': runFork } : handlers;
     const dispatcher = new NativeEffectDispatcher({
-      handlers,
+      handlers: forkHandlers,
+      reconcile: initial.parallelVersion === 1 ?
+        { 'native.parallel': runFork } : {},
       authorizeExecution: async ({ userId: storedUser, projectId: storedProject }) => ({
         allowed: storedUser === userId && storedProject === projectId,
         userId: storedUser, projectId: storedProject,
@@ -67,6 +118,6 @@ export async function runNativeWorkflow({
     }
     throw new Error('native execution transition budget exhausted');
   } finally {
-    await artifact.cleanup();
+    if (!sharedArtifact) await artifact.cleanup();
   }
 }

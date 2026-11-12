@@ -5,7 +5,7 @@ import { createWorkflowExecution } from '../services/executeWorkflow.js';
 
 const SHA = 'a'.repeat(64);
 const executionId = 'native_' + '1'.repeat(32);
-function fixture(trustedGlobalsVersion) {
+function fixture(trustedGlobalsVersion, parallelVersion) {
   const states = new Map(), tasks = [], queries = [];
   let enabled = true, failTask = false;
   const store = {
@@ -24,6 +24,8 @@ function fixture(trustedGlobalsVersion) {
         workflowName: name, sha256: SHA, protocolVersion: 2,
         allowedOperations: ['http.post'],
         ...(trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
+        ...(parallelVersion === 1 && { parallelVersion: 1,
+          allowedOperations: ['http.post', 'native.parallel'] }),
       } : null;
     },
   };
@@ -113,6 +115,23 @@ test('native capability is pinned from IAM release, not caller input', async () 
     argument: { trustedGlobalsVersion: 1 },
   });
   assert.equal(Object.hasOwn(oldRelease.states.get(executionId), 'trustedGlobalsVersion'), false);
+});
+
+test('parallel capability is pinned by IAM release rather than caller input', async () => {
+  const active = fixture(undefined, 1);
+  await active.backend.maybeStart({
+    workflowName: 'NativePilot', userId: 'owner', projectId: 'tenant',
+    argument: { parallelVersion: 0, env: { parallelVersion: 0 } },
+  });
+  assert.equal(active.states.get(executionId).parallelVersion, 1);
+  assert.deepEqual(active.states.get(executionId).allowedOperations,
+    ['http.post', 'native.parallel']);
+  const legacy = fixture();
+  await legacy.backend.maybeStart({
+    workflowName: 'NativePilot', userId: 'owner', projectId: 'tenant',
+    argument: { parallelVersion: 1 },
+  });
+  assert.equal(Object.hasOwn(legacy.states.get(executionId), 'parallelVersion'), false);
 });
 
 test('unpublished workflows use the existing Google Workflows path unchanged', async () => {

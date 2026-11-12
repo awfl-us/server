@@ -84,6 +84,7 @@ jobs:
             workflows/native/executionApi.test.js \
             workflows/native/runner.test.js \
             workflows/native/forkCoordinator.test.js \
+            workflows/native/parallelIntegration.test.js \
             workflows/native/trustedGlobals.test.js \
             workflows/native/gcsReleases.test.js \
             workflows/native/backend.test.js \

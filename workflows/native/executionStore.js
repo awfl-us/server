@@ -39,6 +39,7 @@ const storedJson = (record, field) =>
 const hydrateState = state => state && ({
   ...state,
   input: storedJson(state, 'input'),
+  forkLane: storedJson(state, 'forkLane'),
   result: storedJson(state, 'result'),
   error: storedJson(state, 'error'),
   pendingEffect: state.pendingEffect && {
@@ -105,7 +106,7 @@ export class NativeExecutionStore {
          !/^[A-Za-z][A-Za-z0-9_-]{0,99}$/.test(workflowName))) {
       throw new Error('invalid pinned native workflow name');
     }
-    const allowed = new Set(['http.get', 'http.post', 'http.patch', 'http.delete', 'log.write']);
+    const allowed = new Set(['http.get', 'http.post', 'http.patch', 'http.delete', 'log.write', 'native.parallel']);
     if (allowedOperations !== undefined &&
         (!Array.isArray(allowedOperations) ||
          allowedOperations.some(op => !allowed.has(op)) ||
@@ -119,13 +120,21 @@ export class NativeExecutionStore {
     if (parallelVersion !== undefined && (parallelVersion !== 1 || protocolVersion !== 2)) {
       throw new Error('invalid pinned native parallel version');
     }
+    if (allowedOperations?.includes('native.parallel') && parallelVersion !== 1) {
+      throw new Error('parallel operation requires a pinned parallel-capable release');
+    }
+    if (parallelVersion === 1 && !allowedOperations?.includes('native.parallel')) {
+      throw new Error('parallel-capable release must authorize native.parallel');
+    }
     if (forkLane !== undefined) {
       if (parallelVersion !== 1 || !forkLane ||
           !/^native_[a-f0-9]{32}$/.test(forkLane.parentExecutionId || '') ||
+          !/^native_[a-f0-9]{32}$/.test(forkLane.rootExecutionId || '') ||
+          !Number.isSafeInteger(forkLane.depth) || forkLane.depth < 1 || forkLane.depth > 3 ||
           !/^[A-Za-z0-9_.-]{1,120}$/.test(forkLane.nodeId || '') ||
           !/^[A-Za-z0-9_.:-]{1,160}$/.test(forkLane.generation || '') ||
           !Number.isSafeInteger(forkLane.index) || forkLane.index < 0 || forkLane.index >= 10000 ||
-          !/^[A-Za-z0-9_.-]{1,120}$/.test(forkLane.entry || '') ||
+          !/^pc_(0|[1-9][0-9]{0,8})$/.test(forkLane.entry || '') ||
           !/^[a-f0-9]{64}$/.test(forkLane.snapshotSha256 || '') ||
           !forkLane.slots || typeof forkLane.slots !== 'object' ||
           Array.isArray(forkLane.slots)) {
@@ -152,10 +161,14 @@ export class NativeExecutionStore {
         ...(allowedOperations && { allowedOperations: [...allowedOperations] }),
         ...(trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
         ...(parallelVersion === 1 && { parallelVersion: 1 }),
-        ...(forkLane && { forkLane }),
+        ...(forkLane && { forkLane: null, forkLaneJson: JSON.stringify(forkLane) }),
         input: null, inputJson: JSON.stringify(input),
         status: 'ready', epoch: 0, owner: null, leaseUntil: 0,
-        checkpoint: null, pendingEffect: null, effectCount: 0, result: null,
+        checkpoint: forkLane ? {
+          next_step: Number(forkLane.entry.slice(3)),
+          slots: forkLane.slots, frames: [],
+        } : null,
+        pendingEffect: null, effectCount: 0, result: null,
         createdAt: now, updatedAt: now };
       tx.create(ref, state);
       return hydrateState(state);
@@ -351,7 +364,9 @@ export class NativeExecutionStore {
     id(effectId);
     if (!failure || typeof failure !== 'object' || Array.isArray(failure) ||
         typeof failure.message !== 'string' || failure.message.length > 256 ||
-        !Number.isSafeInteger(failure.code) || failure.code < 400 || failure.code > 599 ||
+        !(failure.code === null ||
+          (Number.isSafeInteger(failure.code) && failure.code >= 400 &&
+           failure.code <= 599)) ||
         Object.keys(failure).some(key => !['message', 'code'].includes(key))) {
       throw new Error('confirmed native effect failure required');
     }
@@ -367,6 +382,9 @@ export class NativeExecutionStore {
       if (!s.pendingEffect || s.pendingEffect.effectId !== effectId || !s.pendingEffect.onError) {
         throw conflict('effect was not prepared with a compiled error handler');
       }
+      if (failure.code === null && s.pendingEffect.operation !== 'native.parallel') {
+        throw conflict('non-HTTP failures require an authenticated native fork');
+      }
       const { fingerprint, onError } = s.pendingEffect;
       if (!s.checkpoint || !Number.isSafeInteger(s.checkpoint.next_step)) {
         throw conflict('missing native compiled continuation');
@@ -380,6 +398,29 @@ export class NativeExecutionStore {
         outcome: null, outcomeJson: JSON.stringify(failure), recordedAt: now });
       return { ...s, status: 'ready', pendingEffect: null, checkpoint,
         effectCount: (s.effectCount || 0) + 1 };
+    }, effectId);
+  }
+
+  /** A child with a durably recorded terminal failure may fail an uncaught
+    * parent fork atomically, while journaling the parent fork intent. This
+    * never handles uncertain child transport/effect outcomes.
+    */
+  async failPendingParallel({ executionId, workerId, epoch, effectId, error }) {
+    id(effectId);
+    requireValue(error, 'error');
+    enforceBytes(error, LIMIT.effectOutcome, 'native confirmed fork failure');
+    return this.mutate(executionId, workerId, epoch, (s, now, journal, tx, ref) => {
+      if (!s.pendingEffect || s.pendingEffect.operation !== 'native.parallel' ||
+          s.pendingEffect.effectId !== effectId || journal?.exists) {
+        throw conflict('confirmed parallel failure must match a pending fork');
+      }
+      tx.create(ref, {
+        effectId, fingerprint: s.pendingEffect.fingerprint, isError: true,
+        outcome: null, outcomeJson: JSON.stringify(error), recordedAt: now,
+      });
+      return { ...s, status: 'failed', pendingEffect: null,
+        error: null, errorJson: JSON.stringify(error),
+        owner: null, leaseUntil: 0, effectCount: (s.effectCount || 0) + 1 };
     }, effectId);
   }
 

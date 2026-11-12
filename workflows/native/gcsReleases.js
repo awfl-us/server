@@ -8,7 +8,7 @@ import { join } from 'node:path';
 
 const NAME = /^[A-Za-z][A-Za-z0-9_-]{0,99}$/;
 const SHA = /^[a-f0-9]{64}$/;
-const OPERATIONS = new Set(['http.get', 'http.post', 'http.patch', 'http.delete', 'log.write']);
+const OPERATIONS = new Set(['http.get', 'http.post', 'http.patch', 'http.delete', 'log.write', 'native.parallel']);
 const MAX_METADATA = 16 * 1024;
 const MAX_EXECUTABLE = 64 * 1024 * 1024;
 
@@ -25,6 +25,10 @@ function validateRelease(data, expectedName) {
       !SHA.test(data.artifactSha256 || '') ||
       data.protocolVersion !== 2 || data.runtimeAbi !== 3 ||
       (data.trustedGlobalsVersion !== undefined && data.trustedGlobalsVersion !== 1) ||
+      (data.parallelVersion !== undefined && data.parallelVersion !== 1) ||
+      (data.parallelVersion === 1) !==
+        (Array.isArray(data.allowedOperations) &&
+         data.allowedOperations.includes('native.parallel')) ||
       !Array.isArray(data.allowedOperations) ||
       data.allowedOperations.length > OPERATIONS.size ||
       data.allowedOperations.some(op => !OPERATIONS.has(op)) ||
@@ -37,6 +41,7 @@ function validateRelease(data, expectedName) {
     protocolVersion: 2,
     allowedOperations: Object.freeze([...data.allowedOperations]),
     ...(data.trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
+    ...(data.parallelVersion === 1 && { parallelVersion: 1 }),
   });
 }
 

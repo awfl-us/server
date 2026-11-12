@@ -73,6 +73,27 @@ test('IAM-published release capability enables globals without changing existing
   await assert.rejects(f.releases.active('Example'), /invalid IAM-published native release manifest/);
 });
 
+test('parallel capability requires a versioned IAM release mapping and exact allowed operation', async () => {
+  const f = fixture({
+    manifest: { ...metadata, parallelVersion: 1,
+      allowedOperations: ['http.post', 'native.parallel'] },
+  });
+  assert.deepEqual(await f.releases.active('Example'), {
+    workflowName: 'Example', sha256, protocolVersion: 2,
+    allowedOperations: ['http.post', 'native.parallel'], parallelVersion: 1,
+  });
+  for (const invalid of [
+    { ...metadata, allowedOperations: ['native.parallel'] },
+    { ...metadata, parallelVersion: 1 },
+    { ...metadata, parallelVersion: 2, allowedOperations: ['native.parallel'] },
+  ]) {
+    f.objects.set('native-workflows/active/Example.json',
+      Buffer.from(JSON.stringify(invalid)));
+    await assert.rejects(f.releases.active('Example'),
+      /invalid IAM-published native release manifest/);
+  }
+});
+
 test('only an absent active mapping falls back; permission errors never downgrade', async () => {
   const f = fixture();
   assert.equal(await f.releases.active('NotPublished'), null);

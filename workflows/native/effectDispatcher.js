@@ -1,7 +1,8 @@
 import { NativeConfirmedHttpFailure } from './effectErrors.js';
+import { NativeConfirmedParallelFailure } from './forkCoordinator.js';
 // Explicit effect execution boundary. Never dispatches an unknown operation or
 // retries an ambiguous external outcome automatically.
-const validOperations = new Set(['http.get', 'http.post', 'http.patch', 'http.delete', 'log.write']);
+const validOperations = new Set(['http.get', 'http.post', 'http.patch', 'http.delete', 'log.write', 'native.parallel']);
 
 export class NativeEffectDispatcher {
   constructor({ handlers, reconcile = {}, authorizeExecution }) {
@@ -55,6 +56,29 @@ export class NativeEffectDispatcher {
       throw new Error('native effect lease or intent changed during authorization');
     }
     const key = `${executionId}:${effectId}`;
+    const recordConfirmed = async error => {
+      const http = error instanceof NativeConfirmedHttpFailure;
+      const fork = error instanceof NativeConfirmedParallelFailure;
+      if (!http && !fork) throw error;
+      const failure = {
+        message: error.message, code: http ? error.status : null,
+      };
+      if (intent.onError) {
+        if (typeof store.recordEffectFailure !== 'function') throw error;
+        await store.recordEffectFailure({
+          executionId, workerId, epoch, effectId, failure,
+        });
+        return { status: 'failed_recorded', effectId, failure };
+      }
+      if (fork && typeof store.failPendingParallel === 'function') {
+        await store.failPendingParallel({
+          executionId, workerId, epoch, effectId, error: failure,
+        });
+        return { status: 'failed_recorded', effectId, failure };
+      }
+      // Unhandled confirmed HTTP failures keep their previous behavior.
+      throw error;
+    };
     // An effect prepared before a crash may already have reached the remote
     // system. Reconciliation is mandatory for an aged intent. No blind replay.
     if (state.epoch > 1 && intent.preparedAt < state.updatedAt) {
@@ -62,10 +86,18 @@ export class NativeEffectDispatcher {
       if (typeof reconcile !== 'function') {
         return { status: 'uncertain', effectId, reason: 'reconciliation required' };
       }
-      const observed = await reconcile({ intent, idempotencyKey: key, identity });
-      if (observed === undefined) return { status: 'uncertain', effectId, reason: 'remote outcome unknown' };
-      await store.recordEffect({ executionId, workerId, epoch, effectId, outcome: observed });
-      return { status: 'reconciled', effectId, outcome: observed };
+      try {
+        const observed = await reconcile({
+          args: intent.args, intent, idempotencyKey: key, identity,
+        });
+        if (observed === undefined) {
+          return { status: 'uncertain', effectId, reason: 'remote outcome unknown' };
+        }
+        await store.recordEffect({ executionId, workerId, epoch, effectId, outcome: observed });
+        return { status: 'reconciled', effectId, outcome: observed };
+      } catch (error) {
+        return recordConfirmed(error);
+      }
     }
     // Handlers must enforce their own network allowlist, auth and idempotency.
     // Any transport error leaves the prepared intent unresolved.
@@ -75,14 +107,9 @@ export class NativeEffectDispatcher {
         args: intent.args, idempotencyKey: key, identity,
       });
     } catch (error) {
-      if (!(error instanceof NativeConfirmedHttpFailure) ||
-          !intent.onError || typeof store.recordEffectFailure !== 'function') throw error;
-      // Only a definitive HTTP response with a compiled catch edge is safe
-      // to journal. Transport/reconciliation/policy errors stay unresolved.
-      const failure = { message: error.message, code: error.status };
-      await store.recordEffectFailure({ executionId, workerId, epoch, effectId,
-        failure });
-      return { status: 'failed_recorded', effectId, failure };
+      // A confirmed child terminal failure is safe to catch (or to fail an
+      // uncaught parent fork). Unknown/transport outcomes remain unresolved.
+      return recordConfirmed(error);
     }
     await store.recordEffect({ executionId, workerId, epoch, effectId, outcome });
     return { status: 'recorded', effectId, outcome };

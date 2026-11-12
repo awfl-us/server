@@ -1,14 +1,28 @@
-// Durable, bounded child scheduling for future native CFG fork/join.
-// NOT wired to the public launcher or effect dispatcher until a compiled
-// branch-entry protocol and parent effect journal are implemented.
+// Bounded native fork/join scheduler over the existing authenticated,
+// independently journaled native child execution records. Production routing
+// remains controlled by the release-pinned parallel capability and flag.
 import { createHash } from 'node:crypto';
 
 const EXECUTION = /^native_[a-f0-9]{32}$/;
 const NODE = /^[A-Za-z0-9_.-]{1,120}$/;
 const GENERATION = /^[A-Za-z0-9_.:-]{1,160}$/;
-const SELECTOR = /^[A-Za-z0-9_.-]{1,120}$/;
+const SELECTOR = /^pc_(0|[1-9][0-9]{0,8})$/;
 const SHA = /^[a-f0-9]{64}$/;
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+
+/** A durable child terminal failure is confirmed, unlike a transport
+  * timeout or an unresolved external effect. Only this error can propagate
+  * through the parent's statically compiled Try edge.
+  */
+export class NativeConfirmedParallelFailure extends Error {
+  constructor(error) {
+    const message = typeof error?.message === 'string'
+      ? error.message.slice(0, 256)
+      : 'native parallel branch failed';
+    super(message);
+    this.name = 'NativeConfirmedParallelFailure';
+  }
+}
 
 /** A lane identity is independent of the Scala label and input value. */
 export function forkLaneId({ parentExecutionId, nodeId, generation, index }) {
@@ -60,8 +74,12 @@ export class NativeForkCoordinator {
     parentFields(parent, effectId, nodeId);
     if (!GENERATION.test(generation || '') || !Array.isArray(lanes) ||
         lanes.length > this.maxLanes) throw new Error('native fork exceeds bounded lane limits');
+    const depth = (parent.forkLane?.depth || 0) + 1;
+    if (depth > 3) throw new Error('native nested fork depth exceeds supported limit');
+    const rootExecutionId = parent.forkLane?.rootExecutionId || parent.executionId;
     const results = Array(lanes.length);
     let cursor = 0, firstError;
+    const errors = [];
 
     const run = async () => {
       while (cursor < lanes.length && !firstError) {
@@ -76,8 +94,8 @@ export class NativeForkCoordinator {
             parentExecutionId: parent.executionId, nodeId, generation, index,
           });
           const forkLane = {
-            parentExecutionId: parent.executionId, nodeId, generation,
-            index, entry: lane.entry,
+            parentExecutionId: parent.executionId, rootExecutionId, depth,
+            nodeId, generation, index, entry: lane.entry,
             snapshotSha256: digest({ input: parent.input, slots: lane.slots, entry: lane.entry }),
             slots: lane.slots,
           };
@@ -107,17 +125,20 @@ export class NativeForkCoordinator {
               stored.forkLane?.generation !== generation ||
               stored.forkLane?.index !== index ||
               stored.forkLane?.parentExecutionId !== parent.executionId ||
+              stored.forkLane?.rootExecutionId !== rootExecutionId ||
+              stored.forkLane?.depth !== depth ||
               stored.forkLane?.entry !== lane.entry ||
               stored.executionId !== childId ||
               stored.userId !== parent.userId || stored.projectId !== parent.projectId ||
               stored.artifactSha256 !== parent.artifactSha256 ||
-              stored.forkLane?.snapshotSha256 !== forkLane.snapshotSha256 ||
-              stored.forkLane?.parentExecutionId !== parent.executionId ||
-              stored.forkLane?.index !== index || stored.forkLane?.entry !== lane.entry) {
+              stored.forkLane?.snapshotSha256 !== forkLane.snapshotSha256) {
             throw new Error('persisted native fork lane identity mismatch');
           }
-          if (stored.status === 'failed' || stored.status === 'cancelled') {
-            throw new Error('native fork lane failed or was cancelled');
+          if (stored.status === 'failed') {
+            throw new NativeConfirmedParallelFailure(stored.error);
+          }
+          if (stored.status === 'cancelled') {
+            throw new Error('native fork lane was cancelled');
           }
           if (stored.status !== 'completed') {
             await this.runLane({ executionId: childId, userId: parent.userId,
@@ -125,17 +146,24 @@ export class NativeForkCoordinator {
               nodeId, generation, index });
             stored = await this.store.get(childId);
           }
+          if (stored?.status === 'failed') {
+            throw new NativeConfirmedParallelFailure(stored.error);
+          }
           if (stored?.status !== 'completed') {
             throw new Error('native fork lane has no durable completed result');
           }
           results[index] = stored.result;
         } catch (error) {
+          errors.push(error);
           firstError ||= error; // Allow already-running siblings to settle.
         }
       }
     };
     await Promise.all(Array.from({ length: Math.min(this.maxConcurrency, lanes.length) }, run));
-    if (firstError) throw firstError;
+    // An unresolved remote outcome in ANY already-running sibling is more
+    // serious than a confirmed failure elsewhere. Never catch/erase it.
+    if (firstError) throw errors.find(error =>
+      !(error instanceof NativeConfirmedParallelFailure)) || firstError;
     return results; // Input order, not completion order.
   }
 }

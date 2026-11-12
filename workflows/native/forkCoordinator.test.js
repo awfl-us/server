@@ -36,9 +36,9 @@ function fixture(worker) {
 const args = () => ({
   parent: parent(), effectId: 'parallel_node_0', nodeId: '0.5', generation: '0.5_3',
   lanes: [
-    { entry: 'branch0', slots: { s0: { type: 'string', value: 'snapshot' } } },
-    { entry: 'branch1', slots: { s0: { type: 'string', value: 'snapshot' } } },
-    { entry: 'branch2', slots: { s0: { type: 'string', value: 'snapshot' } } },
+    { entry: 'pc_3', slots: { s0: { type: 'string', value: 'snapshot' } } },
+    { entry: 'pc_4', slots: { s0: { type: 'string', value: 'snapshot' } } },
+    { entry: 'pc_5', slots: { s0: { type: 'string', value: 'snapshot' } } },
   ],
 });
 
@@ -76,6 +76,8 @@ test('two lanes genuinely overlap; bounded scheduler returns input-order results
   assert.deepEqual(await f.coordinator.execute(args()), ['result-0', 'result-1', 'result-2']);
   assert.equal(entered, 3, 'durably completed children never run again');
   assert.equal(f.creates[0].forkLane.parentExecutionId, parentId);
+  assert.equal(f.creates[0].forkLane.rootExecutionId, parentId);
+  assert.equal(f.creates[0].forkLane.depth, 1);
   assert.equal(f.creates[0].trustedGlobalsVersion, 1);
   assert.equal(f.creates[0].projectId, 'tenant-project');
 });
@@ -100,6 +102,6 @@ test('rejects untrusted forks, replay with different slot snapshot, and uncommit
   await assert.rejects(f.coordinator.execute({ ...args(), lanes: [{ entry: '../bad', slots: {} }] }), /invalid compiled/);
   await assert.rejects(f.coordinator.execute({ ...args(), lanes: args().lanes.slice(0, 1) }), /no durable completed result/);
   await assert.rejects(f.coordinator.execute({
-    ...args(), lanes: [{ entry: 'branch0', slots: { s0: { type: 'string', value: 'changed' } } }],
+    ...args(), lanes: [{ entry: 'pc_3', slots: { s0: { type: 'string', value: 'changed' } } }],
   }), /identity mismatch/);
 });
