@@ -8,7 +8,7 @@ developer tooling changes:
 | --- | --- | --- |
 | `lightweight` | `lightweight` | Python, Node, Git, gh, gcloud |
 | `browser` | `browser` | Chromium and Playwright |
-| `scala` (default) | `scala` | Java 21, sbt 1.11.0, Rust/Cargo 1.99.1, Rustfmt, Clippy, GCC, musl cross-linker |
+| `scala` | `scala` | Java 21, sbt 1.11.0, Rust/Cargo 1.99.1, Rustfmt, Clippy, GCC, musl cross-linker |
 
 The existing Terraform-managed Artifact Registry `app` repository stores all
 three; no new registry, cluster, service account, or consumer startup path is
@@ -22,12 +22,12 @@ To select a profile, use the AWFL web start dropdown, submit
 `image_profile="scala"` to MCP `workspace_create` when attaching to a project.
 Call `GET /workflows/producer/images` to inspect published options.
 
-New shared project consumers default to **Scala** with a 4 GiB ephemeral
-storage request and limit (equal values for GKE Autopilot admission). The
-previous lightweight default was limited to 1 GiB, resulting in an actual
-pod eviction during native compiler development. Lightweight and browser
-remain explicit opt-ins. Existing consumers are never replaced or restarted
-silently; the change applies to the next newly created consumer.
+New shared project consumers require an **explicit image profile**; no image
+is chosen silently. Scala has a 4 GiB ephemeral storage request and limit
+(equal values for GKE Autopilot admission). Lightweight has a 1 GiB limit,
+which caused an actual pod eviction during native compiler development.
+Existing consumers are never replaced or restarted silently. MCP attachment
+to an existing consumer may omit the image choice; creating a new one cannot.
 
 An already-running project consumer always stays on its existing image. Stop
 the shared consumer before changing profiles; stopping interrupts other

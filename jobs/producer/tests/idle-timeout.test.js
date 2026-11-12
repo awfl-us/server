@@ -20,10 +20,10 @@ test('new consumer accepts override, existing shared consumer retains its own ti
     calls.push(args);
     return { status: 202, body: { ok: true, consumerId: 'launched' } };
   };
-  await ensureProjectConsumer({ userId: 'owner', projectId: 'repo', idleTimeoutSeconds: 1800 }, {
+  await ensureProjectConsumer({ userId: 'owner', projectId: 'repo', idleTimeoutSeconds: 1800, imageProfile: 'scala' }, {
     getLock: async () => ({ lock: null }), start,
   });
-  assert.deepEqual(calls, [{ userId: 'owner', projectId: 'repo', body: { idleTimeoutSeconds: 1800 } }]);
+  assert.deepEqual(calls, [{ userId: 'owner', projectId: 'repo', body: { idleTimeoutSeconds: 1800, imageProfile: 'scala' } }]);
   await ensureProjectConsumer({ userId: 'owner', projectId: 'repo', idleTimeoutSeconds: 1800 }, {
     getLock: async () => ({ lock: { consumerId: 'existing', expiresAt: Date.now() + 60000 } }), start,
   });
