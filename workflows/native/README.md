@@ -3,6 +3,19 @@
 **Current server execution plan — November 12, 2026:**
 [real-workflow pilot and benchmark](https://github.com/awfl-us/compiler-rust/blob/feat/native-parallel-durable/docs/real-workflow-pilot-and-benchmark-plan.md).
 That plan supersedes the historical numbered gate lists later in this README.
+The first **live Google transport baseline** now uses the newer deployed
+`AwflApiProbeDev`: `GET /health` with OIDC returned HTTP **200** / `OK`,
+**739 ms** end-to-end in one November 12 execution (not a distribution).
+`LoadConversationHistory` dates to 2025; keep it as a compiled Rust and
+effect-journal regression fixture, not the principal workload benchmark.
+The first live Google invocation of that old workflow returned **400**
+because its Jobs handler read `body.userId` *after* `workflowsUserInject`
+stripped it. That handler now uses `req.userId`, matching current native,
+producer, callback and usage Jobs handlers. Legacy Firebase/exec handlers
+still have explicit fallback lookup. The CI tests include both the actual
+Cloud Tasks protobuf deadline encoding and the synthetic empty import case.
+Terraform/IAM remain owned by the existing server native-execution and
+workflows roots; no manual grant to GKE dev identities is needed.
 The immediate milestone is to run one **unchanged** workflow through the
 authenticated Workflows service -> Cloud Tasks -> IAM Jobs -> pinned GCS ELF
 -> Firestore path, in an isolated test deployment with routing rollback;

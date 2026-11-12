@@ -4,10 +4,14 @@ on:
   pull_request:
     paths:
       - 'workflows/native/**'
+      - 'jobs/loadConvoHistory.js'
+      - 'jobs/loadConvoHistory.test.js'
       - '.github/workflows/test-native-try.yml'
   push:
     paths:
       - 'workflows/native/**'
+      - 'jobs/loadConvoHistory.js'
+      - 'jobs/loadConvoHistory.test.js'
       - '.github/workflows/test-native-try.yml'
 
 jobs:
@@ -139,6 +143,7 @@ jobs:
         run: |
           set -euo pipefail
           node --test \
+            jobs/loadConvoHistory.test.js \
             workflows/native/effectDispatcher.test.js \
             workflows/native/executionStore.test.js \
             workflows/native/executionApi.test.js \
