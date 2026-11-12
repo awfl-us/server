@@ -22,6 +22,12 @@ jobs:
           repository: awfl-us/compiler-rust
           ref: 2bbb33f6e8d9ac9d761c54baa7b8b36fd814a286
           path: _compiler-rust
+      - name: Checkout unchanged production workflow definition
+        uses: actions/checkout@v4
+        with:
+          repository: awfl-us/workflows
+          ref: 59ed80232d8e742fcc6f4520199f56fe5bbd4d19
+          path: _workflows
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -106,6 +112,29 @@ jobs:
                   assert binary.is_file(), binary
                   f.write(f'{key}={binary}\n')
           PYTHON
+      - name: Compile and build unchanged production LoadConversationHistory
+        run: |
+          set -euo pipefail
+          cd _compiler-rust/frontend
+          sbt -batch \
+            'set Test / unmanagedSources += file("../../_workflows/src/main/scala/us/awfl/workflows/LoadConversationHistory.scala")' \
+            'Test / runMain us.awfl.compiler.rust.RealWorkflowSmoke'
+          cd ../..
+          crate=_compiler-rust/fixtures/real-load-history/LoadConversationHistory/Cargo.toml
+          cargo build --manifest-path "$crate" --target-dir "$RUNNER_TEMP/native-real-target"
+          python3 - <<'PYTHON'
+          import os
+          from pathlib import Path
+          import tomllib
+          crate = Path('_compiler-rust/fixtures/real-load-history/LoadConversationHistory/Cargo.toml')
+          with crate.open('rb') as source:
+              binary_name = tomllib.load(source)['package']['name']
+          binary = (Path(os.environ['RUNNER_TEMP']) / 'native-real-target/debug' / binary_name).resolve()
+          assert binary.is_file(), binary
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as output:
+              output.write(f'AWFL_NATIVE_REAL_WORKFLOW_BINARY={binary}\n')
+              output.write('AWFL_NATIVE_REAL_WORKFLOW_REQUIRED=1\n')
+          PYTHON
       - name: Node native effects, persistence and real Rust continuation tests
         run: |
           set -euo pipefail
@@ -117,6 +146,7 @@ jobs:
             workflows/native/forkCoordinator.test.js \
             workflows/native/nestedForkFencing.test.js \
             workflows/native/parallelIntegration.test.js \
+            workflows/native/realWorkflowIntegration.test.js \
             workflows/native/trustedGlobals.test.js \
             workflows/native/gcsReleases.test.js \
             workflows/native/backend.test.js \

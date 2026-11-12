@@ -1,5 +1,28 @@
 # Native Rust workflow execution (experimental, opt-in)
 
+**Scope decision (November 12, 2026): keep native parallel execution simple.**
+The worker uses its existing **process-local, eight-permit FIFO budget** for
+Rust subprocess invocations and external effects; nested fork coordinators
+do not hold permits while awaiting children. Child execution records,
+lease-epoch fencing, checkpoint persistence, effect journals and idempotent
+join/recovery remain intact. The experimental Firestore distributed-permit
+implementation was reverted because no parallel branches are scheduled on
+independent Jobs processes today. Neither fleet-wide quotas nor orphan
+garbage collection is a prerequisite for this implementation's next milestone;
+revisit them only if the actual execution architecture or operating evidence
+requires them. This does **not** replace the existing per-execution worker
+lease, which protects crash recovery.
+
+**Next milestone: run real unchanged workflows.** The server CI now compiles
+the pinned original `LoadConversationHistory.scala` through compiler-rust,
+builds the resulting Rust executable, and runs it through `runNativeWorkflow`
+with a simulated HTTP adapter. This checks server-pinned identity, exact
+HTTP arguments, persistent effect journaling, final result and replay without
+duplicate dispatch. Local verification: **68 passed / 29 skipped / 0 failed**
+in the complete native Node suite with the real-workflow ELF supplied. The
+test does not contact real APIs or measure Google Workflows.
+Native routing remains off until a controlled live canary and parity tests.
+
 **Verification checkpoint (November 11, 2026).** Compiler-rust PRs #1–#7
 and server PRs #72/#78/#79 are **merged**; PR #7 fixes catch-only CFG and
 PR #79 adds restricted `log.write`, capability gates and real Rust/Node error
