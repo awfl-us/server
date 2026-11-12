@@ -71,3 +71,36 @@ test('failed native Jobs worker returns retriable error without exposing details
   assert.equal(res.body.error, 'Native execution unavailable');
   assert.equal(JSON.stringify(res.body).includes('sensitive'), false);
 });
+
+test('opt-in native timing leaves HTTP payload unchanged and uses scoped IDs only', async () => {
+  const original = process.env.AWFL_NATIVE_PROFILE_ENABLED;
+  process.env.AWFL_NATIVE_PROFILE_ENABLED = '1';
+  const messages = [];
+  const originalInfo = console.info;
+  console.info = value => messages.push(value);
+  try {
+    const id = 'native_' + 'c'.repeat(32);
+    const app = appFor({
+      store: { get: async () => true },
+      releases: { materialize: async () => true },
+      handlers: { 'http.get': async () => ({ code: 200 }) },
+      execute: async ({ store, releases, handlers }) => {
+        await store.get(); await releases.materialize();
+        await handlers['http.get']({ payloadMarker: 'test_input_marker' });
+        return { done: true };
+      },
+    });
+    const res = await request(app).post('/native/execute').send({ executionId: id });
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body, { state: 'SUCCEEDED', result: { done: true } });
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].executionId, id);
+    assert.equal(messages[0].outcome, 'completed');
+    assert.equal(messages[0].phases['firestore.get'].count, 1);
+    assert.equal(JSON.stringify(messages).includes('test_input_marker'), false);
+  } finally {
+    console.info = originalInfo;
+    if (original === undefined) delete process.env.AWFL_NATIVE_PROFILE_ENABLED;
+    else process.env.AWFL_NATIVE_PROFILE_ENABLED = original;
+  }
+});

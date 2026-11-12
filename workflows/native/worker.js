@@ -38,6 +38,7 @@ export async function runNativeWorkflow({
   handlers, workerId = 'worker_' + randomUUID().replaceAll('-', ''),
   maxTransitions = 120, sharedArtifact = null, parallelDepth = 0,
   executionBudget = null,
+  profiler = null,
 }) {
   const initial = await store.get(executionId);
   if (!initial || initial.userId !== userId ||
@@ -104,6 +105,7 @@ export async function runNativeWorkflow({
             sharedArtifact: artifact, maxTransitions,
             parallelDepth: parallelDepth + 1,
             executionBudget: withBudget,
+            profiler,
           });
         },
       });
@@ -134,11 +136,14 @@ export async function runNativeWorkflow({
       }),
     });
     for (let i = 0; i < maxTransitions; i++) {
-      const outcome = await withBudget(() => executeNativeStep({
+      const transition = () => withBudget(() => executeNativeStep({
         store, executionId, workerId,
         executable: artifact.executable, sha256: artifact.sha256,
         allowedOperations: initial.allowedOperations,
+        profiler,
       }));
+      const outcome = profiler ? await profiler.measure('runner.transition', transition)
+        : await transition();
       if (outcome.status === 'completed' || outcome.completed) {
         return outcome.result;
       }
@@ -162,8 +167,10 @@ export async function runNativeWorkflow({
         store, executionId, workerId, epoch: state.epoch,
         effectId: outcome.effectId,
       });
-      const effect = state.pendingEffect?.operation === 'native.parallel'
-        ? await dispatch() : await withBudget(dispatch);
+      const effectDispatch = () => state.pendingEffect?.operation === 'native.parallel'
+        ? dispatch() : withBudget(dispatch);
+      const effect = profiler ? await profiler.measure('dispatcher.total', effectDispatch)
+        : await effectDispatch();
       if (effect.status === 'uncertain') {
         // No automatic replay for an effect with an uncertain remote outcome.
         throw new Error('native effect reconciliation required');
