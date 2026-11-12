@@ -1,44 +1,5 @@
 # Native Rust workflow execution (experimental, opt-in)
 
-## November 12: distributed native fork admission (draft server PR #82)
-
-Parallel workflows now enforce the **same eight-slot limit per root execution
-across independent Jobs/Node processes**, not only within one process.
-`distributedBudget.js` wraps the existing in-process FIFO semaphore with
-Firestore transactions in `NativeExecutionStore.tryAcquirePermit`,
-`renewPermit` and `releasePermit`. Each root owns at most eight fixed
-`<execution collection>PermitSlots` documents; each slot is a separate
-compare-and-swap lease, avoiding one global counter document. Admission
-checks the persisted root's authenticated user/project, pinned parallel
-version, nonterminal status and root identity **in the same transaction**.
-The worker creates this budget once, shares it with recursively created
-children, and does **not** reserve a permit for a fork coordinator while its
-children execute, preventing nested-fork deadlocks. Pure/nonparallel execution
-and status/cancellation reads do not touch the permit collection.
-
-Each admitted unit of actual work holds a 120-second lease, renewed every
-10 seconds. An acquisition waits at most 120 seconds before failing closed.
-Every claim increments a durable epoch; a dead worker's expired slot is
-reclaimable, but stale workers cannot renew or release the successor's slot.
-The worker checks renewal failures before returning its operation result and
-exposes an AbortSignal to cooperative callbacks. This is **admission control,
-not a guarantee of OS-level preemption**: an unresponsive process or an HTTP
-request already sent may continue briefly after permit expiry. Such ambiguous
-effects must still follow the existing reconciliation policy; no automatic
-retry is made. The worker's own execution lease remains a separate fence.
-
-Verified locally: **7/7** dedicated permit tests (eight-slot contention,
-authentication, root cancellation, crash/epoch takeover, heartbeat renewal,
-timeout, fail-closed signal), **8/8** real Firestore emulator tests (including
-two independent Node processes racing for one slot and a crashed holder), and
-the full native Node suite **72 passed / 32 skipped / 0 failed** (emulator
-cases skipped only there because they were run separately). The emulator
-suite also exercises the actual compiler-generated three-level Rust fork.
-Remaining limitations: eventual cleanup of terminal execution permit records,
-unresponsive external effects, distributed Jobs fleet-wide limits across
-**different** root executions, production Cloud Tasks canary, and differential
-Google/YAML parity. Normal native routing is **still disabled**.
-
 **Verification checkpoint (November 11, 2026).** Compiler-rust PRs #1–#7
 and server PRs #72/#78/#79 are **merged**; PR #7 fixes catch-only CFG and
 PR #79 adds restricted `log.write`, capability gates and real Rust/Node error

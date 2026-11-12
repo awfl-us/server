@@ -115,7 +115,6 @@ jobs:
             workflows/native/executionApi.test.js \
             workflows/native/runner.test.js \
             workflows/native/forkCoordinator.test.js \
-            workflows/native/distributedBudget.test.js \
             workflows/native/nestedForkFencing.test.js \
             workflows/native/parallelIntegration.test.js \
             workflows/native/trustedGlobals.test.js \
