@@ -40,6 +40,11 @@ export async function startProjectConsumer({ userId, projectId, body = {} }) {
     // Optional explicit GCS prefix to pass to producer/consumer
     const gcsPrefix = String(body.gcsPrefix || body.gcs_prefix || '').trim();
 
+    // Only new GKE consumers use the named image profiles. Keep the legacy
+    // Cloud Run and local Docker startup paths backwards compatible.
+    const localDocker = Boolean(body.localDocker || process.env.PRODUCER_LOCAL_DOCKER);
+    const platform = (String(body.platform || process.env.PRODUCER_PLATFORM || 'gke') || 'gke').toLowerCase();
+
     // Optional consumer image override (for local sidecar, Cloud Run, or GKE consumer)
     const requestedConsumerImage = String(body.image || '').trim();
     if (requestedConsumerImage && /\s|["'`]/.test(requestedConsumerImage)) {
@@ -47,9 +52,14 @@ export async function startProjectConsumer({ userId, projectId, body = {} }) {
     }
     const requestedImageProfile = body.imageProfile ?? body.image_profile;
     try {
-      if (requestedImageProfile !== undefined) normalizeImageProfile(requestedImageProfile);
       if (requestedConsumerImage && requestedImageProfile !== undefined) {
         return { status: 400, body: { error: 'Choose either image or imageProfile, not both' } };
+      }
+      // A supplied explicit custom image is an advanced alternative to a
+      // named profile. Fail before allocating a lock or other GCP resources.
+      if (requestedImageProfile !== undefined) normalizeImageProfile(requestedImageProfile);
+      if (!localDocker && platform === 'gke' && !requestedConsumerImage) {
+        normalizeImageProfile(requestedImageProfile);
       }
     } catch (error) {
       return { status: 400, body: { error: error.message } };
@@ -73,7 +83,6 @@ export async function startProjectConsumer({ userId, projectId, body = {} }) {
       }
     }
 
-    const localDocker = Boolean(body.localDocker || process.env.PRODUCER_LOCAL_DOCKER);
     const localDockerImage = String(body.localDockerImage || process.env.PRODUCER_LOCAL_IMAGE || '').trim();
 
     const baseCtx = buildBaseContext({ body, localDocker });
@@ -146,7 +155,6 @@ export async function startProjectConsumer({ userId, projectId, body = {} }) {
     }
 
     // Determine platform: default to GKE
-    const platform = (String(body.platform || process.env.PRODUCER_PLATFORM || 'gke') || 'gke').toLowerCase();
 
     // Cloud Run path (owns Pub/Sub: topic + req/resp subscriptions)
     if (platform === 'cloud-run') {
@@ -268,6 +276,9 @@ export async function ensureProjectConsumer({ userId, projectId, idleTimeoutSeco
     return { state: 'attached', consumerId: lock.consumerId,
       ...(activeProfile ? { imageProfile: activeProfile } : {}) };
   }
+  // Attachment to an existing consumer is deliberately allowed without an
+  // image. A new consumer has no fallback and must be explicitly chosen.
+  normalizeImageProfile(imageProfile);
   const result = await start({
     userId, projectId,
     ...(idleTimeoutSeconds !== undefined || imageProfile !== undefined ? { body: {

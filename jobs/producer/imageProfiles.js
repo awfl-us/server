@@ -1,8 +1,7 @@
 // Controlled consumer image catalog. All variants contain the same AWFL CLI,
 // startup entrypoint, lock protocol and credential refresh functionality.
-// Prefer the complete development toolchain for new shared project consumers.
-// An already-running consumer retains its pinned image until explicitly stopped.
-export const DEFAULT_IMAGE_PROFILE = 'scala';
+// New consumers require an explicit profile. Existing running consumers keep
+// their pinned image when another session attaches without choosing one.
 
 const profiles = [
   { id: 'lightweight', label: 'Lightweight', description: 'Python, Node, Git, GitHub CLI and gcloud. Fastest and smallest environment.', env: 'CONSUMER_K8S_IMAGE' },
@@ -11,7 +10,10 @@ const profiles = [
 ];
 
 export function normalizeImageProfile(value) {
-  const profile = value == null || value === '' ? DEFAULT_IMAGE_PROFILE : String(value);
+  if (value == null || value === '') {
+    throw new Error('imageProfile is required when starting a new consumer');
+  }
+  const profile = String(value);
   if (!profiles.some(item => item.id === profile)) {
     throw new Error(`Unknown image profile: ${profile}. Choose lightweight, browser, or scala.`);
   }
@@ -20,7 +22,7 @@ export function normalizeImageProfile(value) {
 
 export function consumerImageCatalog(env = process.env) {
   return {
-    default: DEFAULT_IMAGE_PROFILE,
+    default: null,
     profiles: profiles.map(({ id, label, description, env: key }) => ({
       id, label, description, available: Boolean(env[key]),
     })),
@@ -28,13 +30,13 @@ export function consumerImageCatalog(env = process.env) {
 }
 
 export function resolveConsumerImage({ imageProfile, imageOverride, env = process.env } = {}) {
-  const profile = normalizeImageProfile(imageProfile);
   // Existing local/advanced image override remains supported, but is mutually
   // exclusive with a named profile to prevent accidental silent overrides.
   if (imageOverride) {
     if (imageProfile != null && imageProfile !== '') throw new Error('Choose either image or imageProfile, not both');
     return { image: imageOverride, imageProfile: null };
   }
+  const profile = normalizeImageProfile(imageProfile);
   const entry = profiles.find(item => item.id === profile);
   const image = env[entry.env];
   if (!image) throw new Error(`The ${profile} image is not published/configured (${entry.env})`);
