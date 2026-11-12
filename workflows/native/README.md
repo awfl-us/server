@@ -161,6 +161,28 @@ The public Google execution path must remain available for existing runs.
 For phase owners/gates and exact feature matrix use the compiler's
 [current-state-and-roadmap.md](https://github.com/awfl-us/compiler-rust/blob/main/docs/current-state-and-roadmap.md).
 
+## Authenticated native execution identity
+
+An ABI 3 / protocol-v2 native binary now accepts a bounded
+`trusted_globals` field containing the four built-in Google Workflows
+identity values. The Jobs runner derives these **only** from the persisted
+execution's immutable name/ID and server-owned `GCP_PROJECT` (or
+`GCLOUD_PROJECT`) and `WORKFLOWS_LOCATION`. It deliberately never
+uses the AWFL tenant `projectId` or caller-provided `input.env` as
+authority for those values. This is separate from ordinary workflow
+input and from the already-journaled result slots.
+
+The Rust program does not authenticate requests itself: that must remain
+the Workflows API -> IAM/OIDC Jobs -> owner-matched Firestore execution
+boundary. A deployed Jobs runtime without a configured Google project
+does not claim to provide trusted built-ins; generated code requiring
+them fails closed. No service-account credentials or secret environment
+values are forwarded to the ELF, and production native routing remains
+opt-in and disabled by default. The companion compiler-rust change
+validates the four keys and allows `sys.get_env` only for these built-ins
+plus explicit string defaults. Unknown environment lookups cannot read
+the process environment.
+
 ## Opt-in CFG state machine (runtime ABI 3, IPC protocol 2)
 
 `compiler-rust` emits one generalized CFG backend via
