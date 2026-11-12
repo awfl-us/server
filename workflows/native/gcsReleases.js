@@ -24,6 +24,7 @@ function validateRelease(data, expectedName) {
       data.schemaVersion !== 1 || data.workflowName !== expectedName ||
       !SHA.test(data.artifactSha256 || '') ||
       data.protocolVersion !== 2 || data.runtimeAbi !== 3 ||
+      (data.trustedGlobalsVersion !== undefined && data.trustedGlobalsVersion !== 1) ||
       !Array.isArray(data.allowedOperations) ||
       data.allowedOperations.length > OPERATIONS.size ||
       data.allowedOperations.some(op => !OPERATIONS.has(op)) ||
@@ -35,6 +36,7 @@ function validateRelease(data, expectedName) {
     sha256: data.artifactSha256,
     protocolVersion: 2,
     allowedOperations: Object.freeze([...data.allowedOperations]),
+    ...(data.trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
   });
 }
 
