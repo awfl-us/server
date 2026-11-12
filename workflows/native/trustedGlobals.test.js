@@ -58,7 +58,7 @@ test('trusted native worker passes separate globals through real verified subpro
     const state = {
       executionId, workflowName: 'TestWorkflow',
       userId: 'owner', projectId: 'tenant-project',
-      protocolVersion: 2, epoch: 9, artifactSha256: sha256,
+      protocolVersion: 2, trustedGlobalsVersion: 1, epoch: 9, artifactSha256: sha256,
       input: callerInput, checkpoint: null, pendingEffect: null,
     };
     let persisted;
@@ -77,6 +77,21 @@ test('trusted native worker passes separate globals through real verified subpro
     assert.equal(result.result.protocol_version, 2);
     assert.equal(persisted.epoch, 9);
     assert.deepEqual(persisted.result, result.result);
+    // The same ABI 3/protocol v2 but older release does not declare the
+    // capability. Old binaries' deny_unknown_fields Request must still work.
+    const legacyState = { ...state, trustedGlobalsVersion: undefined };
+    const legacyStore = {
+      claim: async () => legacyState,
+      complete: async () => {},
+    };
+    const legacy = await executeNativeStep({
+      store: legacyStore, executionId, workerId: 'legacy_worker',
+      executable, sha256,
+      gcpProject: 'trusted-gcp-project', region: 'us-central1',
+    });
+    assert.equal(legacy.status, 'completed');
+    assert.equal(Object.hasOwn(legacy.result, 'trusted_globals'), false);
+    assert.deepEqual(legacy.result.input, callerInput);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
