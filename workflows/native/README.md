@@ -17,12 +17,13 @@ The compiled parent `Try` catches only confirmed child failures; uncertain
 remote outcomes remain unresolved. The in-process per-root permit budget
 bounds nested worker activity, but is not a distributed/global Jobs quota.
 The compiled-binary integration suite uses a transaction-shaped Firestore
-substitute. **An additional three real local Firestore emulator tests now pass**
+substitute. **An additional four real local Firestore emulator tests now pass**
 using the same generated Rust ELF and real Firestore transactions: two
 overlapping child effects with fresh-store replay; a crash after both child
 effects are committed but before the parent journal, recovered by a new store
-after lease expiry; and parent cancellation that fences its join and duplicate
-delivery. These do **not** prove recursive sibling cancellation, true
+after lease expiry; indexed `ParallelFor` with zero, one and multiple items;
+and parent cancellation that fences its join and duplicate delivery. A
+separate concurrent worker cannot claim the still-leased parent. These do **not** prove recursive sibling cancellation, true
 cross-process takeover, or deployed Cloud Tasks/Jobs behavior. Distributed
 concurrency admission, realistic workflow parity and live canary testing
 remain gates. Native production routing stays off.
@@ -31,7 +32,8 @@ The emulator test is `workflows/native/parallelFirestore.emulator.test.js`,
 configured by `workflows/native/firebase.parallel-emulator.json` and now
 included as a separate step in `test-native-try.yml`. It runs with Firebase
 CLI `13.35.1`, the demo-only `demo-awfl-native` project, the generated
-`AWFL_NATIVE_PARALLEL_BRANCHES_BINARY` executable and
+`AWFL_NATIVE_PARALLEL_BRANCHES_BINARY` and
+`AWFL_NATIVE_PARALLEL_FOR_BINARY` executables, and
 `AWFL_NATIVE_FIRESTORE_PARALLEL_REQUIRED=1` (so CI cannot accidentally skip
 the tests). It does not call real HTTP endpoints.
 

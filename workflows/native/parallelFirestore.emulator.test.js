@@ -11,9 +11,10 @@ import { NativeExecutionStore } from './executionStore.js';
 import { runNativeWorkflow } from './worker.js';
 
 const binary = process.env.AWFL_NATIVE_PARALLEL_BRANCHES_BINARY;
+const eachBinary = process.env.AWFL_NATIVE_PARALLEL_FOR_BINARY;
 const enabled = Boolean(binary && process.env.FIRESTORE_EMULATOR_HOST);
-if (process.env.AWFL_NATIVE_FIRESTORE_PARALLEL_REQUIRED === '1' && !enabled) {
-  throw new Error('real parallel Firestore tests require emulator host and compiled Rust binary');
+if (process.env.AWFL_NATIVE_FIRESTORE_PARALLEL_REQUIRED === '1' && (!enabled || !eachBinary)) {
+  throw new Error('real parallel Firestore tests require emulator host and both compiled Rust binaries');
 }
 const app = enabled ? initializeApp({ projectId: 'demo-awfl-native' },
   'parallel-emulator-' + randomUUID()) : null;
@@ -23,20 +24,20 @@ after(async () => {
   if (app) await deleteApp(app);
 });
 
-async function fixture({ handlers, clock }) {
-  const artifactSha256 = createHash('sha256').update(await readFile(binary)).digest('hex');
+async function fixture({ handlers, clock, executable = binary, input = null }) {
+  const artifactSha256 = createHash('sha256').update(await readFile(executable)).digest('hex');
   const collection = 'nativeParallelEmulator_' + randomUUID().replaceAll('-', '');
   const executionId = 'native_' + randomUUID().replaceAll('-', '');
   const store = new NativeExecutionStore({ db, collection, ...(clock && { clock }) });
   const userId = 'parallel-emulator-owner', projectId = 'parallel-emulator-project';
   await store.create({
     executionId, userId, projectId, workflowName: 'NativeParallelEmulator',
-    artifactSha256, input: null, protocolVersion: 2, parallelVersion: 1,
+    artifactSha256, input, protocolVersion: 2, parallelVersion: 1,
     allowedOperations: ['native.parallel', 'http.post'],
   });
   const releases = { materialize: async digest => {
     assert.equal(digest, artifactSha256);
-    return { executable: binary, sha256: artifactSha256, cleanup: async () => {} };
+    return { executable, sha256: artifactSha256, cleanup: async () => {} };
   } };
   const makeStore = () => new NativeExecutionStore({
     db, collection, ...(clock && { clock }),
@@ -70,6 +71,8 @@ test('emulator + real Rust: siblings overlap, fork joins once, and a new store r
       await Promise.race([started, new Promise((_, reject) => {
         watchdog = setTimeout(() => reject(new Error('emulator siblings serialized')), 30_000);
       })]);
+      await assert.rejects(f.execute(f.makeStore()), /lease held/,
+        'independent duplicate Jobs delivery cannot steal the parent lease');
     } finally {
       clearTimeout(watchdog);
       release();
@@ -112,6 +115,18 @@ test('emulator + real Rust: crash after child commit recovers parent join withou
     const final = await f.makeStore().get(f.executionId);
     assert.equal(final.status, 'completed');
     assert.equal(final.effectCount, 1);
+  });
+
+test('emulator + real Rust ParallelFor: empty, singleton and indexed multi-item joins',
+  { skip: !enabled || !eachBinary, timeout: 120_000 }, async () => {
+    for (const input of [[], ['one'], ['third', 'first', 'second']]) {
+      const f = await fixture({ executable: eachBinary, input, handlers: {} });
+      assert.deepEqual(await f.execute(), input);
+      const state = await f.makeStore().get(f.executionId);
+      assert.equal(state.status, 'completed');
+      assert.equal(state.effectCount, 1);
+      assert.deepEqual(await f.execute(f.makeStore()), input);
+    }
   });
 
 test('emulator + real Rust: cancelling the root fences its pending join and re-delivery',
