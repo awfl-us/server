@@ -14,6 +14,7 @@ import { initializeApp, deleteApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { NativeExecutionStore } from './executionStore.js';
 import { runNativeWorkflow } from './worker.js';
+import { forkLaneId } from './forkCoordinator.js';
 
 const binary = process.env.AWFL_NATIVE_PARALLEL_BRANCHES_BINARY;
 const eachBinary = process.env.AWFL_NATIVE_PARALLEL_FOR_BINARY;
@@ -181,6 +182,20 @@ test('emulator + real Rust: cancelling the root fences its pending join and re-d
     assert.equal(cancelled.owner, null);
     await assert.rejects(f.execute(f.makeStore()), /cancelled/);
     assert.equal(calls, 2, 're-delivery cannot send more child effects');
+    for (const index of [0, 1]) {
+      const childId = forkLaneId({
+        parentExecutionId: f.executionId,
+        nodeId: cancelled.pendingEffect.nodeId,
+        generation: cancelled.pendingEffect.effectId, index,
+      });
+      const child = await f.makeStore().get(childId);
+      assert.equal(child.forkLane.rootExecutionId, f.executionId);
+      assert.notEqual(child.status, 'completed',
+        'child cannot journal a result after parent cancellation');
+      await assert.rejects(f.makeStore().claim({
+        executionId: childId, workerId: 'orphan_recovery',
+      }), /parent is no longer active/);
+    }
   });
 
 test('emulator + real Rust: killed worker leaves fork journal empty; successor takes fenced lease',

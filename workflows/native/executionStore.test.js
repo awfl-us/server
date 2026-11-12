@@ -208,7 +208,19 @@ test('uncaught native Raise ends with durable failed status and no redispatch', 
 test('native fork lane state pins deterministic identity and rejects changed snapshots', async () => {
   const store = new NativeExecutionStore({ db: fakeFirestore(), clock: () => 1000 });
   const parentId = 'native_' + 'f'.repeat(32);
-  const nodeId = '0.2', generation = '0.2_0', index = 3;
+  const nodeId = '0.2', generation = 'fork_0_2_0', index = 3;
+  await store.create({
+    executionId: parentId, userId: 'owner', projectId: 'tenant',
+    artifactSha256: hash, input: { a: 1 }, protocolVersion: 2,
+    workflowName: 'Workflow', parallelVersion: 1,
+    allowedOperations: ['http.post', 'native.parallel'],
+  });
+  const { epoch } = await store.claim({ executionId: parentId, workerId: 'parent' });
+  await store.prepareEffect({
+    executionId: parentId, workerId: 'parent', epoch, nodeId, effectId: generation,
+    operation: 'native.parallel', args: { generation, lanes: [] }, slots: {},
+    protocolVersion: 2,
+  });
   const input = { a: 1 };
   const slots = { s0: { type: 'integer', value: 4 } };
   const entry = 'pc_3';
@@ -233,6 +245,17 @@ test('native fork lane state pins deterministic identity and rejects changed sna
   await assert.rejects(store.create({ ...create, forkLane: { ...forkLane, slots: { s0: { type: 'integer', value: 5 } } } }), /digest/);
   await assert.rejects(store.create({ ...create, parallelVersion: undefined }), /parallel operation requires a pinned/);
   await assert.rejects(store.create({ ...create, forkLane: { ...forkLane, entry: '../../injected' } }), /invalid native fork lane metadata/);
+  const child = await store.claim({ executionId, workerId: 'child' });
+  await store.cancel({ executionId: parentId, userId: 'owner', projectId: 'tenant' });
+  await assert.rejects(store.claim({ executionId, workerId: 'replacement' }), /parent is no longer active/);
+  await assert.rejects(store.checkpoint({
+    executionId, workerId: 'child', epoch: child.epoch, nodeId: '0.2', slots: {},
+  }), /parent is no longer active/);
+  const nextLane = { ...forkLane, index: 4 };
+  await assert.rejects(store.create({ ...create,
+    executionId: forkLaneId({ parentExecutionId: parentId, nodeId, generation, index: 4 }),
+    forkLane: nextLane,
+  }), /parent is no longer active/);
 });
 
 test('confirmed parallel branch failure takes the compiled Try edge with null code', async () => {

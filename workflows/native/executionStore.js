@@ -51,6 +51,37 @@ const hydrateJournal = journal => journal && ({
   ...journal, outcome: storedJson(journal, 'outcome'),
 });
 
+// A child must remain authorized by its still-pending parent fork. Reading
+// parent/root within the SAME Firestore transaction as every child write
+// fences stale descendants when a parent is cancelled or completes its join.
+async function verifyForkAncestors(tx, collection, state) {
+  if (!state.forkLaneJson) return;
+  const lane = JSON.parse(state.forkLaneJson);
+  const parentSnap = await tx.get(collection.doc(lane.parentExecutionId));
+  if (!parentSnap.exists) throw conflict('native fork parent missing');
+  const parent = parentSnap.data();
+  if (parent.status !== 'waiting_effect' ||
+      parent.pendingEffect?.operation !== 'native.parallel' ||
+      parent.pendingEffect?.effectId !== lane.generation ||
+      parent.pendingEffect?.nodeId !== lane.nodeId ||
+      parent.userId !== state.userId ||
+      parent.projectId !== state.projectId ||
+      parent.artifactSha256 !== state.artifactSha256 ||
+      parent.parallelVersion !== 1) {
+    throw conflict('native fork parent is no longer active');
+  }
+  if (lane.parentExecutionId !== lane.rootExecutionId) {
+    const rootSnap = await tx.get(collection.doc(lane.rootExecutionId));
+    if (!rootSnap.exists ||
+        ['completed', 'failed', 'cancelled'].includes(rootSnap.data().status) ||
+        rootSnap.data().userId !== state.userId ||
+        rootSnap.data().projectId !== state.projectId ||
+        rootSnap.data().artifactSha256 !== state.artifactSha256) {
+      throw conflict('native fork root is no longer active');
+    }
+  }
+}
+
 // The Rust continuation stores tagged values. Do not silently coerce 64-bit
 // integers through JavaScript's imprecise Number representation.
 export function tagNativeValue(value) {
@@ -170,6 +201,7 @@ export class NativeExecutionStore {
         } : null,
         pendingEffect: null, effectCount: 0, result: null,
         createdAt: now, updatedAt: now };
+      await verifyForkAncestors(tx, this.collection, state);
       tx.create(ref, state);
       return hydrateState(state);
     });
@@ -195,6 +227,7 @@ export class NativeExecutionStore {
       };
       if (s.status === 'cancelled') return { cancelled: true };
       if (s.status === 'failed') return { failed: true, error: storedJson(s, 'error') };
+      await verifyForkAncestors(tx, this.collection, s);
       if (s.owner && s.leaseUntil > now) {
         // Allow the same still-fenced worker to resume after a recorded effect.
         if (s.owner === workerId) return hydrateState(s);
@@ -219,6 +252,7 @@ export class NativeExecutionStore {
         throw conflict('stale worker fencing token');
       }
       if (s.status === 'completed' || s.status === 'cancelled' || s.status === 'failed') throw conflict('execution is terminal');
+      await verifyForkAncestors(tx, this.collection, s);
       const next = change(s, now, recorded, tx, effectRef);
       tx.update(ref, { ...next, updatedAt: now });
       return hydrateState(next);
