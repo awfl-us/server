@@ -27,8 +27,9 @@ test('server derives globals from persisted execution and Google deployment, nev
     gcpProject: 'trusted-gcp-project', region: 'us-central1',
   }), /identity mismatch/);
   assert.equal(buildNativeTrustedGlobals({
-    state, executionId, gcpProject: undefined, region: 'us-central1',
-  }) === null || !!process.env.GCP_PROJECT || !!process.env.GCLOUD_PROJECT, true);
+    state: { ...state, workflowName: null }, executionId,
+    gcpProject: 'trusted-gcp-project', region: 'us-central1',
+  }), null);
 });
 
 test('trusted native worker passes separate globals through real verified subprocess', async () => {
