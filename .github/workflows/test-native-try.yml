@@ -122,3 +122,14 @@ jobs:
             workflows/native/httpEffectHandlers.test.js \
             workflows/native/logEffects.test.js \
             workflows/native/nativeTryIntegration.test.js
+      - name: Real Firestore emulator native Parallel fork, retry and cancellation
+        env:
+          AWFL_NATIVE_FIRESTORE_PARALLEL_REQUIRED: '1'
+        run: |
+          set -euo pipefail
+          test -x "$AWFL_NATIVE_PARALLEL_BRANCHES_BINARY"
+          npx --yes firebase-tools@13.35.1 emulators:exec \
+            --project demo-awfl-native \
+            --only firestore \
+            --config workflows/native/firebase.parallel-emulator.json \
+            'node --test workflows/native/parallelFirestore.emulator.test.js'
