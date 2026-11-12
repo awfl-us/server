@@ -125,7 +125,7 @@ export function buildNativeTrustedGlobals({
 // committed before an independent authenticated dispatcher can send it.
 // This path is NOT connected to the common production launcher.
 export async function executeNativeStep({ store, executionId, workerId, executable, sha256,
-                                          timeoutMs, allowedOperations }) {
+                                          timeoutMs, allowedOperations, gcpProject, region }) {
   const leaseMs = Math.max(60_000, (timeoutMs ?? 30_000) + 10_000);
   const state = await store.claim({ executionId, workerId, leaseMs });
   if (state.completed || state.cancelled || state.failed) return state;
@@ -145,7 +145,7 @@ export async function executeNativeStep({ store, executionId, workerId, executab
     throw new Error('invalid native continuation checkpoint');
   }
   const trustedGlobals = protocolVersion === 2
-    ? buildNativeTrustedGlobals({ state, executionId })
+    ? buildNativeTrustedGlobals({ state, executionId, gcpProject, region })
     : null;
   const response = await runNativeArtifact({
     executable, sha256, timeoutMs,
