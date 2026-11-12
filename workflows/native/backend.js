@@ -8,12 +8,12 @@ import { withEnvSuffix } from '../exec/shared.js';
 
 const STATUS = {
   ready: 'ACTIVE', waiting_effect: 'ACTIVE',
-  completed: 'SUCCEEDED', cancelled: 'CANCELLED',
+  completed: 'SUCCEEDED', failed: 'FAILED', cancelled: 'CANCELLED',
 };
 
 export class NativeWorkflowBackend {
   constructor({ releases, store, tasksClient, gcpProject, region,
-                queue, jobsUrl, taskServiceAccount, uuid = randomUUID }) {
+                queue, jobsUrl, taskTargetUrl, taskServiceAccount, uuid = randomUUID }) {
     if (!releases?.active || !store?.create || !store?.get ||
         !tasksClient?.createTask || !tasksClient?.queuePath ||
         typeof gcpProject !== 'string' || !gcpProject ||
@@ -30,11 +30,27 @@ export class NativeWorkflowBackend {
         target.search || target.hash || target.username || target.password) {
       throw new Error('native worker must use an IAM-protected HTTPS Jobs origin');
     }
+    // Cloud Run's zero-traffic tagged revision has its own URL, but requires
+    // an OIDC token addressed to the canonical Jobs service, not the tag.
+    let taskTarget;
+    try { taskTarget = new URL(taskTargetUrl || jobsUrl); } catch { /* validated below */ }
+    const tagSuffix = '---' + target.hostname;
+    const tagPrefix = taskTarget?.hostname.endsWith(tagSuffix)
+      ? taskTarget.hostname.slice(0, -tagSuffix.length) : '';
+    if (!taskTarget || taskTarget.protocol !== 'https:' ||
+        taskTarget.pathname !== '/' || taskTarget.search || taskTarget.hash ||
+        taskTarget.username || taskTarget.password || taskTarget.port ||
+        (taskTarget.origin !== target.origin &&
+          (!tagPrefix || !/^[a-z0-9-]{1,63}$/.test(tagPrefix) ||
+           !target.hostname.endsWith('.run.app')))) {
+      throw new Error('native task target must be the canonical Jobs service or its Cloud Run traffic tag');
+    }
     this.releases = releases;
     this.store = store;
     this.tasksClient = tasksClient;
     this.queuePath = tasksClient.queuePath(gcpProject, region, queue);
     this.jobsOrigin = target.origin;
+    this.taskTargetOrigin = taskTarget.origin;
     this.taskServiceAccount = taskServiceAccount;
     this.uuid = uuid;
   }
@@ -50,15 +66,16 @@ export class NativeWorkflowBackend {
       protocolVersion: active.protocolVersion,
       allowedOperations: active.allowedOperations,
       ...(active.trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
+      ...(active.parallelVersion === 1 && { parallelVersion: 1 }),
     });
     // Only the authenticated Workflows service sends this request. Cloud
     // Tasks signs an OIDC identity that Cloud Run IAM checks before /native.
     const task = {
       // The default HTTP task deadline (10m) is too short for workflows.
-      dispatchDeadline: '1800s',
+      dispatchDeadline: { seconds: 1800 },
       httpRequest: {
         httpMethod: 'POST',
-        url: this.jobsOrigin + '/native/execute',
+        url: this.taskTargetOrigin + '/native/execute',
         headers: {
           'Content-Type': 'application/json',
           // Existing Jobs projectIdMiddleware reads the trusted header.
@@ -95,6 +112,7 @@ export class NativeWorkflowBackend {
           name: executionName,
           state: STATUS[state.status] || 'ACTIVE',
           ...(state.status === 'completed' ? { result: JSON.stringify(state.result) } : {}),
+          ...(state.status === 'failed' ? { error: state.error } : {}),
         }];
       },
     };
@@ -121,6 +139,7 @@ export function configuredNativeBackend() {
       region: process.env.WORKFLOWS_LOCATION || 'us-central1',
       queue: process.env.AWFL_NATIVE_TASK_QUEUE,
       jobsUrl: process.env.AWFL_NATIVE_JOBS_URL,
+      taskTargetUrl: process.env.AWFL_NATIVE_CANARY_JOBS_TARGET_URL,
       taskServiceAccount: process.env.AWFL_NATIVE_TASK_SERVICE_ACCOUNT,
     });
   })();

@@ -39,6 +39,7 @@ const storedJson = (record, field) =>
 const hydrateState = state => state && ({
   ...state,
   input: storedJson(state, 'input'),
+  forkLane: storedJson(state, 'forkLane'),
   result: storedJson(state, 'result'),
   error: storedJson(state, 'error'),
   pendingEffect: state.pendingEffect && {
@@ -49,6 +50,51 @@ const hydrateState = state => state && ({
 const hydrateJournal = journal => journal && ({
   ...journal, outcome: storedJson(journal, 'outcome'),
 });
+
+// A child must remain authorized by EVERY still-pending ancestor fork. Merely
+// checking the immediate parent and the root's terminal status is insufficient:
+// a root can finish one fork and move on while a nested grandchild still has
+// a live parent. Traverse the bounded ancestry (max 3) inside the SAME
+// Firestore transaction as each child create/claim/write, fencing any stale
+// descendant without relying on asynchronous cleanup.
+async function verifyForkAncestors(tx, collection, state) {
+  if (!state.forkLaneJson) return;
+  let current = state;
+  const visited = new Set([state.executionId]);
+  for (let index = 0; index < 3; index++) {
+    const lane = JSON.parse(current.forkLaneJson);
+    if (visited.has(lane.parentExecutionId)) throw conflict('native fork ancestor cycle');
+    visited.add(lane.parentExecutionId);
+    const parentSnap = await tx.get(collection.doc(lane.parentExecutionId));
+    if (!parentSnap.exists) throw conflict('native fork parent missing');
+    const parent = parentSnap.data();
+    if (parent.status !== 'waiting_effect' ||
+        parent.pendingEffect?.operation !== 'native.parallel' ||
+        parent.pendingEffect?.effectId !== lane.generation ||
+        parent.pendingEffect?.nodeId !== lane.nodeId ||
+        parent.userId !== state.userId ||
+        parent.projectId !== state.projectId ||
+        parent.artifactSha256 !== state.artifactSha256 ||
+        parent.workflowName !== state.workflowName ||
+        parent.protocolVersion !== state.protocolVersion ||
+        parent.parallelVersion !== 1) {
+      throw conflict('native fork parent is no longer active');
+    }
+    if (!parent.forkLaneJson) {
+      if (lane.parentExecutionId !== lane.rootExecutionId || lane.depth !== 1) {
+        throw conflict('native fork root lineage mismatch');
+      }
+      return;
+    }
+    const parentLane = JSON.parse(parent.forkLaneJson);
+    if (parentLane.rootExecutionId !== lane.rootExecutionId ||
+        parentLane.depth + 1 !== lane.depth) {
+      throw conflict('native fork ancestor lineage mismatch');
+    }
+    current = parent;
+  }
+  throw conflict('native fork ancestry exceeds maximum depth');
+}
 
 // The Rust continuation stores tagged values. Do not silently coerce 64-bit
 // integers through JavaScript's imprecise Number representation.
@@ -92,7 +138,7 @@ export class NativeExecutionStore {
 
   async create({ executionId, userId, projectId, artifactSha256, input,
                  protocolVersion = 1, workflowName, allowedOperations,
-                 trustedGlobalsVersion }) {
+                 trustedGlobalsVersion, parallelVersion, forkLane }) {
     id(executionId);
     if (!userId || !projectId || !/^[a-f0-9]{64}$/.test(artifactSha256 || '')) {
       throw new Error('owner and pinned artifact SHA-256 required');
@@ -105,7 +151,7 @@ export class NativeExecutionStore {
          !/^[A-Za-z][A-Za-z0-9_-]{0,99}$/.test(workflowName))) {
       throw new Error('invalid pinned native workflow name');
     }
-    const allowed = new Set(['http.get', 'http.post', 'http.patch', 'http.delete', 'log.write']);
+    const allowed = new Set(['http.get', 'http.post', 'http.patch', 'http.delete', 'log.write', 'native.parallel']);
     if (allowedOperations !== undefined &&
         (!Array.isArray(allowedOperations) ||
          allowedOperations.some(op => !allowed.has(op)) ||
@@ -115,6 +161,38 @@ export class NativeExecutionStore {
     if (trustedGlobalsVersion !== undefined &&
         (trustedGlobalsVersion !== 1 || protocolVersion !== 2)) {
       throw new Error('invalid pinned native trusted globals version');
+    }
+    if (parallelVersion !== undefined && (parallelVersion !== 1 || protocolVersion !== 2)) {
+      throw new Error('invalid pinned native parallel version');
+    }
+    if (allowedOperations?.includes('native.parallel') && parallelVersion !== 1) {
+      throw new Error('parallel operation requires a pinned parallel-capable release');
+    }
+    if (parallelVersion === 1 && !allowedOperations?.includes('native.parallel')) {
+      throw new Error('parallel-capable release must authorize native.parallel');
+    }
+    if (forkLane !== undefined) {
+      if (parallelVersion !== 1 || !forkLane ||
+          !/^native_[a-f0-9]{32}$/.test(forkLane.parentExecutionId || '') ||
+          !/^native_[a-f0-9]{32}$/.test(forkLane.rootExecutionId || '') ||
+          !Number.isSafeInteger(forkLane.depth) || forkLane.depth < 1 || forkLane.depth > 3 ||
+          !/^[A-Za-z0-9_.-]{1,120}$/.test(forkLane.nodeId || '') ||
+          !/^[A-Za-z0-9_.:-]{1,160}$/.test(forkLane.generation || '') ||
+          !Number.isSafeInteger(forkLane.index) || forkLane.index < 0 || forkLane.index >= 10000 ||
+          !/^pc_(0|[1-9][0-9]{0,8})$/.test(forkLane.entry || '') ||
+          !/^[a-f0-9]{64}$/.test(forkLane.snapshotSha256 || '') ||
+          !forkLane.slots || typeof forkLane.slots !== 'object' ||
+          Array.isArray(forkLane.slots)) {
+        throw new Error('invalid native fork lane metadata');
+      }
+      if (forkLane.snapshotSha256 !== digest({
+        input, slots: forkLane.slots, entry: forkLane.entry,
+      }) || executionId !== 'native_' + digest([
+        forkLane.parentExecutionId, forkLane.nodeId, forkLane.generation, forkLane.index,
+      ]).slice(0, 32)) {
+        throw new Error('native fork lane digest or deterministic identity mismatch');
+      }
+      enforceBytes(forkLane, LIMIT.checkpoint, 'native fork lane snapshot');
     }
     requireValue(input, 'input');
     enforceBytes(input, LIMIT.input, 'workflow input');
@@ -127,10 +205,17 @@ export class NativeExecutionStore {
         ...(workflowName && { workflowName }),
         ...(allowedOperations && { allowedOperations: [...allowedOperations] }),
         ...(trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
+        ...(parallelVersion === 1 && { parallelVersion: 1 }),
+        ...(forkLane && { forkLane: null, forkLaneJson: JSON.stringify(forkLane) }),
         input: null, inputJson: JSON.stringify(input),
         status: 'ready', epoch: 0, owner: null, leaseUntil: 0,
-        checkpoint: null, pendingEffect: null, effectCount: 0, result: null,
+        checkpoint: forkLane ? {
+          next_step: Number(forkLane.entry.slice(3)),
+          slots: forkLane.slots, frames: [],
+        } : null,
+        pendingEffect: null, effectCount: 0, result: null,
         createdAt: now, updatedAt: now };
+      await verifyForkAncestors(tx, this.collection, state);
       tx.create(ref, state);
       return hydrateState(state);
     });
@@ -156,6 +241,7 @@ export class NativeExecutionStore {
       };
       if (s.status === 'cancelled') return { cancelled: true };
       if (s.status === 'failed') return { failed: true, error: storedJson(s, 'error') };
+      await verifyForkAncestors(tx, this.collection, s);
       if (s.owner && s.leaseUntil > now) {
         // Allow the same still-fenced worker to resume after a recorded effect.
         if (s.owner === workerId) return hydrateState(s);
@@ -180,6 +266,7 @@ export class NativeExecutionStore {
         throw conflict('stale worker fencing token');
       }
       if (s.status === 'completed' || s.status === 'cancelled' || s.status === 'failed') throw conflict('execution is terminal');
+      await verifyForkAncestors(tx, this.collection, s);
       const next = change(s, now, recorded, tx, effectRef);
       tx.update(ref, { ...next, updatedAt: now });
       return hydrateState(next);
@@ -325,7 +412,9 @@ export class NativeExecutionStore {
     id(effectId);
     if (!failure || typeof failure !== 'object' || Array.isArray(failure) ||
         typeof failure.message !== 'string' || failure.message.length > 256 ||
-        !Number.isSafeInteger(failure.code) || failure.code < 400 || failure.code > 599 ||
+        !(failure.code === null ||
+          (Number.isSafeInteger(failure.code) && failure.code >= 400 &&
+           failure.code <= 599)) ||
         Object.keys(failure).some(key => !['message', 'code'].includes(key))) {
       throw new Error('confirmed native effect failure required');
     }
@@ -341,6 +430,9 @@ export class NativeExecutionStore {
       if (!s.pendingEffect || s.pendingEffect.effectId !== effectId || !s.pendingEffect.onError) {
         throw conflict('effect was not prepared with a compiled error handler');
       }
+      if (failure.code === null && s.pendingEffect.operation !== 'native.parallel') {
+        throw conflict('non-HTTP failures require an authenticated native fork');
+      }
       const { fingerprint, onError } = s.pendingEffect;
       if (!s.checkpoint || !Number.isSafeInteger(s.checkpoint.next_step)) {
         throw conflict('missing native compiled continuation');
@@ -354,6 +446,29 @@ export class NativeExecutionStore {
         outcome: null, outcomeJson: JSON.stringify(failure), recordedAt: now });
       return { ...s, status: 'ready', pendingEffect: null, checkpoint,
         effectCount: (s.effectCount || 0) + 1 };
+    }, effectId);
+  }
+
+  /** A child with a durably recorded terminal failure may fail an uncaught
+    * parent fork atomically, while journaling the parent fork intent. This
+    * never handles uncertain child transport/effect outcomes.
+    */
+  async failPendingParallel({ executionId, workerId, epoch, effectId, error }) {
+    id(effectId);
+    requireValue(error, 'error');
+    enforceBytes(error, LIMIT.effectOutcome, 'native confirmed fork failure');
+    return this.mutate(executionId, workerId, epoch, (s, now, journal, tx, ref) => {
+      if (!s.pendingEffect || s.pendingEffect.operation !== 'native.parallel' ||
+          s.pendingEffect.effectId !== effectId || journal?.exists) {
+        throw conflict('confirmed parallel failure must match a pending fork');
+      }
+      tx.create(ref, {
+        effectId, fingerprint: s.pendingEffect.fingerprint, isError: true,
+        outcome: null, outcomeJson: JSON.stringify(error), recordedAt: now,
+      });
+      return { ...s, status: 'failed', pendingEffect: null,
+        error: null, errorJson: JSON.stringify(error),
+        owner: null, leaseUntil: 0, effectCount: (s.effectCount || 0) + 1 };
     }, effectId);
   }
 

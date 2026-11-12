@@ -4,10 +4,14 @@ on:
   pull_request:
     paths:
       - 'workflows/native/**'
+      - 'jobs/loadConvoHistory.js'
+      - 'jobs/loadConvoHistory.test.js'
       - '.github/workflows/test-native-try.yml'
   push:
     paths:
       - 'workflows/native/**'
+      - 'jobs/loadConvoHistory.js'
+      - 'jobs/loadConvoHistory.test.js'
       - '.github/workflows/test-native-try.yml'
 
 jobs:
@@ -20,8 +24,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: awfl-us/compiler-rust
-          ref: 588dc2f0a96ef037e35d55333b33b445cfb03f7a
+          ref: a285f66df11efd1b2c9811fbd494dcd45541aa7e
           path: _compiler-rust
+      - name: Checkout unchanged production workflow definition
+        uses: actions/checkout@v4
+        with:
+          repository: awfl-us/workflows
+          ref: 59ed80232d8e742fcc6f4520199f56fe5bbd4d19
+          path: _workflows
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -52,6 +62,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: '1.99.1'
+          components: clippy
       - name: Build compiled Rust Try/Raise fixtures
         run: |
           set -euo pipefail
@@ -75,14 +86,72 @@ jobs:
                   assert binary.is_file(), binary
                   output.write(f'{variable}={binary}\n')
           PY
+      - name: Generate and build real Rust Parallel and ParallelFor crates
+        run: |
+          set -euo pipefail
+          cd _compiler-rust/frontend
+          sbt -batch 'Test / runMain us.awfl.compiler.rust.ParallelIrSmoke'
+          cd ../..
+          for name in native-parallel-branches native-parallel-for native-parallel-nested native-parallel-caught native-parallel-uncaught; do
+            cargo build --manifest-path "_compiler-rust/fixtures/$name/Cargo.toml"
+            cargo clippy --manifest-path "_compiler-rust/fixtures/$name/Cargo.toml" --all-targets --locked -- -D warnings
+          done
+          python3 - <<'PYTHON'
+          import os
+          from pathlib import Path
+          import tomllib
+          root = Path('_compiler-rust/fixtures')
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as f:
+              for name, key in [
+                  ('native-parallel-branches', 'AWFL_NATIVE_PARALLEL_BRANCHES_BINARY'),
+                  ('native-parallel-for', 'AWFL_NATIVE_PARALLEL_FOR_BINARY'),
+                  ('native-parallel-nested', 'AWFL_NATIVE_PARALLEL_NESTED_BINARY'),
+                  ('native-parallel-caught', 'AWFL_NATIVE_PARALLEL_CAUGHT_BINARY'),
+                  ('native-parallel-uncaught', 'AWFL_NATIVE_PARALLEL_UNCAUGHT_BINARY'),
+              ]:
+                  crate = root / name
+                  with (crate / 'Cargo.toml').open('rb') as stream:
+                      package = tomllib.load(stream)['package']['name']
+                  binary = (crate / 'target/debug' / package).resolve()
+                  assert binary.is_file(), binary
+                  f.write(f'{key}={binary}\n')
+          PYTHON
+      - name: Compile and build unchanged production LoadConversationHistory
+        run: |
+          set -euo pipefail
+          cd _compiler-rust/frontend
+          sbt -batch \
+            'set Test / unmanagedSources += file("../../_workflows/src/main/scala/us/awfl/workflows/LoadConversationHistory.scala")' \
+            'Test / runMain us.awfl.compiler.rust.RealWorkflowSmoke'
+          cd ../..
+          crate=_compiler-rust/fixtures/real-load-history/LoadConversationHistory/Cargo.toml
+          cargo build --manifest-path "$crate" --target-dir "$RUNNER_TEMP/native-real-target"
+          python3 - <<'PYTHON'
+          import os
+          from pathlib import Path
+          import tomllib
+          crate = Path('_compiler-rust/fixtures/real-load-history/LoadConversationHistory/Cargo.toml')
+          with crate.open('rb') as source:
+              binary_name = tomllib.load(source)['package']['name']
+          binary = (Path(os.environ['RUNNER_TEMP']) / 'native-real-target/debug' / binary_name).resolve()
+          assert binary.is_file(), binary
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as output:
+              output.write(f'AWFL_NATIVE_REAL_WORKFLOW_BINARY={binary}\n')
+              output.write('AWFL_NATIVE_REAL_WORKFLOW_REQUIRED=1\n')
+          PYTHON
       - name: Node native effects, persistence and real Rust continuation tests
         run: |
           set -euo pipefail
           node --test \
+            jobs/loadConvoHistory.test.js \
             workflows/native/effectDispatcher.test.js \
             workflows/native/executionStore.test.js \
             workflows/native/executionApi.test.js \
             workflows/native/runner.test.js \
+            workflows/native/forkCoordinator.test.js \
+            workflows/native/nestedForkFencing.test.js \
+            workflows/native/parallelIntegration.test.js \
+            workflows/native/realWorkflowIntegration.test.js \
             workflows/native/trustedGlobals.test.js \
             workflows/native/gcsReleases.test.js \
             workflows/native/backend.test.js \
@@ -90,3 +159,14 @@ jobs:
             workflows/native/httpEffectHandlers.test.js \
             workflows/native/logEffects.test.js \
             workflows/native/nativeTryIntegration.test.js
+      - name: Real Firestore emulator native Parallel fork, retry and cancellation
+        env:
+          AWFL_NATIVE_FIRESTORE_PARALLEL_REQUIRED: '1'
+        run: |
+          set -euo pipefail
+          test -x "$AWFL_NATIVE_PARALLEL_BRANCHES_BINARY"
+          npx --yes firebase-tools@13.35.1 emulators:exec \
+            --project demo-awfl-native \
+            --only firestore \
+            --config workflows/native/firebase.parallel-emulator.json \
+            'node --test workflows/native/parallelFirestore.emulator.test.js'

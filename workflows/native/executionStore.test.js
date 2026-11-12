@@ -204,3 +204,125 @@ test('uncaught native Raise ends with durable failed status and no redispatch', 
   await assert.rejects(store.complete({ executionId: 'e1', workerId: 'a', epoch,
     result: {} }), /stale worker|terminal/);
 });
+
+test('native fork lane state pins deterministic identity and rejects changed snapshots', async () => {
+  const store = new NativeExecutionStore({ db: fakeFirestore(), clock: () => 1000 });
+  const parentId = 'native_' + 'f'.repeat(32);
+  const nodeId = '0.2', generation = 'fork_0_2_0', index = 3;
+  await store.create({
+    executionId: parentId, userId: 'owner', projectId: 'tenant',
+    artifactSha256: hash, input: { a: 1 }, protocolVersion: 2,
+    workflowName: 'Workflow', parallelVersion: 1,
+    allowedOperations: ['http.post', 'native.parallel'],
+  });
+  const { epoch } = await store.claim({ executionId: parentId, workerId: 'parent' });
+  await store.prepareEffect({
+    executionId: parentId, workerId: 'parent', epoch, nodeId, effectId: generation,
+    operation: 'native.parallel', args: { generation, lanes: [] }, slots: {},
+    protocolVersion: 2,
+  });
+  const input = { a: 1 };
+  const slots = { s0: { type: 'integer', value: 4 } };
+  const entry = 'pc_3';
+  const { forkLaneId } = await import('./forkCoordinator.js');
+  const { createHash } = await import('node:crypto');
+  const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  const executionId = forkLaneId({ parentExecutionId: parentId, nodeId, generation, index });
+  const forkLane = {
+    parentExecutionId: parentId, rootExecutionId: parentId, depth: 1,
+    nodeId, generation, index, entry, slots,
+    snapshotSha256: digest({ input, slots, entry }),
+  };
+  const create = { executionId, userId: 'owner', projectId: 'tenant', artifactSha256: hash,
+    input, protocolVersion: 2, parallelVersion: 1, workflowName: 'Workflow',
+    allowedOperations: ['http.post', 'native.parallel'], forkLane };
+  await store.create(create);
+  const persisted = await store.get(executionId);
+  assert.deepEqual(persisted.forkLane, forkLane);
+  assert.equal(persisted.parallelVersion, 1);
+  assert.equal(persisted.input.a, 1);
+  await assert.rejects(store.create({ ...create, executionId: 'native_' + 'a'.repeat(32) }), /deterministic identity/);
+  await assert.rejects(store.create({ ...create, forkLane: { ...forkLane, slots: { s0: { type: 'integer', value: 5 } } } }), /digest/);
+  await assert.rejects(store.create({ ...create, parallelVersion: undefined }), /parallel operation requires a pinned/);
+  await assert.rejects(store.create({ ...create, forkLane: { ...forkLane, entry: '../../injected' } }), /invalid native fork lane metadata/);
+  const child = await store.claim({ executionId, workerId: 'child' });
+  await store.cancel({ executionId: parentId, userId: 'owner', projectId: 'tenant' });
+  await assert.rejects(store.claim({ executionId, workerId: 'replacement' }), /parent is no longer active/);
+  await assert.rejects(store.checkpoint({
+    executionId, workerId: 'child', epoch: child.epoch, nodeId: '0.2', slots: {},
+  }), /parent is no longer active/);
+  const nextLane = { ...forkLane, index: 4 };
+  await assert.rejects(store.create({ ...create,
+    executionId: forkLaneId({ parentExecutionId: parentId, nodeId, generation, index: 4 }),
+    forkLane: nextLane,
+  }), /parent is no longer active/);
+});
+
+test('confirmed parallel branch failure takes the compiled Try edge with null code', async () => {
+  const store = new NativeExecutionStore({ db: fakeFirestore(), clock: () => 1000 });
+  const executionId = 'native_' + 'd'.repeat(32);
+  await store.create({
+    executionId, userId: 'verified', projectId: 'tenant',
+    workflowName: 'ParallelFailureTest', input: {},
+    artifactSha256: hash, protocolVersion: 2, parallelVersion: 1,
+    allowedOperations: ['native.parallel'],
+  });
+  const { epoch } = await store.claim({ executionId, workerId: 'w' });
+  await store.prepareEffect({
+    executionId, workerId: 'w', epoch, nodeId: '0.0',
+    effectId: 'fork_0_0', operation: 'native.parallel',
+    args: { generation: 'fork_0_0', lanes: [] },
+    slots: {}, continuation: { next_step: 1, slots: {}, frames: [] },
+    resultSlot: 's0', protocolVersion: 2,
+    onError: { nextStep: 7, errorSlot: 's1' },
+  });
+  const failure = { message: 'branch raised', code: null };
+  await store.recordEffectFailure({
+    executionId, workerId: 'w', epoch, effectId: 'fork_0_0', failure,
+  });
+  const state = await store.get(executionId);
+  assert.equal(state.status, 'ready');
+  assert.equal(state.checkpoint.next_step, 7);
+  assert.equal(state.pendingEffect, null);
+  assert.deepEqual(state.checkpoint.slots.s1, {
+    type: 'map', value: {
+      message: { type: 'string', value: 'branch raised' },
+      code: { type: 'null' },
+    },
+  });
+  const journal = await store.getEffect(executionId, 'fork_0_0');
+  assert.equal(journal.isError, true);
+  assert.deepEqual(journal.outcome, failure);
+});
+
+test('uncaught confirmed parallel failure commits parent terminal state and journal atomically', async () => {
+  const store = new NativeExecutionStore({ db: fakeFirestore() });
+  const executionId = 'native_' + 'b'.repeat(32);
+  await store.create({
+    executionId, userId: 'verified', projectId: 'tenant',
+    workflowName: 'ParallelFailureTest', input: {},
+    artifactSha256: hash, protocolVersion: 2, parallelVersion: 1,
+    allowedOperations: ['native.parallel'],
+  });
+  const { epoch } = await store.claim({ executionId, workerId: 'w' });
+  await store.prepareEffect({
+    executionId, workerId: 'w', epoch, nodeId: '0.0',
+    effectId: 'fork_0_0', operation: 'native.parallel',
+    args: { generation: 'fork_0_0', lanes: [] },
+    slots: {}, continuation: { next_step: 1, slots: {}, frames: [] },
+    resultSlot: 's0', protocolVersion: 2,
+  });
+  const failure = { message: 'uncaught branch Raise', code: null };
+  await store.failPendingParallel({
+    executionId, workerId: 'w', epoch, effectId: 'fork_0_0', error: failure,
+  });
+  const state = await store.get(executionId);
+  assert.equal(state.status, 'failed');
+  assert.deepEqual(state.error, failure);
+  assert.equal(state.pendingEffect, null);
+  assert.equal(state.effectCount, 1);
+  assert.deepEqual((await store.getEffect(executionId, 'fork_0_0')).outcome, failure);
+  assert.deepEqual(await store.claim({ executionId, workerId: 'retry' }), {
+    failed: true, error: failure,
+  });
+});

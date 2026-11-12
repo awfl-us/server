@@ -1,5 +1,63 @@
 # Native Rust workflow execution (experimental, opt-in)
 
+**Current server execution plan — November 12, 2026:**
+[real-workflow pilot and benchmark](https://github.com/awfl-us/compiler-rust/blob/feat/native-parallel-durable/docs/real-workflow-pilot-and-benchmark-plan.md).
+That plan supersedes the historical numbered gate lists later in this README.
+The first **live Google transport baseline** now uses the newer deployed
+`AwflApiProbeDev`: `GET /health` with OIDC returned HTTP **200** / `OK`,
+**739 ms** end-to-end in one November 12 execution (not a distribution).
+`LoadConversationHistory` dates to 2025; keep it as a compiled Rust and
+effect-journal regression fixture, not the principal workload benchmark.
+The first live Google invocation of that old workflow returned **400**
+because its Jobs handler read `body.userId` *after* `workflowsUserInject`
+stripped it. That handler now uses `req.userId`, matching current native,
+producer, callback and usage Jobs handlers. Legacy Firebase/exec handlers
+still have explicit fallback lookup. The CI tests include both the actual
+Cloud Tasks protobuf deadline encoding and the synthetic empty import case.
+Terraform/IAM remain owned by the existing server native-execution and
+workflows roots; no manual grant to GKE dev identities is needed.
+The immediate milestone is to run one **unchanged** workflow through the
+authenticated Workflows service -> Cloud Tasks -> IAM Jobs -> pinned GCS ELF
+-> Firestore path, in an isolated test deployment with routing rollback;
+then compare its behavior and latency with Google Workflows. It does **not**
+authorize a production feature-flag switch or live customer effects.
+
+**Evidence and next action:** server PR #82 at `9885751` passed GitHub run
+`43280844780`, including the new compiled `LoadConversationHistory.scala`
+worker test. Compiler PR #18 at `920ac23` passed run `43280871676`.
+Local Node regression: **68 passed / 29 skipped / 0 failed**; separate real
+Firestore emulator **7 passed / 0 failed / 0 skipped**. The unchanged
+workflow produced the expected mocked `http.post` effect, persisted one
+result and replayed without another dispatch. Local Rust IPC medians from
+40 invocations per stage: **6.15 ms** preparation / **3.53 ms** resume;
+these exclude cloud persistence, startup and network and are **not** a
+Google Workflows comparison. Preserve the Google default route and release
+pinning until a controlled authenticated run plus matched differential tests
+prove readiness.
+
+**Scope decision (November 12, 2026): keep native parallel execution simple.**
+The worker uses its existing **process-local, eight-permit FIFO budget** for
+Rust subprocess invocations and external effects; nested fork coordinators
+do not hold permits while awaiting children. Child execution records,
+lease-epoch fencing, checkpoint persistence, effect journals and idempotent
+join/recovery remain intact. The experimental Firestore distributed-permit
+implementation was reverted because no parallel branches are scheduled on
+independent Jobs processes today. Neither fleet-wide quotas nor orphan
+garbage collection is a prerequisite for this implementation's next milestone;
+revisit them only if the actual execution architecture or operating evidence
+requires them. This does **not** replace the existing per-execution worker
+lease, which protects crash recovery.
+
+**Next milestone: run real unchanged workflows.** The server CI now compiles
+the pinned original `LoadConversationHistory.scala` through compiler-rust,
+builds the resulting Rust executable, and runs it through `runNativeWorkflow`
+with a simulated HTTP adapter. This checks server-pinned identity, exact
+HTTP arguments, persistent effect journaling, final result and replay without
+duplicate dispatch. Local verification: **68 passed / 29 skipped / 0 failed**
+in the complete native Node suite with the real-workflow ELF supplied. The
+test does not contact real APIs or measure Google Workflows.
+Native routing remains off until a controlled live canary and parity tests.
+
 **Verification checkpoint (November 11, 2026).** Compiler-rust PRs #1–#7
 and server PRs #72/#78/#79 are **merged**; PR #7 fixes catch-only CFG and
 PR #79 adds restricted `log.write`, capability gates and real Rust/Node error
@@ -7,6 +65,91 @@ journaling and crash-after-commit coverage. GitHub CI passed for both. The
 normal native routing flag is still **off**: merging code does not constitute
 a live-effect canary or production rollout. See the [cross-repository
 readiness matrix, evidence and ordered gates](https://github.com/awfl-us/compiler-rust/blob/main/docs/current-state-and-roadmap.md).
+
+**Parallel implementation checkpoint (November 12, 2026; draft PRs).**
+Compiler-rust #18 and server #82 now support real compiled Rust
+`Parallel`/`ParallelFor` child entrypoints, pinned child records, concurrent
+native effect dispatch, parent fork journaling, deterministic joins, and
+reconciliation after a crash between child completion and parent journaling.
+The compiled parent `Try` catches only confirmed child failures; uncertain
+remote outcomes remain unresolved. The in-process per-root permit budget
+bounds nested worker activity, but is not a distributed/global Jobs quota.
+The compiled-binary integration suite uses a transaction-shaped Firestore
+substitute. **An additional four real local Firestore emulator tests now pass**
+using the same generated Rust ELF and real Firestore transactions: two
+overlapping child effects with fresh-store replay; a crash after both child
+effects are committed but before the parent journal, recovered by a new store
+after lease expiry; indexed `ParallelFor` with zero, one and multiple items;
+and parent cancellation that fences its join and duplicate delivery. A
+separate concurrent worker cannot claim the still-leased parent. These do **not** prove recursive sibling cancellation, true
+cross-process takeover, or deployed Cloud Tasks/Jobs behavior. Distributed
+concurrency admission, realistic workflow parity and live canary testing
+remain gates. Native production routing stays off.
+
+The emulator test is `workflows/native/parallelFirestore.emulator.test.js`,
+configured by `workflows/native/firebase.parallel-emulator.json` and now
+included as a separate step in `test-native-try.yml`. It runs with Firebase
+CLI `13.35.1`, the demo-only `demo-awfl-native` project, the generated
+`AWFL_NATIVE_PARALLEL_BRANCHES_BINARY` and
+`AWFL_NATIVE_PARALLEL_FOR_BINARY` executables, and
+`AWFL_NATIVE_FIRESTORE_PARALLEL_REQUIRED=1` (so CI cannot accidentally skip
+the tests). It does not call real HTTP endpoints.
+
+The emulator's concurrent-branch test now also spawns an **independent Node
+process** (`parallelLeaseContender.emulator.js`) with its own Firestore client.
+While the parent has an active fork lease, that contender receives `CONFLICT`
+and cannot steal the parent. After the durable join, the contender observes
+the completed result rather than claiming a new execution. Both checks run
+with the generated Rust ELF and actual emulator transactions. This tests
+**cross-process parent lease fencing**, not global distributed scheduling
+permits, which remain a separate unresolved capacity gate.
+
+**Actual process-death recovery (new):** the Firestore emulator suite kills
+an independent Node worker *after two compiled Rust children commit but before
+the parent records its fork journal*. The successor must wait for the
+remaining lease to expire, take epoch 2, join the previously committed child
+results without another HTTP-handler call, and reject the dead worker's
+epoch-1 journal write. The lease-expiry transition uses a controllable test
+clock; process termination itself is real. No live Cloud Run worker has yet
+been killed in this test.
+
+**Recursive descendant fencing (November 12):** child creation, claims and
+journal mutations transactionally check the exact pending fork intent of
+**every ancestor**, up to the pinned maximum depth of three. Checking only
+the immediate parent plus whether the root was terminal was insufficient:
+a still-running root could join its old fork, start another step, and leave
+grandchildren authorized by the obsolete generation. The ancestry walk now
+rejects that case, verifies root identity, owner, artifact and workflow,
+and detects depth/lineage mismatches in the same Firestore transaction.
+After parent cancellation or fork supersession, already-running child
+effects cannot commit and uncreated children cannot be admitted; child
+claims also reject. This does **not**
+abort HTTP requests already sent before cancellation, nor perform a durable
+descendant tombstone sweep: child records can remain in an unfinished state
+until explicit cleanup. Orphan garbage collection and a persistent
+cross-process global concurrency cap are **deferred operational extensions**,
+not prerequisites for the first unchanged-workflow canary. Reconsider them
+only when observed traffic or a changed branch-dispatch architecture requires
+them.
+
+Validation in the compiler-rust Scala GKE environment: Scala-generated
+`native-parallel-branches`, `native-parallel-for`, and **three-level
+`native-parallel-nested`** Rust ELFs compiled with Cargo 1.99.1; the nested
+crate passed strict Clippy. All **20** focused Node tests pass, including
+three-level ancestry and fork supersession. The real Firestore emulator
+passes **7/7**: concurrent compiled Rust branches and replay,
+crash-before-parent-journal recovery, ordered `ParallelFor`, cancellation,
+real OS process death/reclaim, a nonterminal root whose joined fork fences
+a deep descendant, and **actual three-level compiled Rust execution**.
+That last test verifies six completed child documents at depths 1/2/3,
+four distinct effect calls, overlap, root join, and no duplicate effects
+after a fresh-store replay. The stale-root case separately uses actual
+Firestore transactions and synthetic nested records. Local direct Rust IPC
+tests also validate three distinct nested fork IDs. CI pins the paired
+compiler-rust commit `2bbb33f6` for reproducibility. No live Cloud Run
+effectful canary or Google Workflows differential has been verified;
+distributed cross-process concurrency admission and orphan cleanup are
+**explicitly out of scope** for the next unchanged-workflow milestone.
 
 
 The existing AWFL Workflows service has an optional native Rust execution
@@ -127,7 +270,19 @@ state; it does not stop an already dispatched HTTP request. Persisting a
 successful outcome before acknowledging the runner avoids rerunning it after
 resume. Unresolved outcomes remain pending until reconciled.
 
-## Next gates before production (in dependency order)
+## Next gates before production (historical broad-roadmap checklist)
+
+**Updated November 12:** the list below describes broad eventual native
+feature parity, not work that must precede the next isolated real-workflow
+pilot. The merged `Try`/logging foundation, draft `Parallel`/`ParallelFor`,
+real-workflow compilation, simulated HTTP through the actual worker, and
+seven real emulator cases are already verified. Distributed permit
+coordination was intentionally reverted: the deployed model does not launch
+separate Jobs workers for individual parallel branches. A fleet-wide quota,
+orphan sweeper, more parallel protocols, callbacks, child workflows and new
+provider adapters are **not** the next milestone unless a selected workload
+exposes a specific need. See the linked [pilot plan](https://github.com/awfl-us/compiler-rust/blob/feat/native-parallel-durable/docs/real-workflow-pilot-and-benchmark-plan.md)
+for its safety gates and measured acceptance criteria.
 
 1. **Land the current compiler/server pair.** Require green compiler PR #7
    (Scala, Cargo, full CLI/CFG/real-workflow tests and strict Clippy). In the

@@ -1,11 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { CloudTasksClient } from '@google-cloud/tasks';
 import { NativeWorkflowBackend } from './backend.js';
 import { createWorkflowExecution } from '../services/executeWorkflow.js';
 
 const SHA = 'a'.repeat(64);
 const executionId = 'native_' + '1'.repeat(32);
-function fixture(trustedGlobalsVersion) {
+function fixture(trustedGlobalsVersion, parallelVersion) {
   const states = new Map(), tasks = [], queries = [];
   let enabled = true, failTask = false;
   const store = {
@@ -24,6 +25,8 @@ function fixture(trustedGlobalsVersion) {
         workflowName: name, sha256: SHA, protocolVersion: 2,
         allowedOperations: ['http.post'],
         ...(trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
+        ...(parallelVersion === 1 && { parallelVersion: 1,
+          allowedOperations: ['http.post', 'native.parallel'] }),
       } : null;
     },
   };
@@ -70,7 +73,11 @@ test('shared launcher pins trusted identity and returns Google-style status adap
     assert.deepEqual(f.states.get(executionId).allowedOperations, ['http.post']);
     assert.equal(f.tasks.length, 1);
     const queued = f.tasks[0];
-    assert.equal(queued.task.dispatchDeadline, '1800s');
+    assert.deepEqual(queued.task.dispatchDeadline, { seconds: 1800 });
+    // Use the real Cloud Tasks protobuf serializer, not just our fake queue:
+    // a string deadline ('1800s') passes mocks but fails before the RPC.
+    const taskDescriptor = new CloudTasksClient()._protos.google.cloud.tasks.v2.Task;
+    assert.ok(taskDescriptor.serialize(queued.task).length > 0);
     assert.equal(queued.parent, 'projects/awfl-us/locations/us-central1/queues/native-executions');
     assert.equal(queued.task.httpRequest.url, 'https://jobs.example.org/native/execute');
     assert.equal(queued.task.httpRequest.headers['x-project-id'], 'project-a');
@@ -87,6 +94,12 @@ test('shared launcher pins trusted identity and returns Google-style status adap
     assert.deepEqual(await response.client.getExecution({ name: response.executionName }), [{
       name: response.executionName, state: 'SUCCEEDED',
       result: '{"done":true}',
+    }]);
+    f.states.get(executionId).status = 'failed';
+    f.states.get(executionId).error = { message: 'confirmed failure' };
+    assert.deepEqual(await response.client.getExecution({ name: response.executionName }), [{
+      name: response.executionName, state: 'FAILED',
+      error: { message: 'confirmed failure' },
     }]);
     await assert.rejects(response.client.getExecution({ name: 'native/another' }),
       /execution name mismatch/);
@@ -113,6 +126,23 @@ test('native capability is pinned from IAM release, not caller input', async () 
     argument: { trustedGlobalsVersion: 1 },
   });
   assert.equal(Object.hasOwn(oldRelease.states.get(executionId), 'trustedGlobalsVersion'), false);
+});
+
+test('parallel capability is pinned by IAM release rather than caller input', async () => {
+  const active = fixture(undefined, 1);
+  await active.backend.maybeStart({
+    workflowName: 'NativePilot', userId: 'owner', projectId: 'tenant',
+    argument: { parallelVersion: 0, env: { parallelVersion: 0 } },
+  });
+  assert.equal(active.states.get(executionId).parallelVersion, 1);
+  assert.deepEqual(active.states.get(executionId).allowedOperations,
+    ['http.post', 'native.parallel']);
+  const legacy = fixture();
+  await legacy.backend.maybeStart({
+    workflowName: 'NativePilot', userId: 'owner', projectId: 'tenant',
+    argument: { parallelVersion: 1 },
+  });
+  assert.equal(Object.hasOwn(legacy.states.get(executionId), 'parallelVersion'), false);
 });
 
 test('unpublished workflows use the existing Google Workflows path unchanged', async () => {
@@ -155,4 +185,35 @@ test('failed task creation fences the execution instead of leaving it runnable',
     argument: { env: { userId: 'user', projectId: 'proj' } },
   }), /queue unavailable/);
   assert.equal(f.states.get(executionId).status, 'cancelled');
+});
+
+test('Cloud Run tagged Jobs revision uses canonical OIDC audience', async () => {
+  const f = fixture();
+  const tagged = new NativeWorkflowBackend({
+    releases: f.backend.releases, store: f.store,
+    tasksClient: {
+      queuePath: () => 'projects/awfl-us/locations/us-central1/queues/native-executions',
+      createTask: async arg => { f.tasks.push(arg); },
+    },
+    gcpProject: 'awfl-us', region: 'us-central1', queue: 'native-executions',
+    jobsUrl: 'https://jobs-123-uc.a.run.app',
+    taskTargetUrl: 'https://native-rust-pilot---jobs-123-uc.a.run.app',
+    taskServiceAccount: 'task-worker@awfl-us.iam.gserviceaccount.com',
+    uuid: () => '1'.repeat(32),
+  });
+  await tagged.maybeStart({ workflowName: 'NativePilot', userId: 'user',
+    projectId: 'project', argument: {} });
+  assert.equal(f.tasks[0].task.httpRequest.url,
+    'https://native-rust-pilot---jobs-123-uc.a.run.app/native/execute');
+  assert.equal(f.tasks[0].task.httpRequest.oidcToken.audience,
+    'https://jobs-123-uc.a.run.app');
+  assert.deepEqual(f.tasks[0].task.dispatchDeadline, { seconds: 1800 });
+  assert.throws(() => new NativeWorkflowBackend({
+    releases: f.backend.releases, store: f.store,
+    tasksClient: { queuePath: () => 'queue', createTask: async () => {} },
+    gcpProject: 'awfl-us', region: 'us-central1', queue: 'native-executions',
+    jobsUrl: 'https://jobs-123-uc.a.run.app',
+    taskTargetUrl: 'https://attacker.example.org',
+    taskServiceAccount: 'task-worker@awfl-us.iam.gserviceaccount.com',
+  }), /native task target must/);
 });

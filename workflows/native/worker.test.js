@@ -2,7 +2,37 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { runNativeWorkflow } from './worker.js';
+import { createExecutionBudget, runNativeWorkflow } from './worker.js';
+
+test('shared native permit budget never over-admits on release and immediate new arrival', async () => {
+  const budget = createExecutionBudget(2);
+  let active = 0, peak = 0;
+  const gates = [];
+  const enter = () => budget(async () => {
+    active++;
+    peak = Math.max(active, peak);
+    await new Promise(resolve => gates.push(resolve));
+    active--;
+  });
+  const first = enter(), second = enter(), third = enter(), fourth = enter();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(gates.length, 2);
+  gates.shift()();
+  const fifth = enter(); // Competes with the released waiter's continuation.
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(gates.length, 2, 'only one waiter inherits the released permit');
+  assert.equal(peak, 2, 'new arrivals cannot exceed bounded concurrency');
+  for (let i = 0; i < 3; i++) {
+    gates.shift()();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.ok(active <= 2);
+  }
+  gates.shift()();
+  await Promise.all([first, second, third, fourth, fifth]);
+  assert.equal(active, 0);
+  assert.equal(peak, 2);
+  assert.throws(() => createExecutionBudget(0), /positive capacity/);
+});
 
 const binaryPath = process.env.AWFL_NATIVE_V2_NESTED_RANGE_BINARY;
 test('real Rust worker completes eight pinned effects with trusted user and project', {

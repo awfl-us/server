@@ -114,7 +114,8 @@ export function buildNativeTrustedGlobals({
   }
   return {
     GOOGLE_CLOUD_WORKFLOW_ID: state.workflowName,
-    GOOGLE_CLOUD_WORKFLOW_EXECUTION_ID: executionId,
+    GOOGLE_CLOUD_WORKFLOW_EXECUTION_ID:
+      state.forkLane?.rootExecutionId || executionId,
     GOOGLE_CLOUD_PROJECT_ID: gcpProject,
     GOOGLE_CLOUD_LOCATION: region,
   };
