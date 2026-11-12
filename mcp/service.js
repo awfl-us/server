@@ -15,6 +15,11 @@ export const digest = value => createHash('sha256').update(value).digest('hex');
 export function fail(message) { throw Object.assign(new Error(message), { publicMessage: message }); }
 export const validId = value => typeof value === 'string' && /^[a-f0-9]{32}$/.test(value);
 const requestDocId = seq => String(seq).padStart(8, '0');
+// Workspaces are durable handles to the project consumer, not timed GKE jobs.
+// Keep per-request/callback Firestore TTL independent of workspace lifetime.
+const REQUEST_RETENTION_MS = 24 * 60 * 60 * 1000;
+const STOPPED_WORKSPACE_RETENTION_MS = 30 * REQUEST_RETENTION_MS;
+const MAX_WORKSPACE_SEQUENCE = 0xffffffff;
 // 32 hexadecimal characters keep compatibility with existing AWFL MCP
 // connectors. The first 24 are the workspace prefix; the final eight
 // encode the per-workspace sequence. Authorization always checks the FULL
@@ -34,7 +39,7 @@ export function parseExecutionId(id, workspaceId) {
     fail('Invalid execution ID for workspace');
   }
   const seq = Number.parseInt(raw.slice(24), 16);
-  if (!Number.isSafeInteger(seq) || seq < 1 || seq > 2000) fail('Invalid execution ID sequence');
+  if (!Number.isSafeInteger(seq) || seq < 1 || seq > MAX_WORKSPACE_SEQUENCE) fail('Invalid execution ID sequence');
   return { workspaceId, seq };
 }
 const terminalStates = new Set(['completed', 'failed', 'timed_out', 'cancelled']);
@@ -73,7 +78,7 @@ export class ExecutionService {
     const snap = await this.ref(id).get();
     const ws = snap.data();
     if (!snap.exists || ws.userId !== userId) fail('Workspace not found');
-    if (!allowStopped && (ws.stopped || ws.expiresAt <= Date.now())) fail('Workspace stopped or expired');
+    if (!allowStopped && ws.stopped) fail('Workspace stopped');
     return ws;
   }
   async status(userId, ws, workspaceId = null) {
@@ -154,7 +159,10 @@ export class ExecutionService {
         fail(outcome?.body?.error || 'Project consumer stop failed; project lock retained');
       }
       // Only retire this MCP attachment AFTER the shared shutdown succeeded.
-      await this.ref(args.workspace_id).update({ stopped: true });
+      await this.ref(args.workspace_id).update({
+        stopped: true,
+        expires_at: new Date(Date.now() + STOPPED_WORKSPACE_RETENTION_MS),
+      });
       return { workspace_id: args.workspace_id, state: 'stopped',
         consumer_stopped: Boolean(outcome.body.consumerStopped), shared: true };
     }
@@ -200,16 +208,16 @@ export class ExecutionService {
     const transaction = await this.db.runTransaction(async tx => {
       const freshSnap = await tx.get(ref);
       const fresh = freshSnap.data();
-      if (!fresh || fresh.stopped || fresh.expiresAt <= Date.now()) fail('Workspace stopped or expired');
+      if (!fresh || fresh.stopped) fail('Workspace stopped or not found');
       const existing = keyRef ? await tx.get(keyRef) : null;
       if (existing?.exists) {
         const bound = existing.data();
         if (bound.fingerprint !== fingerprint) fail('Idempotency key conflicts with different command arguments');
         return { seq: bound.seq, workspaceId: bound.workspaceId, created: false };
       }
-      if (fresh.nextSeq >= 2000) fail('Workspace request limit reached');
+      if (fresh.nextSeq >= MAX_WORKSPACE_SEQUENCE) fail('Workspace request limit reached');
       const seq = fresh.nextSeq + 1;
-      const expires_at = new Date(fresh.expiresAt + 86400000);
+      const expires_at = new Date(Date.now() + REQUEST_RETENTION_MS);
       const id = executionIdFor(workspaceId, seq);
       tx.update(ref, { nextSeq: seq });
       tx.create(ref.collection('mcpRequests').doc(requestDocId(seq)), {
@@ -243,7 +251,7 @@ export class ExecutionService {
       kind: 'mcp_request',
       mcp: { projectId: ws.projectId, workspaceId, requestId: transaction.seq },
       created_at: Date.now(),
-      expires_at: new Date(ws.expiresAt + 86400000),
+      expires_at: new Date(Date.now() + REQUEST_RETENTION_MS),
     });
     await request.update({ callbackId });
     let toolArgs;
@@ -634,15 +642,13 @@ export class ExecutionService {
     });
     const id = randomBytes(16).toString('hex');
     const sessionId = (typeof args.session_id === 'string' && args.session_id.trim()) || 'mcp-' + id;
-    const expiresAt = Date.now() + 3600000;
     await this.ref(id).set({
-      userId, projectId, sessionId, nextSeq: 0, expiresAt,
-      expires_at: new Date(expiresAt + 86400000), stopped: false,
+      userId, projectId, sessionId, nextSeq: 0, stopped: false,
     });
     return { workspace_id: id, project_id: projectId, session_id: sessionId,
       state: consumer.state, consumer_id: consumer.consumerId,
       ...(consumer.imageProfile ? { image_profile: consumer.imageProfile } : {}),
-      shared: true, expires_at: expiresAt };
+      shared: true, expires_at: null };
   }
   async complete(userId, projectId, id, seq, result) {
     const ws = await this.owned(userId, id);
