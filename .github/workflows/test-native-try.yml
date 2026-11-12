@@ -25,6 +25,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Install runtime dependencies for native backend integration
+        run: npm install --ignore-scripts --no-audit --no-fund
       # runner.test.js uses a test-only Node script with `/usr/bin/env node`.
       # The production native runner deliberately exposes only /usr/bin:/bin,
       # while setup-node places Node in GitHub's hosted tool cache. Mirror the
