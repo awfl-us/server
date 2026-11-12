@@ -20,17 +20,19 @@ test('native profiling uses fixed method names, measures success/failure, never 
   const releases = profiler.releases({
     materialize: async () => ({ sha256: 'abc' }),
   });
-  const handlers = profiler.handlers({
+  const immutableHandlers = Object.freeze({
     'http.get': async ({ url }) => { assert.equal(url, secret); return { code: 200 }; },
   });
+  const handlers = profiler.handlers(immutableHandlers);
   assert.deepEqual(await store.get({ token: secret }), { ok: true });
   await assert.rejects(store.claim(), /sensitive-token/);
   assert.deepEqual(await releases.materialize('irrelevant'), { sha256: 'abc' });
   assert.deepEqual(await handlers['http.get']({ url: secret }), { code: 200 });
+  assert.ok(Object.isFrozen(immutableHandlers), 'production handler registry remains frozen');
   await profiler.measure('runner.transition', async () => {});
   profiler.report('completed');
   assert.equal(logs.length, 1);
-  const result = logs[0];
+  const result = JSON.parse(logs[0]);
   assert.equal(result.event, 'awfl_native_job_timing');
   assert.deepEqual(Object.keys(result.phases).sort(), [
     'effect.http.get', 'firestore.claim', 'firestore.get', 'gcs.materialize',

@@ -49,9 +49,16 @@ export function createNativeProfiler({ enabled = false, executionId, logger = co
     measure,
     store: target => instrument(target, 'firestore', name => STORE_OPS.has(name)),
     releases: target => instrument(target, 'gcs', name => name === 'materialize'),
-    handlers: target => instrument(target, 'effect', name => typeof name === 'string' &&
-      ['http.get', 'http.post', 'http.patch', 'http.delete', 'log.write'].includes(name)),
-    report: outcome => logger.info(summary(outcome)),
+    // Production createJobsEffectHandlers() returns Object.freeze(handlers).
+    // A Proxy cannot report a different value for a non-configurable,
+    // non-writable property; copy the handlers to a fresh map instead.
+    handlers: target => Object.fromEntries(Object.entries(target).map(([name, handler]) => [
+      name, typeof handler === 'function' &&
+        ['http.get', 'http.post', 'http.patch', 'http.delete', 'log.write'].includes(name)
+        ? (...args) => measure(`effect.${name}`, () => handler(...args)) : handler,
+    ])),
+    // One JSON log line per execution: Cloud Logging can parse it reliably.
+    report: outcome => logger.info(JSON.stringify(summary(outcome))),
     summary,
   };
 }
