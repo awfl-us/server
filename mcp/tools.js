@@ -23,7 +23,7 @@ export const tools = {
     schema: {}, readOnly: true,
   },
   workspace_create: {
-    description: 'Attach to or start the existing project-scoped AWFL consumer. image_profile chooses lightweight (default), browser (Chromium/Playwright), or scala (Java/sbt) for a NEW consumer; an existing shared environment cannot be switched without stopping it. idle_timeout_seconds applies only to a new consumer.',
+    description: 'Attach to or start the existing project-scoped AWFL consumer. New consumers default to scala (Java/sbt/Rust, 4Gi ephemeral storage); image_profile may explicitly choose lightweight or browser. An existing shared environment cannot switch images without stopping it. idle_timeout_seconds applies only to a new consumer.',
     schema: { project_id: z.string().min(1).max(128), session_id: z.string().min(1).max(128).optional(),
       idle_timeout_seconds: z.number().int().min(60).max(86400).optional(),
       image_profile: z.enum(['lightweight', 'browser', 'scala']).optional() },
