@@ -83,7 +83,7 @@ test('opt-in native timing leaves HTTP payload unchanged and uses scoped IDs onl
     const app = appFor({
       store: { get: async () => true },
       releases: { materialize: async () => true },
-      handlers: { 'http.get': async () => ({ code: 200 }) },
+      handlers: Object.freeze({ 'http.get': async () => ({ code: 200 }) }),
       execute: async ({ store, releases, handlers }) => {
         await store.get(); await releases.materialize();
         await handlers['http.get']({ payloadMarker: 'test_input_marker' });
@@ -94,9 +94,10 @@ test('opt-in native timing leaves HTTP payload unchanged and uses scoped IDs onl
     assert.equal(res.status, 200);
     assert.deepEqual(res.body, { state: 'SUCCEEDED', result: { done: true } });
     assert.equal(messages.length, 1);
-    assert.equal(messages[0].executionId, id);
-    assert.equal(messages[0].outcome, 'completed');
-    assert.equal(messages[0].phases['firestore.get'].count, 1);
+    const profile = JSON.parse(messages[0]);
+    assert.equal(profile.executionId, id);
+    assert.equal(profile.outcome, 'completed');
+    assert.equal(profile.phases['firestore.get'].count, 1);
     assert.equal(JSON.stringify(messages).includes('test_input_marker'), false);
   } finally {
     console.info = originalInfo;
