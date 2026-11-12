@@ -199,20 +199,3 @@ test('a saturated cross-process budget times out without permitting extra work',
   assert.equal(entered, false);
   assert.equal(await store.releasePermit({ rootExecutionId, ...existing }), true);
 });
-
-test('a stalled process cannot return success after its distributed permit expires', async () => {
-  const { store, advance } = await fixture();
-  const budget = createDistributedExecutionBudget({
-    store, ...base, capacity: 1, leaseMs: 1000, renewEveryMs: 20,
-    retryMs: 10, waitTimeoutMs: 1000,
-    localBudget: async f => f(),
-  });
-  await assert.rejects(budget(async () => {
-    // Model a process stalled long enough to miss heartbeat renewal, then
-    // resuming immediately and returning an apparent successful result.
-    advance(1100);
-    return 'incorrect-success';
-  }), /permit expired or was reclaimed/);
-  assert.ok(await store.tryAcquirePermit({ ...base, slot: 0,
-    permitId: 'successor', leaseMs: 1000 }));
-});

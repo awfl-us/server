@@ -27,15 +27,12 @@ request already sent may continue briefly after permit expiry. Such ambiguous
 effects must still follow the existing reconciliation policy; no automatic
 retry is made. The worker's own execution lease remains a separate fence.
 
-Verified locally: **8/8** dedicated permit tests (eight-slot contention,
+Verified locally: **7/7** dedicated permit tests (eight-slot contention,
 authentication, root cancellation, crash/epoch takeover, heartbeat renewal,
-timeout, fail-closed signal and expired-result rejection), **8/8** real Firestore emulator tests (including
+timeout, fail-closed signal), **8/8** real Firestore emulator tests (including
 two independent Node processes racing for one slot and a crashed holder), and
-the full native Node suite **75 passed / 30 skipped / 0 failed** with the real
-generated parallel and Try/Raise ELFs (emulator cases skipped only there
-because they were run separately). Uncaught confirmed child failure now
-returns its durably recorded terminal result without trying to acquire
-another permit; compiled `Try` recovery is unchanged. The emulator
+the full native Node suite **72 passed / 32 skipped / 0 failed** (emulator
+cases skipped only there because they were run separately). The emulator
 suite also exercises the actual compiler-generated three-level Rust fork.
 Remaining limitations: eventual cleanup of terminal execution permit records,
 unresponsive external effects, distributed Jobs fleet-wide limits across
