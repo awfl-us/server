@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: awfl-us/compiler-rust
-          ref: 358c4d559c88b82e90e3b34988f31c1b83650dd7
+          ref: 2bbb33f6e8d9ac9d761c54baa7b8b36fd814a286
           path: _compiler-rust
       - uses: actions/setup-node@v4
         with:
@@ -82,7 +82,7 @@ jobs:
           cd _compiler-rust/frontend
           sbt -batch 'Test / runMain us.awfl.compiler.rust.ParallelIrSmoke'
           cd ../..
-          for name in native-parallel-branches native-parallel-for native-parallel-caught native-parallel-uncaught; do
+          for name in native-parallel-branches native-parallel-for native-parallel-nested native-parallel-caught native-parallel-uncaught; do
             cargo build --manifest-path "_compiler-rust/fixtures/$name/Cargo.toml"
             cargo clippy --manifest-path "_compiler-rust/fixtures/$name/Cargo.toml" --all-targets --locked -- -D warnings
           done
@@ -95,6 +95,7 @@ jobs:
               for name, key in [
                   ('native-parallel-branches', 'AWFL_NATIVE_PARALLEL_BRANCHES_BINARY'),
                   ('native-parallel-for', 'AWFL_NATIVE_PARALLEL_FOR_BINARY'),
+                  ('native-parallel-nested', 'AWFL_NATIVE_PARALLEL_NESTED_BINARY'),
                   ('native-parallel-caught', 'AWFL_NATIVE_PARALLEL_CAUGHT_BINARY'),
                   ('native-parallel-uncaught', 'AWFL_NATIVE_PARALLEL_UNCAUGHT_BINARY'),
               ]:

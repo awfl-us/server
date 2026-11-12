@@ -72,15 +72,23 @@ until explicit cleanup. Orphan garbage collection and a persistent
 cross-process global concurrency cap remain separate release gates.
 
 Validation in the compiler-rust Scala GKE environment: Scala-generated
-`native-parallel-branches` and `native-parallel-for` Rust ELFs compiled with
-Cargo 1.99.1. All **20** focused Node tests pass, including three-level
-ancestry and fork supersession. The real Firestore emulator passes **6/6**:
-concurrent compiled Rust branches and replay, crash-before-parent-journal
-recovery, ordered `ParallelFor`, cancellation, real OS process death/reclaim,
-and a nonterminal root whose joined fork fences a deep descendant. The new
-ancestry case uses actual Firestore transactions and pinned fixture metadata,
-but synthetic nested child records; full nested Rust-generated control-flow
-parity remains to be validated. CI pins compiler-rust `358c4d5` for reproducibility.
+`native-parallel-branches`, `native-parallel-for`, and **three-level
+`native-parallel-nested`** Rust ELFs compiled with Cargo 1.99.1; the nested
+crate passed strict Clippy. All **20** focused Node tests pass, including
+three-level ancestry and fork supersession. The real Firestore emulator
+passes **7/7**: concurrent compiled Rust branches and replay,
+crash-before-parent-journal recovery, ordered `ParallelFor`, cancellation,
+real OS process death/reclaim, a nonterminal root whose joined fork fences
+a deep descendant, and **actual three-level compiled Rust execution**.
+That last test verifies six completed child documents at depths 1/2/3,
+four distinct effect calls, overlap, root join, and no duplicate effects
+after a fresh-store replay. The stale-root case separately uses actual
+Firestore transactions and synthetic nested records. Local direct Rust IPC
+tests also validate three distinct nested fork IDs. CI pins the paired
+compiler-rust commit `2bbb33f6` for reproducibility. No live Cloud Run
+effectful canary or Google Workflows differential has been verified;
+distributed cross-process concurrency admission and orphan cleanup remain
+release gates.
 
 
 The existing AWFL Workflows service has an optional native Rust execution

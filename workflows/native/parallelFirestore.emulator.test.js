@@ -18,11 +18,12 @@ import { forkLaneId } from './forkCoordinator.js';
 
 const binary = process.env.AWFL_NATIVE_PARALLEL_BRANCHES_BINARY;
 const eachBinary = process.env.AWFL_NATIVE_PARALLEL_FOR_BINARY;
+const nestedBinary = process.env.AWFL_NATIVE_PARALLEL_NESTED_BINARY;
 const runContender = promisify(execFile);
 const contenderScript = fileURLToPath(new URL('./parallelLeaseContender.emulator.js', import.meta.url));
 const crashScript = fileURLToPath(new URL('./parallelCrashWorker.emulator.js', import.meta.url));
 const enabled = Boolean(binary && process.env.FIRESTORE_EMULATOR_HOST);
-if (process.env.AWFL_NATIVE_FIRESTORE_PARALLEL_REQUIRED === '1' && (!enabled || !eachBinary)) {
+if (process.env.AWFL_NATIVE_FIRESTORE_PARALLEL_REQUIRED === '1' && (!enabled || !eachBinary || !nestedBinary)) {
   throw new Error('real parallel Firestore tests require emulator host and both compiled Rust binaries');
 }
 const app = enabled ? initializeApp({ projectId: 'demo-awfl-native' },
@@ -284,4 +285,50 @@ test('emulator: a nonterminal root finishing its fork fences all nested descenda
     /parent is no longer active/);
     await assert.rejects(f.makeStore().claim({ executionId: third.executionId,
       workerId: 'new_process' }), /parent is no longer active/);
+  });
+
+test('emulator + generated Rust: actual three-level nested forks journal and replay all child effects',
+  { skip: !enabled || !nestedBinary, timeout: 120_000 }, async () => {
+    let calls = 0, active = 0, peak = 0, release, arrived;
+    const seen = [];
+    const barrier = new Promise(resolve => { release = resolve; });
+    const started = new Promise(resolve => { arrived = resolve; });
+    const f = await fixture({ executable: nestedBinary, handlers: {
+      'http.post': async ({ args }) => {
+        calls++;
+        seen.push(args);
+        active++;
+        peak = Math.max(peak, active);
+        if (calls === 2) arrived();
+        await barrier;
+        active--;
+        return args + '-emulated';
+      },
+    } });
+    const running = f.execute();
+    let watchdog;
+    try {
+      await Promise.race([started, new Promise((_, reject) => {
+        watchdog = setTimeout(() => reject(new Error('nested native fork lanes were serialized')), 30_000);
+      })]);
+    } finally {
+      clearTimeout(watchdog);
+      release();
+    }
+    assert.equal(await running, 'nested-complete');
+    assert.ok(peak >= 2, 'deep and sibling native effects must overlap');
+    assert.deepEqual(seen.sort(), ['deep-a', 'deep-b', 'middle', 'outer']);
+    assert.equal(calls, 4);
+    const state = await f.makeStore().get(f.executionId);
+    assert.equal(state.status, 'completed');
+    assert.equal(state.effectCount, 1);
+    // The 2+2+2 child records are pinned to depth 1, 2 and 3, and every
+    // intermediate nested join is already committed in real Firestore.
+    const docs = await db.collection(f.collection).get();
+    const children = docs.docs.filter(doc => doc.data().forkLaneJson);
+    assert.deepEqual(children.map(doc => JSON.parse(doc.data().forkLaneJson).depth).sort(),
+      [1, 1, 2, 2, 3, 3]);
+    assert.ok(children.every(doc => doc.data().status === 'completed'));
+    assert.equal(await f.execute(f.makeStore()), 'nested-complete');
+    assert.equal(calls, 4, 'a fresh worker cannot re-dispatch nested effects');
   });

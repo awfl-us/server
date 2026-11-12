@@ -33,6 +33,49 @@ function fakeFirestore() {
 
 const compiledBranches = process.env.AWFL_NATIVE_PARALLEL_BRANCHES_BINARY;
 const compiledEach = process.env.AWFL_NATIVE_PARALLEL_FOR_BINARY;
+const compiledNested = process.env.AWFL_NATIVE_PARALLEL_NESTED_BINARY;
+
+test('real compiled three-level Parallel forks, journals each nested effect, and replays once',
+  { skip: !compiledNested, timeout: 120_000 }, async () => {
+    let calls = 0, active = 0, peak = 0, release;
+    const seen = [];
+    const barrier = new Promise(resolve => { release = resolve; });
+    let concurrent;
+    const twoReady = new Promise(resolve => { concurrent = resolve; });
+    const fixture = await createTest({
+      executable: compiledNested, input: null,
+      executionId: 'native_' + '8'.repeat(32),
+      handlers: { 'http.post': async ({ args }) => {
+        seen.push(args);
+        calls++;
+        active++;
+        peak = Math.max(peak, active);
+        if (calls === 2) concurrent();
+        await barrier;
+        active--;
+        return args + '-completed';
+      } },
+    });
+    const running = fixture.execute();
+    let watchdog;
+    try {
+      await Promise.race([twoReady, new Promise((_, reject) => {
+        watchdog = setTimeout(() => reject(new Error('nested forks failed to overlap')), 20_000);
+      })]);
+    } finally {
+      clearTimeout(watchdog);
+      release();
+    }
+    assert.equal(await running, 'nested-complete');
+    assert.equal(peak >= 2, true);
+    assert.equal(calls, 4);
+    assert.deepEqual(seen.sort(), ['deep-a', 'deep-b', 'middle', 'outer']);
+    const root = await fixture.store.get('native_' + '8'.repeat(32));
+    assert.equal(root.status, 'completed');
+    assert.equal(root.effectCount, 1);
+    assert.equal(await fixture.execute(), 'nested-complete');
+    assert.equal(calls, 4, 're-delivery must not resend any nested child effects');
+  });
 
 async function createTest({ executable, input, handlers, executionId, clock }) {
   const sha256 = createHash('sha256').update(await readFile(executable)).digest('hex');
