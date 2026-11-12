@@ -128,15 +128,26 @@ export function buildNativeTrustedGlobals({
 // committed before an independent authenticated dispatcher can send it.
 // This path is NOT connected to the common production launcher.
 export async function executeNativeStep({ store, executionId, workerId, executable, sha256,
-                                          timeoutMs, allowedOperations, gcpProject, region, profiler }) {
+                                          timeoutMs, allowedOperations, gcpProject, region, profiler,
+                                          claimedState = null, retainState = false }) {
   const leaseMs = Math.max(60_000, (timeoutMs ?? 30_000) + 10_000);
-  const state = await store.claim({ executionId, workerId, leaseMs });
+  // The same Jobs request already owns this fenced lease after a durable
+  // checkpoint/effect commit. Keep that verified state in memory rather than
+  // running a second Firestore claim on every Rust continuation.
+  const state = claimedState && claimedState.leaseUntil > Date.now() + 10_000
+    ? claimedState : await store.claim({ executionId, workerId, leaseMs });
   if (state.completed || state.cancelled || state.failed) return state;
+  if (claimedState && (state.owner !== workerId ||
+      !Number.isSafeInteger(state.epoch) || state.epoch < 1 ||
+      state.artifactSha256 !== sha256)) {
+    throw new Error('native worker lost its fenced lease');
+  }
   if (state.artifactSha256 !== sha256) throw new Error('pinned artifact mismatch');
   const protocolVersion = state.protocolVersion || 1;
   if (protocolVersion !== 1 && protocolVersion !== 2) throw new Error('unsupported native artifact protocol');
   if (state.pendingEffect) {
-    return { status: 'waiting_effect', effectId: state.pendingEffect.effectId };
+    return { status: 'waiting_effect', effectId: state.pendingEffect.effectId,
+      ...(retainState && { state }) };
   }
   const continuation = state.checkpoint && {
     next_step: state.checkpoint.next_step,
@@ -202,14 +213,16 @@ export async function executeNativeStep({ store, executionId, workerId, executab
         Number.isSafeInteger(f.iteration) && f.iteration >= 0)) {
     throw new Error('invalid native effect suspension');
   }
-  await store.prepareEffect({
+  const prepared = await store.prepareEffect({
     executionId, workerId, epoch: state.epoch, nodeId: effect.node_id,
     effectId: effect.effect_id, operation: effect.operation,
     args: effect.args, slots: next.slots, continuation: next,
     resultSlot: effect.result_slot, protocolVersion,
     ...(onError && { onError: { nextStep: onError.next_step, errorSlot: onError.error_slot } }),
   });
-  return { status: 'waiting_effect', effectId: effect.effect_id };
+  return { status: 'waiting_effect', effectId: effect.effect_id,
+    ...(retainState && prepared && typeof prepared === 'object' &&
+      { state: prepared }) };
 }
 
 // The signed registry is the only entry point intended for a future

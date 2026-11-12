@@ -1,5 +1,30 @@
 # Opt-in timing for a native Jobs execution
 
+## Reusing the active worker's durable state (November 12, 2026)
+
+The worker now holds the **state returned by each successful Firestore
+transaction in memory** until the next native transition. The original
+Firestore document remains authoritative for recovery. This does *not*
+introduce a second state service, change the Rust protocol or buffer
+irreversible effects asynchronously.
+
+For a one-effect `helpers-ToolDefs` run, the real Rust regression test now
+observes **2 reads, 1 claim, 0 renewals, 1 durable effect preparation, 1
+effect journal write, and 1 completion**. Previously the worker read four
+times, claimed twice and renewed once. Firestore remains the checkpoint and
+effect-journal source of truth, with the same transaction-level fencing.
+The dispatcher still performs a **fresh read immediately before an external
+effect** to reject a cancellation or lease takeover. A later Cloud Tasks
+delivery with no local state always starts with a fresh Firestore read/claim.
+Long-lived executions still renew leases when near expiry. Multi-branch
+parent heartbeat behavior is unchanged.
+
+The native process is still invoked per continuation: measurements showed its
+execution took ~19 ms and the larger delays were Firestore/GCS/network.
+Avoid adding a long-lived Rust-process protocol until actual evidence calls
+for it. This simplification should be measured on the isolated Jobs canary,
+not assumed to produce a speedup before cloud benchmarking.
+
 Set `AWFL_NATIVE_PROFILE_ENABLED=1` **only** on an isolated Jobs revision
 with `AWFL_NATIVE_EXECUTION_ENABLED=1`. A successful or failed Jobs request
 then writes one structured `awfl_native_job_timing` Cloud Logging event,

@@ -15,8 +15,12 @@ export class NativeEffectDispatcher {
     this.authorizeExecution = authorizeExecution;
   }
 
-  async dispatch({ store, executionId, workerId, epoch, effectId }) {
-    const state = await store.get(executionId);
+  async dispatch({ store, executionId, workerId, epoch, effectId,
+                   preparedState = null }) {
+    // A freshly committed prepareEffect result is already owner/epoch-fenced.
+    // Retain the independent post-authorization read below, which detects
+    // cancellations, takeovers and changed effect intents before HTTP calls.
+    const state = preparedState || await store.get(executionId);
     if (!state) throw new Error('execution not found');
     if (state.owner !== workerId || state.epoch !== epoch || state.leaseUntil <= Date.now()) {
       throw new Error('worker lease invalid');
@@ -56,6 +60,8 @@ export class NativeEffectDispatcher {
       throw new Error('native effect lease or intent changed during authorization');
     }
     const key = `${executionId}:${effectId}`;
+    const withState = (result, persisted) => preparedState && persisted &&
+      typeof persisted === 'object' ? { ...result, state: persisted } : result;
     const recordConfirmed = async error => {
       const http = error instanceof NativeConfirmedHttpFailure;
       const fork = error instanceof NativeConfirmedParallelFailure;
@@ -65,16 +71,16 @@ export class NativeEffectDispatcher {
       };
       if (intent.onError) {
         if (typeof store.recordEffectFailure !== 'function') throw error;
-        await store.recordEffectFailure({
+        const persisted = await store.recordEffectFailure({
           executionId, workerId, epoch, effectId, failure,
         });
-        return { status: 'failed_recorded', effectId, failure };
+        return withState({ status: 'failed_recorded', effectId, failure }, persisted);
       }
       if (fork && typeof store.failPendingParallel === 'function') {
-        await store.failPendingParallel({
+        const persisted = await store.failPendingParallel({
           executionId, workerId, epoch, effectId, error: failure,
         });
-        return { status: 'failed_recorded', effectId, failure };
+        return withState({ status: 'failed_recorded', effectId, failure }, persisted);
       }
       // Unhandled confirmed HTTP failures keep their previous behavior.
       throw error;
@@ -93,8 +99,9 @@ export class NativeEffectDispatcher {
         if (observed === undefined) {
           return { status: 'uncertain', effectId, reason: 'remote outcome unknown' };
         }
-        await store.recordEffect({ executionId, workerId, epoch, effectId, outcome: observed });
-        return { status: 'reconciled', effectId, outcome: observed };
+        const persisted = await store.recordEffect({ executionId, workerId, epoch,
+          effectId, outcome: observed });
+        return withState({ status: 'reconciled', effectId, outcome: observed }, persisted);
       } catch (error) {
         return recordConfirmed(error);
       }
@@ -111,7 +118,8 @@ export class NativeEffectDispatcher {
       // uncaught parent fork). Unknown/transport outcomes remain unresolved.
       return recordConfirmed(error);
     }
-    await store.recordEffect({ executionId, workerId, epoch, effectId, outcome });
-    return { status: 'recorded', effectId, outcome };
+    const persisted = await store.recordEffect({ executionId, workerId, epoch,
+      effectId, outcome });
+    return withState({ status: 'recorded', effectId, outcome }, persisted);
   }
 }

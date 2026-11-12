@@ -135,12 +135,18 @@ export async function runNativeWorkflow({
         userId: storedUser, projectId: storedProject,
       }),
     });
+    // The durable store returns the full state at each fenced commit. Reuse
+    // that state locally while this worker owns its lease. A resumed task
+    // starts with a fresh claim, and effects still recheck the persisted
+    // lease/intent immediately before dispatch.
+    let currentState = null;
     for (let i = 0; i < maxTransitions; i++) {
       const transition = () => withBudget(() => executeNativeStep({
         store, executionId, workerId,
         executable: artifact.executable, sha256: artifact.sha256,
         allowedOperations: initial.allowedOperations,
         profiler,
+        claimedState: currentState, retainState: true,
       }));
       const outcome = profiler ? await profiler.measure('runner.transition', transition)
         : await transition();
@@ -154,18 +160,20 @@ export async function runNativeWorkflow({
       if (outcome.status !== 'waiting_effect') {
         throw new Error('unrecognized native execution state');
       }
-      const state = await store.get(executionId);
+      let state = outcome.state || await store.get(executionId);
       if (state.userId !== userId || state.projectId !== projectId) {
         throw new Error('native execution owner changed');
       }
-      if (typeof store.renew === 'function') {
-        await store.renew({
+      if (typeof store.renew === 'function' &&
+          state.leaseUntil <= Date.now() + 10_000) {
+        state = await store.renew({
           executionId, workerId, epoch: state.epoch, leaseMs: 60_000,
-        });
+        }) || state;
       }
       const dispatch = () => dispatcher.dispatch({
         store, executionId, workerId, epoch: state.epoch,
         effectId: outcome.effectId,
+        preparedState: state,
       });
       const effectDispatch = () => state.pendingEffect?.operation === 'native.parallel'
         ? dispatch() : withBudget(dispatch);
@@ -175,6 +183,10 @@ export async function runNativeWorkflow({
         // No automatic replay for an effect with an uncertain remote outcome.
         throw new Error('native effect reconciliation required');
       }
+      if (effect.state?.status === 'failed') {
+        return { status: 'failed', error: effect.state.error };
+      }
+      currentState = effect.state?.status === 'ready' ? effect.state : null;
     }
     throw new Error('native execution transition budget exhausted');
   } finally {
