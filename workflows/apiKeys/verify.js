@@ -1,10 +1,9 @@
 import { getFirestore } from 'firebase-admin/firestore';
 import { MCP_SCOPE, isActiveApiKeyRecord, parseApiKey } from './core.js';
 
-// Reusable verifier for the future MCP transport. Deliberately separate from
-// Firebase ID-token auth used by the AWFL web application.
-// Each invocation reads Firestore, so deleting a key takes effect immediately.
-export async function verifyAwflApiKey(token, { db = getFirestore(), requiredScope = MCP_SCOPE, now = Date.now() } = {}) {
+// Shared API and MCP verifier. Read Firestore on every request so revocation,
+// expiration and scope changes take effect without process-local caches.
+export async function verifyAwflApiKey(token, { db = getFirestore(), requiredScope = null, now = Date.now() } = {}) {
   const parsed = parseApiKey(token);
   if (!parsed) return null;
 
@@ -17,7 +16,8 @@ export async function verifyAwflApiKey(token, { db = getFirestore(), requiredSco
   return { userId: data.userId, keyId: parsed.id, scopes: [...data.scopes] };
 }
 
-// Mount this only on the future MCP routes, not on normal browser API routes.
+// Retained for standalone callers; normal HTTP API and MCP routes now share
+// resolveAwflIdentity.
 export function requireAwflApiKey(requiredScope = MCP_SCOPE) {
   return async (req, res, next) => {
     const authorization = req.get('authorization') || '';

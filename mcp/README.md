@@ -38,10 +38,13 @@ processes can receive updated GITHUB_TOKEN and GH_TOKEN values.
 Credential presence is not a live OAuth/IAM verification. Never print,
 copy, paste or log token-file contents.
 
-An AWFL MCP API key is distinct from Google Cloud and GitHub credentials.
-AWFL keys are managed under web Settings > API Keys or the Firebase ID
-token-authenticated /workflows/api-keys endpoints. Neither Google OAuth tokens
-nor MCP keys authorize the AWFL API-key management endpoints.
+An AWFL API key is distinct from Google Cloud and GitHub credentials.
+The same AWFL key now authenticates `/workflows/*`, `/mcp` and `/mcp/agents`
+through the shared identity resolver. Existing `mcp:invoke` keys continue
+to work; new keys include `awfl:access` and `mcp:invoke`. Manage and revoke
+them under web Settings > API Keys or through `/workflows/api-keys` with an
+authenticated AWFL user token. A key never bypasses user/project or MCP
+owner restrictions. Do not print or log key material.
 
 ## Execution and lifecycle
 

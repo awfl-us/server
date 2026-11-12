@@ -3,7 +3,11 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 // Versioned bearer tokens with a random lookup ID and a 256-bit secret.
 // Only the SHA-256 digest is ever stored in Firestore.
 const TOKEN_PATTERN = /^awfl_v1_([0-9a-f]{24})_([A-Za-z0-9_-]{43})$/;
+// API keys work for AWFL's HTTP API and both MCP endpoints. Existing keys
+// created for MCP remain valid after the shared-auth migration.
+export const API_SCOPE = 'awfl:access';
 export const MCP_SCOPE = 'mcp:invoke';
+export const API_KEY_SCOPES = Object.freeze([API_SCOPE, MCP_SCOPE]);
 export const API_KEY_LIFETIME_MS = 90 * 24 * 60 * 60 * 1000;
 
 export function generateApiKey() {
@@ -33,13 +37,15 @@ export function matchesApiKeyHash(token, storedHash) {
 }
 
 
-export function isActiveApiKeyRecord(token, record, { requiredScope = MCP_SCOPE, now = Date.now() } = {}) {
+export function isActiveApiKeyRecord(token, record, { requiredScope = null, now = Date.now() } = {}) {
   const parsed = parseApiKey(token);
   return Boolean(parsed && record &&
     record.id === parsed.id &&
     typeof record.userId === 'string' && record.userId &&
     matchesApiKeyHash(token, record.hash) &&
-    Array.isArray(record.scopes) && record.scopes.includes(requiredScope) &&
+    Array.isArray(record.scopes) &&
+    (requiredScope ? record.scopes.includes(requiredScope) :
+      record.scopes.some(scope => API_KEY_SCOPES.includes(scope))) &&
     Number.isSafeInteger(record.expiresAt) && record.expiresAt > now);
 }
 
