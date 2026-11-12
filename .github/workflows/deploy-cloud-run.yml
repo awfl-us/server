@@ -15,7 +15,8 @@ jobs:
     env:
       MCP_OWNER_UID: ${{ vars.MCP_OWNER_UID }}
       GOOGLE_CLOUD_OAUTH_CLIENT_ID: ${{ vars.GOOGLE_CLOUD_OAUTH_CLIENT_ID }}
-      AWFL_CLI_REF: 'a18d14d4487321c7c8a5f065fd38f312dbd9cb67'
+      # Includes exclusion of custom Cargo *-target directories from GCS sync.
+      AWFL_CLI_REF: '8459b304312f16a3c106cfac218dcfbd84853870'
       CORS_ALLOW_ORIGIN: ${{ vars.CORS_ALLOW_ORIGIN }}
       # Default to repository variables; will be overridden by JSON if present
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}

@@ -1,6 +1,8 @@
 // Controlled consumer image catalog. All variants contain the same AWFL CLI,
 // startup entrypoint, lock protocol and credential refresh functionality.
-export const DEFAULT_IMAGE_PROFILE = 'lightweight';
+// Prefer the complete development toolchain for new shared project consumers.
+// An already-running consumer retains its pinned image until explicitly stopped.
+export const DEFAULT_IMAGE_PROFILE = 'scala';
 
 const profiles = [
   { id: 'lightweight', label: 'Lightweight', description: 'Python, Node, Git, GitHub CLI and gcloud. Fastest and smallest environment.', env: 'CONSUMER_K8S_IMAGE' },

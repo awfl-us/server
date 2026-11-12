@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { consumerImageCatalog, normalizeImageProfile, resolveConsumerImage } from '../imageProfiles.js';
+import { consumerResourcesForProfile } from '../resourceProfiles.js';
 
 const env = {
   CONSUMER_K8S_IMAGE: 'registry/awfl-lightweight:source-a',
@@ -8,12 +9,19 @@ const env = {
   CONSUMER_SCALA_K8S_IMAGE: 'registry/awfl-scala:source-a',
 };
 
-test('the catalog advertises only published variants and defaults to lightweight', () => {
+test('the catalog advertises published variants and defaults to scala', () => {
   assert.deepEqual(consumerImageCatalog(env).profiles.map(({ id, available }) => [id, available]), [
     ['lightweight', true], ['browser', true], ['scala', true],
   ]);
   assert.equal(consumerImageCatalog({}).profiles.every(p => !p.available), true);
-  assert.equal(normalizeImageProfile(), 'lightweight');
+  assert.equal(consumerImageCatalog(env).default, 'scala');
+  assert.equal(normalizeImageProfile(), 'scala');
+  assert.deepEqual(resolveConsumerImage({ env }), {
+    image: env.CONSUMER_SCALA_K8S_IMAGE, imageProfile: 'scala',
+  });
+  const defaultProfile = resolveConsumerImage({ env }).imageProfile;
+  assert.equal(consumerResourcesForProfile(defaultProfile).requests['ephemeral-storage'], '4Gi');
+  assert.equal(consumerResourcesForProfile(defaultProfile).limits['ephemeral-storage'], '4Gi');
 });
 
 test('each named image resolves to its own immutable source-addressed tag', () => {
