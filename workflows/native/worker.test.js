@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createExecutionBudget, runNativeWorkflow } from './worker.js';
+import { NativeExecutionStore } from './executionStore.js';
 
 test('shared native permit budget never over-admits on release and immediate new arrival', async () => {
   const budget = createExecutionBudget(2);
@@ -130,4 +131,75 @@ test('native worker rejects project impersonation before loading an artifact', a
     handlers: {},
   }), /does not match trusted Jobs task identity/);
   assert.equal(fetched, 0);
+});
+
+const toolDefsBinary = process.env.AWFL_NATIVE_TOOLDEFS_BINARY;
+test('real ToolDefs Rust effect retains durable journal with one claim and two reads', {
+  skip: !toolDefsBinary, timeout: 40_000,
+}, async () => {
+  const docs = new Map();
+  const db = {
+    collection: name => ({ doc: key => ({ key: name + '/' + key,
+      async get() {
+        const data = docs.get(this.key);
+        return { exists: data !== undefined, data: () => structuredClone(data) };
+      },
+    }) }),
+    async runTransaction(fn) {
+      const writes = [];
+      const tx = {
+        get: ref => ref.get(),
+        create: (ref, value) => writes.push([ref.key, structuredClone(value)]),
+        update: (ref, value) => writes.push([ref.key, structuredClone(value)]),
+      };
+      const outcome = await fn(tx);
+      for (const [key, value] of writes) docs.set(key, value);
+      return outcome;
+    },
+  };
+  const store = new NativeExecutionStore({ db });
+  const sha256 = createHash('sha256').update(await readFile(toolDefsBinary)).digest('hex');
+  const executionId = 'native_' + 'a'.repeat(32);
+  const identity = { userId: 'test-owner', projectId: 'test-project' };
+  await store.create({ executionId, ...identity, artifactSha256: sha256,
+    workflowName: 'helpers-ToolDefs', protocolVersion: 2,
+    trustedGlobalsVersion: 1, allowedOperations: ['http.get'],
+    input: { toolNames: ['__awfl_native_probe__'],
+      env: { BASE_URL: 'https://jobs.example.org/jobs', ...identity } },
+  });
+  const counts = Object.fromEntries([
+    'get', 'claim', 'renew', 'prepareEffect', 'recordEffect', 'complete',
+  ].map(name => [name, 0]));
+  const counted = Object.create(store);
+  for (const name of Object.keys(counts)) {
+    counted[name] = async (...args) => { counts[name]++; return store[name](...args); };
+  }
+  const previousProject = process.env.GCP_PROJECT;
+  process.env.GCP_PROJECT = 'awfl-us';
+  let effects = 0;
+  try {
+    const result = await runNativeWorkflow({
+      store: counted, executionId, ...identity,
+      releases: { materialize: async () => ({
+        executable: toolDefsBinary, sha256, cleanup: async () => {},
+      }) },
+      handlers: { 'http.get': async ({ identity: authorized }) => {
+        assert.deepEqual(authorized, identity);
+        effects++;
+        return { code: 200, body: { items: [] } };
+      } },
+    });
+    assert.deepEqual(result, { defs: [] });
+    assert.equal(effects, 1);
+    assert.deepEqual(counts, {
+      get: 2, claim: 1, renew: 0, prepareEffect: 1,
+      recordEffect: 1, complete: 1,
+    });
+    assert.equal((await store.get(executionId)).status, 'completed');
+    assert.equal((await store.getEffect(executionId,
+      [...docs.keys()].find(key => key.includes('/effects/')).split('/').at(-1))).outcome.code, 200);
+  } finally {
+    if (previousProject === undefined) delete process.env.GCP_PROJECT;
+    else process.env.GCP_PROJECT = previousProject;
+  }
 });

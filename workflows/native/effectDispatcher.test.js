@@ -73,6 +73,31 @@ test('authorization uses stored owner and aborts on lease changes before dispatc
   assert.equal(calls.length, 0);
 });
 
+test('prepared state saves a read, but cancellation is still checked before HTTP', async () => {
+  let persisted = { owner: 'worker', userId: 'owner', projectId: 'project',
+    epoch: 1, leaseUntil: Date.now() + 60_000, updatedAt: 10,
+    pendingEffect: { ...pending, fingerprint: 'fingerprint' },
+  };
+  let reads = 0, sent = 0;
+  const store = {
+    get: async () => { reads++; return persisted; },
+    recordEffect: async () => { throw new Error('must not journal'); },
+  };
+  const dispatcher = new BaseNativeEffectDispatcher({
+    authorizeExecution: async ({ userId, projectId }) => {
+      persisted = { ...persisted, status: 'cancelled', epoch: 2, owner: null };
+      return { allowed: true, userId, projectId };
+    },
+    handlers: { 'http.post': async () => { sent++; } },
+  });
+  await assert.rejects(dispatcher.dispatch({
+    store, executionId: 'run1', workerId: 'worker', epoch: 1, effectId: 'step1',
+    preparedState: persisted,
+  }), /changed during authorization/);
+  assert.equal(reads, 1, 'one fresh fencing read remains');
+  assert.equal(sent, 0, 'no external HTTP call after cancellation');
+});
+
 test('dispatches allowed operation once with stable idempotency key', async () => {
   const { store, calls } = fixture();
   let key;
