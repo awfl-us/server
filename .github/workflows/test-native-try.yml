@@ -81,6 +81,9 @@ jobs:
             workflows/native/executionStore.test.js \
             workflows/native/executionApi.test.js \
             workflows/native/runner.test.js \
+            workflows/native/trustedGlobals.test.js \
+            workflows/native/gcsReleases.test.js \
+            workflows/native/backend.test.js \
             workflows/native/worker.test.js \
             workflows/native/httpEffectHandlers.test.js \
             workflows/native/logEffects.test.js \
