@@ -176,7 +176,7 @@ test('emulator + real Rust: cancelling the root fences its pending join and re-d
       clearTimeout(watchdog);
       release();
     }
-    await assert.rejects(running, /stale|lease|cancel|conflict/i);
+    await assert.rejects(running, /stale|lease|cancel|conflict|parent is no longer active/i);
     const cancelled = await f.makeStore().get(f.executionId);
     assert.equal(cancelled.status, 'cancelled');
     assert.equal(cancelled.owner, null);
@@ -238,4 +238,50 @@ test('emulator + real Rust: killed worker leaves fork journal empty; successor t
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+
+test('emulator: a nonterminal root finishing its fork fences all nested descendants',
+  { skip: !enabled, timeout: 120_000 }, async () => {
+    const f = await fixture({ handlers: {} });
+    const root = await f.store.get(f.executionId);
+    const rootLease = await f.store.claim({ executionId: root.executionId, workerId: 'root-worker' });
+    const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+    async function pending(executionId, workerId, epoch, nodeId, effectId) {
+      await f.store.prepareEffect({ executionId, workerId, epoch,
+        nodeId, effectId, operation: 'native.parallel',
+        args: { generation: effectId, lanes: [] }, slots: {}, protocolVersion: 2 });
+    }
+    async function child(parentId, depth, nodeId, generation) {
+      const index = 0, entry = 'pc_3';
+      const slots = { s0: { type: 'integer', value: depth } };
+      const executionId = forkLaneId({ parentExecutionId: parentId, nodeId, generation, index });
+      await f.store.create({
+        executionId, input: null, userId: root.userId, projectId: root.projectId,
+        artifactSha256: root.artifactSha256, workflowName: root.workflowName,
+        protocolVersion: 2, parallelVersion: 1, allowedOperations: root.allowedOperations,
+        forkLane: { parentExecutionId: parentId, rootExecutionId: root.executionId,
+          depth, nodeId, generation, index, entry, slots,
+          snapshotSha256: digest({ input: null, slots, entry }) },
+      });
+      return { executionId, ...(await f.makeStore().claim({
+        executionId, workerId: `worker_${depth}`, })) };
+    }
+    await pending(root.executionId, 'root-worker', rootLease.epoch, 'root_fork', 'fork_root');
+    const first = await child(root.executionId, 1, 'root_fork', 'fork_root');
+    await pending(first.executionId, 'worker_1', first.epoch, 'child_fork', 'fork_child');
+    const second = await child(first.executionId, 2, 'child_fork', 'fork_child');
+    await pending(second.executionId, 'worker_2', second.epoch, 'grandchild_fork', 'fork_deep');
+    const third = await child(second.executionId, 3, 'grandchild_fork', 'fork_deep');
+    await f.makeStore().checkpoint({ executionId: third.executionId,
+      workerId: 'worker_3', epoch: third.epoch, nodeId: 'deep_start', slots: {} });
+    await f.store.recordEffect({ executionId: root.executionId,
+      workerId: 'root-worker', epoch: rootLease.epoch,
+      effectId: 'fork_root', outcome: ['done'] });
+    assert.equal((await f.makeStore().get(root.executionId)).status, 'ready');
+    assert.equal((await f.makeStore().get(first.executionId)).status, 'waiting_effect');
+    await assert.rejects(f.makeStore().checkpoint({ executionId: third.executionId,
+      workerId: 'worker_3', epoch: third.epoch, nodeId: 'obsolete_child', slots: {} }),
+    /parent is no longer active/);
+    await assert.rejects(f.makeStore().claim({ executionId: third.executionId,
+      workerId: 'new_process' }), /parent is no longer active/);
   });

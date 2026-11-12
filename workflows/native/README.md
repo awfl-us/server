@@ -55,15 +55,32 @@ epoch-1 journal write. The lease-expiry transition uses a controllable test
 clock; process termination itself is real. No live Cloud Run worker has yet
 been killed in this test.
 
-**Descendant cancellation fencing (new):** child creation, claims and journal
-mutations transactionally check that the parent still has the matching
-active fork intent and that its root is not terminal. After parent
-cancellation, already-running child effects cannot commit and uncreated
-children cannot be admitted; child claims also reject. This does **not**
+**Recursive descendant fencing (November 12):** child creation, claims and
+journal mutations transactionally check the exact pending fork intent of
+**every ancestor**, up to the pinned maximum depth of three. Checking only
+the immediate parent plus whether the root was terminal was insufficient:
+a still-running root could join its old fork, start another step, and leave
+grandchildren authorized by the obsolete generation. The ancestry walk now
+rejects that case, verifies root identity, owner, artifact and workflow,
+and detects depth/lineage mismatches in the same Firestore transaction.
+After parent cancellation or fork supersession, already-running child
+effects cannot commit and uncreated children cannot be admitted; child
+claims also reject. This does **not**
 abort HTTP requests already sent before cancellation, nor perform a durable
 descendant tombstone sweep: child records can remain in an unfinished state
 until explicit cleanup. Orphan garbage collection and a persistent
 cross-process global concurrency cap remain separate release gates.
+
+Validation in the compiler-rust Scala GKE environment: Scala-generated
+`native-parallel-branches` and `native-parallel-for` Rust ELFs compiled with
+Cargo 1.99.1. All **20** focused Node tests pass, including three-level
+ancestry and fork supersession. The real Firestore emulator passes **6/6**:
+concurrent compiled Rust branches and replay, crash-before-parent-journal
+recovery, ordered `ParallelFor`, cancellation, real OS process death/reclaim,
+and a nonterminal root whose joined fork fences a deep descendant. The new
+ancestry case uses actual Firestore transactions and pinned fixture metadata,
+but synthetic nested child records; full nested Rust-generated control-flow
+parity remains to be validated. CI pins compiler-rust `358c4d5` for reproducibility.
 
 
 The existing AWFL Workflows service has an optional native Rust execution

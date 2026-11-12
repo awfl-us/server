@@ -51,35 +51,49 @@ const hydrateJournal = journal => journal && ({
   ...journal, outcome: storedJson(journal, 'outcome'),
 });
 
-// A child must remain authorized by its still-pending parent fork. Reading
-// parent/root within the SAME Firestore transaction as every child write
-// fences stale descendants when a parent is cancelled or completes its join.
+// A child must remain authorized by EVERY still-pending ancestor fork. Merely
+// checking the immediate parent and the root's terminal status is insufficient:
+// a root can finish one fork and move on while a nested grandchild still has
+// a live parent. Traverse the bounded ancestry (max 3) inside the SAME
+// Firestore transaction as each child create/claim/write, fencing any stale
+// descendant without relying on asynchronous cleanup.
 async function verifyForkAncestors(tx, collection, state) {
   if (!state.forkLaneJson) return;
-  const lane = JSON.parse(state.forkLaneJson);
-  const parentSnap = await tx.get(collection.doc(lane.parentExecutionId));
-  if (!parentSnap.exists) throw conflict('native fork parent missing');
-  const parent = parentSnap.data();
-  if (parent.status !== 'waiting_effect' ||
-      parent.pendingEffect?.operation !== 'native.parallel' ||
-      parent.pendingEffect?.effectId !== lane.generation ||
-      parent.pendingEffect?.nodeId !== lane.nodeId ||
-      parent.userId !== state.userId ||
-      parent.projectId !== state.projectId ||
-      parent.artifactSha256 !== state.artifactSha256 ||
-      parent.parallelVersion !== 1) {
-    throw conflict('native fork parent is no longer active');
-  }
-  if (lane.parentExecutionId !== lane.rootExecutionId) {
-    const rootSnap = await tx.get(collection.doc(lane.rootExecutionId));
-    if (!rootSnap.exists ||
-        ['completed', 'failed', 'cancelled'].includes(rootSnap.data().status) ||
-        rootSnap.data().userId !== state.userId ||
-        rootSnap.data().projectId !== state.projectId ||
-        rootSnap.data().artifactSha256 !== state.artifactSha256) {
-      throw conflict('native fork root is no longer active');
+  let current = state;
+  const visited = new Set([state.executionId]);
+  for (let index = 0; index < 3; index++) {
+    const lane = JSON.parse(current.forkLaneJson);
+    if (visited.has(lane.parentExecutionId)) throw conflict('native fork ancestor cycle');
+    visited.add(lane.parentExecutionId);
+    const parentSnap = await tx.get(collection.doc(lane.parentExecutionId));
+    if (!parentSnap.exists) throw conflict('native fork parent missing');
+    const parent = parentSnap.data();
+    if (parent.status !== 'waiting_effect' ||
+        parent.pendingEffect?.operation !== 'native.parallel' ||
+        parent.pendingEffect?.effectId !== lane.generation ||
+        parent.pendingEffect?.nodeId !== lane.nodeId ||
+        parent.userId !== state.userId ||
+        parent.projectId !== state.projectId ||
+        parent.artifactSha256 !== state.artifactSha256 ||
+        parent.workflowName !== state.workflowName ||
+        parent.protocolVersion !== state.protocolVersion ||
+        parent.parallelVersion !== 1) {
+      throw conflict('native fork parent is no longer active');
     }
+    if (!parent.forkLaneJson) {
+      if (lane.parentExecutionId !== lane.rootExecutionId || lane.depth !== 1) {
+        throw conflict('native fork root lineage mismatch');
+      }
+      return;
+    }
+    const parentLane = JSON.parse(parent.forkLaneJson);
+    if (parentLane.rootExecutionId !== lane.rootExecutionId ||
+        parentLane.depth + 1 !== lane.depth) {
+      throw conflict('native fork ancestor lineage mismatch');
+    }
+    current = parent;
   }
+  throw conflict('native fork ancestry exceeds maximum depth');
 }
 
 // The Rust continuation stores tagged values. Do not silently coerce 64-bit

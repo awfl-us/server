@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: awfl-us/compiler-rust
-          ref: f4f4ff7009fd3947f46a42a3822f35e13e004694
+          ref: 358c4d559c88b82e90e3b34988f31c1b83650dd7
           path: _compiler-rust
       - uses: actions/setup-node@v4
         with:
@@ -114,6 +114,7 @@ jobs:
             workflows/native/executionApi.test.js \
             workflows/native/runner.test.js \
             workflows/native/forkCoordinator.test.js \
+            workflows/native/nestedForkFencing.test.js \
             workflows/native/parallelIntegration.test.js \
             workflows/native/trustedGlobals.test.js \
             workflows/native/gcsReleases.test.js \
