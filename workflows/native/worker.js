@@ -10,18 +10,25 @@ import { executeNativeStep } from './runner.js';
 // Shared by all descendants of one root execution. Fork coordinators do not
 // hold a permit while waiting on their children, avoiding nested-fork deadlocks.
 // Only native subprocess invocations and non-fork effects consume permits.
-function createExecutionBudget(maxActive = 8) {
+export function createExecutionBudget(maxActive = 8) {
+  if (!Number.isSafeInteger(maxActive) || maxActive < 1) {
+    throw new Error('native execution budget must have positive capacity');
+  }
   let active = 0;
   const pending = [];
   return async work => {
-    if (active >= maxActive) {
+    if (active < maxActive) {
+      active++;
+    } else {
+      // Await a handed-off permit. The current holder keeps its reservation
+      // until this waiter resumes, so a newcomer cannot steal the opening.
       await new Promise(resolve => pending.push(resolve));
     }
-    active++;
     try { return await work(); }
     finally {
-      active--;
-      pending.shift()?.();
+      const next = pending.shift();
+      if (next) next();
+      else active--;
     }
   };
 }
