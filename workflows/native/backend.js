@@ -49,6 +49,7 @@ export class NativeWorkflowBackend {
       workflowName: deployedName, artifactSha256: active.sha256,
       protocolVersion: active.protocolVersion,
       allowedOperations: active.allowedOperations,
+      ...(active.trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
     });
     // Only the authenticated Workflows service sends this request. Cloud
     // Tasks signs an OIDC identity that Cloud Run IAM checks before /native.

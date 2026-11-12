@@ -91,7 +91,8 @@ export class NativeExecutionStore {
   }
 
   async create({ executionId, userId, projectId, artifactSha256, input,
-                 protocolVersion = 1, workflowName, allowedOperations }) {
+                 protocolVersion = 1, workflowName, allowedOperations,
+                 trustedGlobalsVersion }) {
     id(executionId);
     if (!userId || !projectId || !/^[a-f0-9]{64}$/.test(artifactSha256 || '')) {
       throw new Error('owner and pinned artifact SHA-256 required');
@@ -111,6 +112,10 @@ export class NativeExecutionStore {
          new Set(allowedOperations).size !== allowedOperations.length)) {
       throw new Error('invalid pinned native operations');
     }
+    if (trustedGlobalsVersion !== undefined &&
+        (trustedGlobalsVersion !== 1 || protocolVersion !== 2)) {
+      throw new Error('invalid pinned native trusted globals version');
+    }
     requireValue(input, 'input');
     enforceBytes(input, LIMIT.input, 'workflow input');
     const ref = this.ref(executionId);
@@ -121,6 +126,7 @@ export class NativeExecutionStore {
       const state = { schemaVersion: 1, executionId, userId, projectId, artifactSha256, protocolVersion,
         ...(workflowName && { workflowName }),
         ...(allowedOperations && { allowedOperations: [...allowedOperations] }),
+        ...(trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
         input: null, inputJson: JSON.stringify(input),
         status: 'ready', epoch: 0, owner: null, leaseUntil: 0,
         checkpoint: null, pendingEffect: null, effectCount: 0, result: null,

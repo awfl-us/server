@@ -62,6 +62,17 @@ test('IAM release registry resolves active workflow and verifies immutable binar
   ]);
 });
 
+test('IAM-published release capability enables globals without changing existing releases', async () => {
+  const f = fixture({ manifest: { ...metadata, trustedGlobalsVersion: 1 } });
+  assert.deepEqual(await f.releases.active('Example'), {
+    workflowName: 'Example', sha256, protocolVersion: 2,
+    allowedOperations: ['http.post'], trustedGlobalsVersion: 1,
+  });
+  f.objects.set('native-workflows/active/Example.json',
+    Buffer.from(JSON.stringify({ ...metadata, trustedGlobalsVersion: 7 })));
+  await assert.rejects(f.releases.active('Example'), /invalid IAM-published native release manifest/);
+});
+
 test('only an absent active mapping falls back; permission errors never downgrade', async () => {
   const f = fixture();
   assert.equal(await f.releases.active('NotPublished'), null);

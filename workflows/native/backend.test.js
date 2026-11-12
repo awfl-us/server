@@ -5,7 +5,7 @@ import { createWorkflowExecution } from '../services/executeWorkflow.js';
 
 const SHA = 'a'.repeat(64);
 const executionId = 'native_' + '1'.repeat(32);
-function fixture() {
+function fixture(trustedGlobalsVersion) {
   const states = new Map(), tasks = [], queries = [];
   let enabled = true, failTask = false;
   const store = {
@@ -23,6 +23,7 @@ function fixture() {
       return enabled && name === 'NativePilot' ? {
         workflowName: name, sha256: SHA, protocolVersion: 2,
         allowedOperations: ['http.post'],
+        ...(trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
       } : null;
     },
   };
@@ -95,6 +96,23 @@ test('shared launcher pins trusted identity and returns Google-style status adap
     if (base === undefined) delete process.env.WORKFLOWS_BASE_URL;
     else process.env.WORKFLOWS_BASE_URL = base;
   }
+});
+
+test('native capability is pinned from IAM release, not caller input', async () => {
+  const f = fixture(1);
+  const result = await f.backend.maybeStart({
+    workflowName: 'NativePilot', userId: 'verified-user', projectId: 'tenant',
+    argument: { trustedGlobalsVersion: 0, env: { GOOGLE_CLOUD_PROJECT_ID: 'spoof' } },
+  });
+  assert.equal(result.executionName, 'native/' + executionId);
+  assert.equal(f.states.get(executionId).trustedGlobalsVersion, 1);
+  assert.equal(f.states.get(executionId).input.trustedGlobalsVersion, 0);
+  const oldRelease = fixture();
+  await oldRelease.backend.maybeStart({
+    workflowName: 'NativePilot', userId: 'verified-user', projectId: 'tenant',
+    argument: { trustedGlobalsVersion: 1 },
+  });
+  assert.equal(Object.hasOwn(oldRelease.states.get(executionId), 'trustedGlobalsVersion'), false);
 });
 
 test('unpublished workflows use the existing Google Workflows path unchanged', async () => {
