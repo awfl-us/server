@@ -163,9 +163,13 @@ For phase owners/gates and exact feature matrix use the compiler's
 
 ## Authenticated native execution identity
 
-An ABI 3 / protocol-v2 native binary now accepts a bounded
+New ABI 3 / protocol-v2 native binaries can accept a bounded
 `trusted_globals` field containing the four built-in Google Workflows
-identity values. The Jobs runner derives these **only** from the persisted
+identity values. This field is emitted **only** for releases that declare
+`trustedGlobalsVersion: 1` in IAM-authored metadata, which is pinned in
+Firestore when execution starts. Existing ABI-3/protocol-v2 artifacts have
+strict request decoding and must not receive new keys; their requests
+remain unchanged. The Jobs runner derives these **only** from the persisted
 execution's immutable name/ID and server-owned `GCP_PROJECT` (or
 `GCLOUD_PROJECT`) and `WORKFLOWS_LOCATION`. It deliberately never
 uses the AWFL tenant `projectId` or caller-provided `input.env` as
