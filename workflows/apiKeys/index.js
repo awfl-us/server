@@ -1,6 +1,6 @@
 import express from 'express';
 import { getFirestore } from 'firebase-admin/firestore';
-import { API_KEY_LIFETIME_MS, MCP_SCOPE, apiKeyMetadata, generateApiKey } from './core.js';
+import { API_KEY_LIFETIME_MS, API_KEY_SCOPES, apiKeyMetadata, generateApiKey } from './core.js';
 
 const router = express.Router();
 
@@ -13,8 +13,8 @@ router.use((_req, res, next) => {
   next();
 });
 
-// User-scoped management endpoints. The parent router enforces Firebase ID
-// tokens; do NOT use MCP keys to call these management routes.
+// User-scoped management endpoints. The parent router resolves Firebase,
+// OAuth and API keys to the same user identity.
 router.get('/', async (req, res) => {
   if (!req.userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
@@ -45,7 +45,7 @@ router.post('/', async (req, res) => {
       name,
       hash,
       last4,
-      scopes: [MCP_SCOPE],
+      scopes: [...API_KEY_SCOPES],
       createdAt,
       expiresAt: createdAt + API_KEY_LIFETIME_MS,
     };

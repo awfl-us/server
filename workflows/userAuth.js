@@ -8,10 +8,11 @@ if (!getApps().length) {
   initializeApp();
 }
 
-// All AWFL API routes accept either a Firebase ID token or an AWFL OAuth
-// access token. Both map to the same userId for existing policy enforcement.
+// All AWFL API routes accept Firebase ID tokens, OAuth access tokens and AWFL
+// API keys. Each maps to the same userId for existing policy enforcement.
 // Ignores any userId hints in body/query/headers to avoid security leaks.
-export async function clientAuth(req, res, next) {
+export function createClientAuth(resolveIdentity = resolveAwflIdentity) {
+  return async function clientAuth(req, res, next) {
   try {
     // Dev/test bypass guarded by local dev detection
     if (allowSkipAuth(req)) {
@@ -35,9 +36,11 @@ export async function clientAuth(req, res, next) {
       return res.status(401).json({ error: 'Unauthorized: missing token' });
     }
 
-    const identity = await resolveAwflIdentity(token);
+    const identity = await resolveIdentity(token);
     req.userId = identity?.userId;
     req.authMethod = identity?.method;
+    if (identity?.keyId) req.apiKeyId = identity.keyId;
+    if (identity?.keyId) req.apiKeyScopes = identity.scopes;
 
     if (!req.userId) return res.status(403).json({ error: 'Unauthorized: invalid token' });
 
@@ -48,10 +51,15 @@ export async function clientAuth(req, res, next) {
 
     return next();
   } catch (err) {
-    console.error('[clientAuth] error:', err?.message || err);
-    return res.status(403).json({ error: 'Unauthorized: invalid token' });
+    // A Firestore/key-verification outage is not evidence of a bad token.
+    // Fail closed, but distinguish temporary unavailability from a revoked key.
+    console.error('[clientAuth] credential verification unavailable:', err?.name || 'Error');
+    return res.status(503).json({ error: 'Authentication verification unavailable' });
   }
+  };
 }
+
+export const clientAuth = createClientAuth();
 
 // Split auth helpers for workflows (client-facing)
 // ESM module; project package.json is type: module.

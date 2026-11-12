@@ -1,4 +1,3 @@
-import { requireAwflApiKey } from '../workflows/apiKeys/verify.js';
 import { MCP_RESOURCES, OAUTH_ISSUER, OAUTH_SCOPE } from '../workflows/oauth/core.js';
 import { resolveAwflIdentity } from '../workflows/auth/identity.js';
 
@@ -7,26 +6,27 @@ function challenge(res, resource) {
   res.set('WWW-Authenticate', `Bearer resource_metadata="${OAUTH_ISSUER}/.well-known/oauth-protected-resource${suffix}", scope="${OAUTH_SCOPE}", error="invalid_token", error_description="A valid AWFL OAuth token is required"`);
 }
 
-// Use the same identity resolver as every other AWFL API route. Retain the
-// original API-key verifier solely for existing external MCP integrations.
-export function requireMcpCredential(resource, legacyAuth = requireAwflApiKey()) {
+// Use the same Firebase/OAuth/API-key resolver as all other AWFL API routes.
+export function requireMcpCredential(resource, resolveIdentity = resolveAwflIdentity) {
   return async (req, res, next) => {
     const token = /^Bearer (\S+)$/.exec(req.get('authorization') || '')?.[1] || '';
-    if (token.split('.').length === 3) {
-      const identity = await resolveAwflIdentity(token);
+    if (token) {
+      let identity;
+      try { identity = await resolveIdentity(token); } catch {
+        return res.status(503).json({ error: 'Authentication verification unavailable' });
+      }
       if (!identity) {
         challenge(res, resource);
         return res.status(401).json({ error: 'Invalid or expired access token' });
       }
       req.userId = identity.userId;
       req.authMethod = identity.method;
+      if (identity.keyId) req.apiKeyId = identity.keyId;
+      if (identity.keyId) req.apiKeyScopes = identity.scopes;
       return next();
     }
-    if (!token) {
-      challenge(res, resource);
-      return res.status(401).json({ error: 'Missing MCP access token' });
-    }
-    return legacyAuth(req, res, next);
+    challenge(res, resource);
+    return res.status(401).json({ error: 'Missing MCP access token' });
   };
 }
 

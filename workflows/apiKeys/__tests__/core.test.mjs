@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   apiKeyMetadata, generateApiKey, hashApiKey, matchesApiKeyHash, parseApiKey, isActiveApiKeyRecord,
-  API_KEY_LIFETIME_MS, MCP_SCOPE,
+  API_KEY_LIFETIME_MS, MCP_SCOPE, API_SCOPE, API_KEY_SCOPES,
 } from '../core.js';
 
 describe('AWFL API keys', () => {
@@ -59,6 +59,9 @@ describe('AWFL API keys', () => {
     assert.equal(isActiveApiKeyRecord(key.token, { ...active, hash: '0'.repeat(64) }, { now }), false);
     assert.equal(isActiveApiKeyRecord(key.token, null, { now }), false);
     assert.equal(isActiveApiKeyRecord(key.token, active, { now, requiredScope: 'admin' }), false);
+    assert.equal(isActiveApiKeyRecord(key.token, { ...active, scopes: [API_SCOPE] }, { now }), true);
+    assert.equal(isActiveApiKeyRecord(key.token, { ...active, scopes: ['other:scope'] }, { now }), false);
+    assert.deepEqual(API_KEY_SCOPES, [API_SCOPE, MCP_SCOPE]);
   });
 
 });

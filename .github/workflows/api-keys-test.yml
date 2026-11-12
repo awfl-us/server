@@ -4,11 +4,17 @@ on:
   pull_request:
     paths:
       - 'workflows/apiKeys/**'
+      - 'workflows/auth/**'
+      - 'workflows/userAuth.js'
+      - 'mcp/privateAuth.js'
       - '.github/workflows/api-keys-test.yml'
   push:
     branches: [main]
     paths:
       - 'workflows/apiKeys/**'
+      - 'workflows/auth/**'
+      - 'workflows/userAuth.js'
+      - 'mcp/privateAuth.js'
       - '.github/workflows/api-keys-test.yml'
 
 jobs:
@@ -23,3 +29,7 @@ jobs:
           node-version: '22'
       - name: Test API key generation and verification rules
         run: node --test workflows/apiKeys/__tests__/core.test.mjs
+      - name: Install dependencies for shared identity HTTP integration
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Verify shared API/MCP authentication and revocation
+        run: node --test workflows/auth/sharedAuth.test.js workflows/oauth/tests/oauth.test.js
