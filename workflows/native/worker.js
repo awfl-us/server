@@ -178,6 +178,19 @@ export async function runNativeWorkflow({
         // No automatic replay for an effect with an uncertain remote outcome.
         throw new Error('native effect reconciliation required');
       }
+      if (effect.status === 'failed_recorded') {
+        // An uncaught child Raise atomically commits the root as FAILED.
+        // Observe its terminal result before the next loop iteration tries
+        // to acquire a permit (terminal roots correctly deny new admission).
+        // A *caught* Raise instead leaves a ready continuation for Try.
+        const afterFailure = await store.get(executionId);
+        if (afterFailure?.status === 'failed') {
+          return { status: 'failed', error: afterFailure.error };
+        }
+        if (afterFailure?.status === 'cancelled') {
+          throw new Error('native execution cancelled');
+        }
+      }
     }
     throw new Error('native execution transition budget exhausted');
   } finally {

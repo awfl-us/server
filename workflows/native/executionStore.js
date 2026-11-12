@@ -204,9 +204,13 @@ export class NativeExecutionStore {
       const snap = await tx.get(ref);
       if (!snap.exists || snap.data().permitId !== permitId ||
           snap.data().epoch !== epoch) return false;
+      const now = this.clock();
+      // Expired but not yet reclaimed still means this worker lost admission.
+      // Clear its slot for the successor, but do NOT report a valid release.
+      const wasLive = snap.data().leaseUntil > now;
       tx.update(ref, { ...snap.data(), permitId: null, leaseUntil: 0,
-        updatedAt: this.clock() });
-      return true;
+        updatedAt: now });
+      return wasLive;
     });
   }
   effectRef(executionId, effectId) {

@@ -71,7 +71,12 @@ export function createDistributedExecutionBudget({
     finally {
       clearInterval(heartbeat);
       if (renewal) await renewal;
-      try { await store.releasePermit(leaseArgs); }
+      try {
+        const releasedWhileLive = await store.releasePermit(leaseArgs);
+        if (!releasedWhileLive) {
+          failure ||= new Error('native distributed permit expired or was reclaimed');
+        }
+      }
       catch (error) { failure ||= error; }
     }
     if (leaseFailure) throw leaseFailure;

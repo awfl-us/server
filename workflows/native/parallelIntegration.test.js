@@ -7,6 +7,7 @@ import { runNativeWorkflow } from './worker.js';
 
 function fakeFirestore() {
   const docs = new Map();
+  let transactionTail = Promise.resolve();
   return {
     collection: name => ({
       doc: key => ({
@@ -18,15 +19,24 @@ function fakeFirestore() {
       }),
     }),
     async runTransaction(fn) {
+      // The real Firestore emulator guarantees that two racing transactions
+      // cannot both reserve the same permit slot. Keep this in-memory store
+      // serializable too; otherwise nested test workers can double-admit.
+      const previous = transactionTail;
+      let finish;
+      transactionTail = new Promise(resolve => { finish = resolve; });
+      await previous;
       const writes = [];
       const tx = {
         get: ref => ref.get(),
         create: (ref, data) => writes.push([ref.key, structuredClone(data)]),
         update: (ref, data) => writes.push([ref.key, structuredClone(data)]),
       };
-      const result = await fn(tx);
-      for (const [key, value] of writes) docs.set(key, value);
-      return result;
+      try {
+        const result = await fn(tx);
+        for (const [key, value] of writes) docs.set(key, value);
+        return result;
+      } finally { finish(); }
     },
   };
 }
