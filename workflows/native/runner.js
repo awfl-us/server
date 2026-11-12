@@ -144,7 +144,10 @@ export async function executeNativeStep({ store, executionId, workerId, executab
       !Array.isArray(continuation.frames))) {
     throw new Error('invalid native continuation checkpoint');
   }
-  const trustedGlobals = protocolVersion === 2
+  // Old ABI-3/protocol-v2 binaries reject unknown JSON fields. Only
+  // IAM-published releases that explicitly declare global support receive
+  // this optional envelope; the capability is pinned with the execution.
+  const trustedGlobals = protocolVersion === 2 && state.trustedGlobalsVersion === 1
     ? buildNativeTrustedGlobals({ state, executionId, gcpProject, region })
     : null;
   const response = await runNativeArtifact({
