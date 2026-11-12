@@ -18,8 +18,8 @@ app.get('/health', (_req, res) => res.status(200).send('OK'))
 // app.get('/jobs/health', (_req, res) => res.status(200).send('OK'))
 
 // Mount under both root and /jobs for compatibility
+app.use('/jobs', jobsRoutes)
 app.use('/', jobsRoutes)
-// app.use('/jobs', jobsRoutes)
 
 // 404 fallback
 app.use((req, res) => {
