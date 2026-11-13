@@ -13,8 +13,8 @@ describe the present dependency or merge state.
   process. No extra Cloud Task for each synchronous child.
 - Native storage.object_get is implemented and tested against the
   restricted workflow-files bucket, capped at 128 KiB/object.
-- [Server #98](https://github.com/awfl-us/server/pull/98) is **open**
-  for callback.create/await, using existing users/{uid}/callbacks
+- [Server #98](https://github.com/awfl-us/server/pull/98) is **merged**. Live Jobs deployment still needs verification.
+  It adds callback.create/await, using existing users/{uid}/callbacks
   records, the ordinary authenticated Jobs registration endpoint,
   and the existing callback-delivery route. There is no second
   callback service or new collection.
