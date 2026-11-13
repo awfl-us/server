@@ -1,3 +1,10 @@
+Native Rust / ProjectManager development (high priority)
+- **Local-first:** use the existing Scala GKE development environment. Run the entire Jobs Express application and native Rust executor locally before proposing a Cloud Run deployment or Cloud Tasks dispatch.
+- Read `docs/native-local-development.md` for the exact startup command, persistent interactive terminal requirement, local Jobs routes, and test phases.
+- From the server checkout, start `PORT=5055 GCP_PROJECT=awfl-us GOOGLE_CLOUD_PROJECT=awfl-us WORKFLOWS_BASE_URL=http://127.0.0.1:5055 npm run start:jobs`. Verify health from a separate tool execution. Never expose this upstream-trusting listener publicly.
+- `npm run native:local` replays **recorded** HTTP responses using real compiled Rust binaries; local Jobs provides actual Express route implementations, but downstream Firestore/GCS/LLM still need suitable credentials. Report the distinction.
+- Iterate locally, then use a zero-traffic native Cloud Run canary only for real-cloud integration. Terraform owns infrastructure and IAM.
+
 Agent Development Guidelines (General)
 
 TL;DR quick reference
