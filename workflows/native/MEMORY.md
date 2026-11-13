@@ -11,14 +11,46 @@ The child validates *its own* published allowed operations. Child releases
 are looked up and staged once per unique name within a root execution.
 
 Use `RunWorkflowArgs(workflow_id, argument, location, project_id)` and the
-backend-neutral `CallOperations.WorkflowRun`. Only synchronous calls with
-`connector_params.skip_polling=false` are supported. The requested GCP
+backend-neutral `CallOperations.WorkflowRun`. Synchronous calls with
+`connector_params.skip_polling=false` run locally in the same execution. The requested GCP
 project/location must match the executor's trusted deployment; a different
 project, arbitrary binary, missing/parallel child release, or detached call
 fails explicitly. Nested recursion and total calls are bounded. No new
 GKE/Terraform/IAM resources were introduced. Existing Google-specific
 connector strings must be migrated to `CallOperations.WorkflowRun` in the
 workflow definitions when deploying those workflows natively.
+
+## Independent asynchronous subworkflows
+
+`CallOperations.WorkflowRun` with `connector_params.skip_polling=true` launches
+a **separate durable native execution**, not a nested synchronous Rust call.
+The parent does not wait. Jobs validates name, GCP project/location and
+authenticated identity, resolves the pinned SHA-256 release, and creates
+an independent `nativeWorkflowExecutions` record with a deterministic
+execution ID derived from the parent's journal idempotency key and the
+child name. A retry reuses that ID; different arguments cannot reuse it.
+Unlike synchronous children, async releases may contain `native.parallel`.
+
+The bounded in-process scheduler queues the new execution on the persistent
+GKE Jobs service and returns `{name:"native/native_...",state:"ACTIVE"}`
+without waiting or creating a Cloud Task. Ordinary synchronous children still
+run in-process with the parent's journal. At most four detached executions
+are active per process.
+
+The Firestore `asyncLaunch` marker stays true while a detached execution
+is pending and becomes false on completion, failure or cancellation. GKE
+Jobs startup (`AWFL_NATIVE_EXECUTION_ENABLED=1` and
+`AWFL_NATIVE_DETACHED_GKE_ENABLED=1`) starts a recovery scan;
+subsequent scans run every 15 seconds and reclaim only unleased or
+lease-expired executions. Existing native store fencing guards multiple
+replicas. Previously dispatched external effects with uncertain outcomes
+are **never** blindly retried after a crash.
+
+**Deployment boundary:** This requires persistent GKE Jobs in production.
+Cloud Run may freeze a request-scoped process after the parent response,
+so the executor rejects detached launches in production until the
+persistent GKE opt-in flag is enabled. No Terraform resource or IAM change
+was needed. General native production routing remains disabled.
 
 Do not call this a same-process Rust function invocation yet: Rust still
 runs in a short-lived subprocess per continuation. The benefit today is

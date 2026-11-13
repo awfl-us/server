@@ -104,6 +104,12 @@ export function createNativeLocalRunner({
       }
       if (response.status === 'completed') return response.result;
       if (response.status === 'failed') {
+        // Development diagnostic: expose the compiler's native failure,
+        // without silently reducing it to a generic wrapper message.
+        if (process.env.AWFL_NATIVE_LOCAL_TRACE === '1') {
+          console.error('AWFL_NATIVE_CHILD_FAILURE', workflowName,
+            JSON.stringify(response.error).slice(0, 1600));
+        }
         const error = new Error('native workflow failed');
         error.nativeError = response.error;
         throw error;
@@ -113,6 +119,16 @@ export function createNativeLocalRunner({
       }
       const effect = response.effect;
       const next = response.continuation;
+      if (process.env.AWFL_NATIVE_LOCAL_TRACE === '1') {
+        const fields = effect.operation === 'storage.object_get'
+          ? { bucket:effect.args?.bucket, object:effect.args?.object }
+          : effect.operation === 'workflow.run'
+            ? { workflow_id:effect.args?.workflow_id }
+            : {};
+        console.error('AWFL_NATIVE_CHILD_EFFECT',
+          JSON.stringify({workflowName,depth,operation:effect.operation,
+            effectId:effect.effect_id,...fields}));
+      }
       if (!release.allowedOperations.includes(effect.operation) ||
           effect.operation === 'native.parallel' ||
           (effect.operation !== 'workflow.run' &&
@@ -156,6 +172,12 @@ export function createNativeLocalRunner({
           ...next.slots, [effect.result_slot]: tagNativeValue(outcome),
         } };
       } catch (error) {
+        if (process.env.AWFL_NATIVE_LOCAL_TRACE === '1') {
+          console.error('AWFL_NATIVE_CHILD_EFFECT_ERROR',
+            JSON.stringify({workflowName,operation:effect.operation,
+              effectId:effect.effect_id,error:String(error?.message || error).slice(0, 700),
+              nativeError:error?.nativeError}));
+        }
         const onError = effect.on_error;
         if (!onError || !Number.isSafeInteger(onError.next_step) ||
             !SLOT.test(onError.error_slot || '')) throw error;

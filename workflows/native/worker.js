@@ -7,6 +7,27 @@ import { NativeEffectDispatcher } from './effectDispatcher.js';
 import { NativeForkCoordinator } from './forkCoordinator.js';
 import { executeNativeStep } from './runner.js';
 import { createDurableSubworkflowHandler } from './durableSubworkflow.js';
+import { createNativeAsyncScheduler } from './asyncScheduler.js';
+
+// Reuse one recovery scanner and bounded queue per underlying Firestore
+// connection, across all Jobs HTTP requests and recursive fork lanes.
+const detachedSchedulers = new WeakMap();
+export function nativeAsyncSchedulerFor({ store, releases, handlers }) {
+  const key = store.db || store;
+  let scheduler = detachedSchedulers.get(key);
+  if (!scheduler) {
+    scheduler = createNativeAsyncScheduler({
+      store,
+      execute: ({ executionId, userId, projectId }) => runNativeWorkflow({
+        store, releases, handlers, executionId, userId, projectId,
+        asyncScheduler: scheduler, maxTransitions: 10000,
+      }),
+    });
+    detachedSchedulers.set(key, scheduler);
+    scheduler.start();
+  }
+  return scheduler;
+}
 
 // Shared by all descendants of one root execution. Fork coordinators do not
 // hold a permit while waiting on their children, avoiding nested-fork deadlocks.
@@ -39,7 +60,7 @@ export async function runNativeWorkflow({
   handlers, workerId = 'worker_' + randomUUID().replaceAll('-', ''),
   maxTransitions = 120, sharedArtifact = null, parallelDepth = 0,
   executionBudget = null,
-  profiler = null,
+  profiler = null, asyncScheduler = null,
 }) {
   const initial = await store.get(executionId);
   if (!initial || initial.userId !== userId ||
@@ -107,7 +128,7 @@ export async function runNativeWorkflow({
             sharedArtifact: artifact, maxTransitions,
             parallelDepth: parallelDepth + 1,
             executionBudget: withBudget,
-            profiler,
+            profiler, asyncScheduler,
           });
         },
       });
@@ -128,7 +149,10 @@ export async function runNativeWorkflow({
     };
     childHandler = initial.allowedOperations.includes('workflow.run')
       ? createDurableSubworkflowHandler({
-        releases, handlers, executionId, userId, projectId,
+        releases, handlers, executionId, userId, projectId, store,
+        scheduleAsync: request =>
+          (asyncScheduler || nativeAsyncSchedulerFor({ store, releases, handlers }))
+            .enqueue(request),
       }) : null;
     const forkHandlers = {
       ...handlers,

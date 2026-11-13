@@ -1,12 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createDurableSubworkflowHandler } from './durableSubworkflow.js';
+// Exercises the explicit local/test transport; production requires GKE opt-in.
+process.env.NODE_ENV = 'test';
 
 const executionId = 'native_' + 'f'.repeat(32);
 const identity = { userId: 'real-owner', projectId: 'project' };
 const digest = 'a'.repeat(64);
 
-function fixture({ parallel = false, missing = false } = {}) {
+function fixture({ parallel = false, missing = false, store, scheduleAsync } = {}) {
   const calls = { active: [], materialize: [], cleanup: 0, invoked: [] };
   const releases = {
     async active(name) {
@@ -35,6 +37,7 @@ function fixture({ parallel = false, missing = false } = {}) {
   const handler = createDurableSubworkflowHandler({
     releases, handlers: {}, runArtifact, executionId,
     ...identity, gcpProject: 'awfl-us', region: 'us-central1',
+    store, scheduleAsync,
   });
   return { handler, calls };
 }
@@ -102,4 +105,69 @@ test('reject forged identity, selected project, unpublished child and parallel c
       assert.equal(calls.materialize.length, 0);
     } finally { await handler.close(); }
   }
+});
+
+test('detached workflow.run persists and schedules one independent parallel-capable execution', async () => {
+  const records = new Map(), scheduled = [];
+  const store = {
+    async create(record) {
+      if (records.has(record.executionId)) {
+        throw Object.assign(new Error('exists'), { code: 'CONFLICT' });
+      }
+      records.set(record.executionId, structuredClone(record));
+    },
+    async get(id) { return records.get(id); },
+  };
+  const { handler, calls } = fixture({ parallel: true, store,
+    scheduleAsync: req => scheduled.push(req) });
+  const detached = {
+    ...args, workflow_id: 'codebase-ProjectManager${WORKFLOW_ENV}',
+    connector_params: { skip_polling: true },
+  };
+  const key = executionId + ':toolCallsCompleted';
+  try {
+    const first = await handler.run({ args: detached, identity, idempotencyKey: key });
+    assert.equal(first.state, 'ACTIVE');
+    assert.match(first.name, /^native\/native_[a-f0-9]{32}$/);
+    assert.deepEqual(Object.keys(first).sort(), ['name', 'state']);
+    assert.equal(calls.materialize.length, 0, 'no inline child execution');
+    assert.equal(records.size, 1, 'one independent execution persisted');
+    const id = first.name.slice('native/'.length);
+    const record = records.get(id);
+    assert.deepEqual(record.input, detached.argument);
+    assert.equal(record.asyncLaunch, true);
+    assert.equal(record.parallelVersion, 1);
+    assert.deepEqual(record.allowedOperations, ['native.parallel']);
+    assert.equal(record.userId, identity.userId);
+    assert.equal(record.projectId, identity.projectId);
+    assert.equal(scheduled.length, 1);
+    assert.deepEqual(scheduled[0], { executionId: id, ...identity });
+
+    const again = await handler.run({ args: detached, identity, idempotencyKey: key });
+    assert.deepEqual(again, first);
+    assert.equal(records.size, 1, 'a dispatch retry cannot duplicate a launch');
+    assert.equal(scheduled.length, 2, 'a retry may reoffer the same idempotent launch');
+
+    await assert.rejects(handler.run({
+      args: { ...detached, argument: { changed: true } },
+      identity, idempotencyKey: key,
+    }), /idempotency conflict/);
+    await assert.rejects(handler.run({
+      args: { ...detached, project_id: 'somewhere-else' },
+      identity, idempotencyKey: key + ':new',
+    }), /unauthorized/);
+    assert.equal(records.size, 1);
+  } finally { await handler.close(); }
+});
+
+test('detached calls refuse unavailable scheduler and invalid connector flags', async () => {
+  const { handler } = fixture({ parallel: true });
+  try {
+    await assert.rejects(handler.run({ args: {
+      ...args, connector_params: { skip_polling: true },
+    }, identity, idempotencyKey: executionId + ':async' }), /scheduler unavailable/);
+    await assert.rejects(handler.run({ args: {
+      ...args, connector_params: { skip_polling: 'yes' },
+    }, identity, idempotencyKey: executionId + ':bad' }), /unauthorized/);
+  } finally { await handler.close(); }
 });

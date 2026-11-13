@@ -14,3 +14,15 @@ Avoid redeployment/Cloud Tasks/GCS publication for every fix. Verify
 real IAM/Firestore/GCS with an isolated cloud canary only after local
 tests pass. Never expose the locally trusted Jobs port publicly;
 infra/IAM changes require Terraform.
+
+
+**Detached native subworkflows:** `workflow.run` with
+`connector_params.skip_polling=true` must create an independent pinned
+native execution and return its name immediately—never recursively await
+the child. The persistent GKE Jobs scheduler and Firestore `asyncLaunch`
+recovery scan implement this path in
+`workflows/native/{durableSubworkflow,asyncScheduler,worker,executionStore}.js`.
+See `workflows/native/MEMORY.md`. In production this requires the
+explicit `AWFL_NATIVE_DETACHED_GKE_ENABLED=1` flag and a persistent
+GKE Jobs process (not request-scoped Cloud Run). No new Cloud Task per
+native subworkflow. Keep all IAM and infrastructure Terraform-managed.

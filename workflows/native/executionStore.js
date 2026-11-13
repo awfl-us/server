@@ -141,7 +141,7 @@ export class NativeExecutionStore {
 
   async create({ executionId, userId, projectId, artifactSha256, input,
                  protocolVersion = 1, workflowName, allowedOperations,
-                 trustedGlobalsVersion, parallelVersion, forkLane, executionMode }) {
+                 trustedGlobalsVersion, parallelVersion, forkLane, executionMode, asyncLaunch }) {
     id(executionId);
     if (!userId || !projectId || !/^[a-f0-9]{64}$/.test(artifactSha256 || '')) {
       throw new Error('owner and pinned artifact SHA-256 required');
@@ -177,6 +177,10 @@ export class NativeExecutionStore {
     if (executionMode !== undefined && (executionMode !== 'memory' ||
         protocolVersion !== 2 || parallelVersion === 1 || forkLane !== undefined)) {
       throw new Error('memory execution requires a non-parallel protocol-v2 release');
+    }
+    if (asyncLaunch !== undefined &&
+        (asyncLaunch !== true || forkLane !== undefined || protocolVersion !== 2)) {
+      throw new Error('detached execution requires a standalone protocol-v2 release');
     }
     if (forkLane !== undefined) {
       if (parallelVersion !== 1 || !forkLane ||
@@ -214,6 +218,7 @@ export class NativeExecutionStore {
         ...(trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
         ...(parallelVersion === 1 && { parallelVersion: 1 }),
         ...(executionMode === 'memory' && { executionMode: 'memory' }),
+        ...(asyncLaunch === true && { asyncLaunch: true }),
         ...(forkLane && { forkLane: null, forkLaneJson: JSON.stringify(forkLane) }),
         input: null, inputJson: JSON.stringify(input),
         status: 'ready', epoch: 0, owner: null, leaseUntil: 0,
@@ -228,6 +233,17 @@ export class NativeExecutionStore {
       tx.create(ref, state);
       return hydrateState(state);
     });
+  }
+
+  // Single-field Firestore index; terminal updates clear asyncLaunch, so
+  // completed executions never crowd out recoverable launches.
+  async listPendingAsync(limit = 100) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+      throw new Error('invalid native async scan limit');
+    }
+    const snap = await this.collection.where('asyncLaunch', '==', true)
+      .limit(limit).get();
+    return snap.docs.map(doc => hydrateState(doc.data()));
   }
 
   async get(executionId) {
@@ -341,7 +357,7 @@ export class NativeExecutionStore {
       if (s.status === 'completed') throw conflict('execution already completed');
       if (s.status === 'failed') throw conflict('execution already failed');
       if (s.status === 'cancelled') return hydrateState(s);
-      const next = { ...s, status: 'cancelled', owner: null,
+      const next = { ...s, status: 'cancelled', asyncLaunch: false, owner: null,
         epoch: s.epoch + 1, leaseUntil: 0, updatedAt: this.clock() };
       tx.update(ref, next);
       return hydrateState(next);
@@ -513,7 +529,7 @@ export class NativeExecutionStore {
         effectId, fingerprint: s.pendingEffect.fingerprint, isError: true,
         outcome: null, outcomeJson: JSON.stringify(error), recordedAt: now,
       });
-      return { ...s, status: 'failed', pendingEffect: null,
+      return { ...s, status: 'failed', asyncLaunch: false, pendingEffect: null,
         error: null, errorJson: JSON.stringify(error),
         owner: null, leaseUntil: 0, effectCount: (s.effectCount || 0) + 1 };
     }, effectId);
@@ -528,7 +544,7 @@ export class NativeExecutionStore {
     enforceBytes(error, LIMIT.checkpoint, 'native workflow failure');
     return this.mutate(executionId, workerId, epoch, s => {
       if (s.pendingEffect) throw conflict('effect outcome unresolved');
-      return { ...s, status: 'failed', error: null, errorJson: JSON.stringify(error),
+      return { ...s, status: 'failed', asyncLaunch: false, error: null, errorJson: JSON.stringify(error),
         ...(s.executionMode === 'memory' && effectCount !== undefined &&
           { effectCount }),
         owner: null, leaseUntil: 0 };
@@ -544,7 +560,7 @@ export class NativeExecutionStore {
     enforceBytes(result, LIMIT.checkpoint, 'workflow result');
     return this.mutate(executionId, workerId, epoch, s => {
       if (s.pendingEffect) throw conflict('effect outcome unresolved');
-      return { ...s, status: 'completed',
+      return { ...s, status: 'completed', asyncLaunch: false,
         result: null, resultJson: JSON.stringify(result),
         ...(s.executionMode === 'memory' && effectCount !== undefined &&
           { effectCount }),

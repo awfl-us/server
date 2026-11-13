@@ -8,8 +8,22 @@ worker/continuation, native parallel fork/join, local compiled subworkflows,
 and a serialized in-memory Firestore test adapter. It can read **real GCS
 workflow files** using the GKE environment's existing authenticated token.
 
-**Jobs HTTP operations are replayed from an authorized prior execution**.
-This is a fast development test, not a real Jobs/IAM end-to-end test. The
+By default, **Jobs HTTP operations are replayed from an authorized prior
+execution**. Pass `--local-jobs-url http://127.0.0.1:5055/` instead of
+`--fixtures` for fresh HTTP against the **real local Jobs Express service**.
+The URL must be loopback-only and only calls to the known Jobs origin are
+redirected. Run Jobs in a separate persistent GKE terminal with authorized
+development credentials. The live mode uses the actual
+`callback.create`/`callback.await` handlers and never fabricates results.
+It is not a production IAM end-to-end test.
+
+For `workflow.run` with `skip_polling: true`, the parent completes
+independently of the detached child. The local result's `lanes` shows
+both recorded native executions and their current states. The in-memory
+adapter is intentionally ephemeral: for **restart recovery**, use the
+persistent GKE Jobs service and real Firestore.
+
+This is a fast development test, not a production IAM end-to-end test. The
 GKE consumer service account cannot invoke production Jobs or read
 production Firestore/GCS via ADC; the environment's user token can read
 the necessary records for fixtures. This tool does not grant extra IAM,

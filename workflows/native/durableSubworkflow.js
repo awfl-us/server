@@ -16,7 +16,7 @@ function childName(args, gcpProject, region) {
       (args.location !== undefined && args.location !== region) ||
       (args.connector_params !== undefined &&
         (!args.connector_params || typeof args.connector_params !== 'object' ||
-         args.connector_params.skip_polling !== false))) {
+         typeof args.connector_params.skip_polling !== 'boolean'))) {
     throw new Error('unsupported or unauthorized durable workflow.run arguments');
   }
   const raw = args.workflow_id;
@@ -34,7 +34,7 @@ export function createDurableSubworkflowHandler({
   releases, handlers, executionId, userId, projectId,
   gcpProject = process.env.GCP_PROJECT || process.env.GCLOUD_PROJECT,
   region = process.env.WORKFLOWS_LOCATION || 'us-central1',
-  runArtifact = runNativeArtifact,
+  runArtifact = runNativeArtifact, store, scheduleAsync,
 }) {
   if (!releases?.active || !releases?.materialize ||
       !/^native_[a-f0-9]{32}$/.test(executionId || '') ||
@@ -53,12 +53,56 @@ export function createDurableSubworkflowHandler({
         throw new Error('durable child identity mismatch');
       }
       const name = childName(args, gcpProject, region);
+      const detached = args.connector_params?.skip_polling === true;
+      // Detached background work needs a persistent GKE Jobs worker in
+      // production: Cloud Run can suspend CPU after the parent returns.
+      if (detached && process.env.AWFL_NATIVE_DETACHED_GKE_ENABLED !== '1' &&
+          process.env.AWFL_NATIVE_LOCAL_AUTH !== '1' &&
+          process.env.NODE_ENV !== 'test') {
+        throw new Error('native detached workflows require persistent GKE Jobs');
+      }
+      if (detached && (!store?.create || !store?.get ||
+          typeof scheduleAsync !== 'function')) {
+        throw new Error('native detached execution scheduler unavailable');
+      }
       const release = await releases.active(name);
       if (!release || release.protocolVersion !== 2 ||
-          release.parallelVersion === 1 ||
+          (!detached && release.parallelVersion === 1) ||
+          !/^[a-f0-9]{64}$/.test(release.sha256 || '') ||
           !Array.isArray(release.allowedOperations) ||
-          release.allowedOperations.includes('native.parallel')) {
+          (!detached && release.allowedOperations.includes('native.parallel'))) {
         throw new Error('native child has no supported published release');
+      }
+      if (detached) {
+        // Stable per-parent-effect identity. Replayed dispatch cannot create a
+        // duplicate independent workflow even across Jobs process restarts.
+        const childExecutionId = 'native_' + createHash('sha256')
+          .update(idempotencyKey + ':' + name).digest('hex').slice(0, 32);
+        try {
+          await store.create({
+            executionId: childExecutionId, userId, projectId,
+            workflowName: name, artifactSha256: release.sha256,
+            protocolVersion: 2, allowedOperations: release.allowedOperations,
+            ...(release.trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
+            ...(release.parallelVersion === 1 && { parallelVersion: 1 }),
+            asyncLaunch: true, input: args.argument,
+          });
+        } catch (error) {
+          if (error.code !== 'CONFLICT') throw error;
+          const existing = await store.get(childExecutionId);
+          if (!existing || existing.userId !== userId ||
+              existing.projectId !== projectId ||
+              existing.workflowName !== name ||
+              existing.artifactSha256 !== release.sha256 ||
+              existing.protocolVersion !== 2 ||
+              JSON.stringify(existing.input) !== JSON.stringify(args.argument)) {
+            throw new Error('native detached launch idempotency conflict');
+          }
+        }
+        // Only persist+enqueue before acknowledging the parent. Actual Rust
+        // execution runs independently; no recursive wait or parent journal.
+        scheduleAsync({ executionId: childExecutionId, userId, projectId });
+        return { name: 'native/' + childExecutionId, state: 'ACTIVE' };
       }
       const artifact = await releases.materialize(release.sha256);
       if (artifact.sha256 !== release.sha256) {

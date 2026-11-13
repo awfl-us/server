@@ -56,6 +56,29 @@ an authorized run. This replay **does not** perform fresh Jobs HTTP
 requests; do not call it a live service test, invent missing fixtures,
 or treat an unavailable fixture as an actual Jobs error.
 
+## Detached Rust workflow continuation
+
+`workflow.run` with `connector_params.skip_polling=true` creates a
+separate, pinned native execution and returns its execution name without
+waiting. ProjectManager uses this for its `toolCallsCompleted`
+self-continuation. Do not reinterpret it as synchronous recursion.
+
+For persistent **GKE** Jobs deployments, enable both
+`AWFL_NATIVE_EXECUTION_ENABLED=1` and
+`AWFL_NATIVE_DETACHED_GKE_ENABLED=1` to start recovery scanning
+for pending child executions. The scheduler resumes children after restart
+using existing Firestore leases, without an additional Cloud Task. Cloud
+Run request-scoped instances are not suitable for background child work.
+Infrastructure and IAM stay Terraform-managed.
+
+For real local Jobs effects (rather than replayed fixtures):
+
+    NODE_ENV=development node scripts/nativeLocalRun.mjs       --report /workspace/native-dev-projectmanager-output/build-report.json       --input /workspace/projectmanager-replay.input.json       --local-jobs-url http://127.0.0.1:5055/ --live-storage
+
+The Jobs service, GCS, and callback Firestore require existing authorized
+development credentials. The test reports the detached child's current
+state; an in-memory test does not establish restart recovery.
+
 ## Default debug/test sequence
 
 1. Inspect GKE environment, server checkout, existing server process and

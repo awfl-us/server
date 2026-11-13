@@ -7,7 +7,7 @@ import { Storage } from '@google-cloud/storage';
 import { NativeExecutionStore } from '../workflows/native/executionStore.js';
 import { NativeGcsReleases } from '../workflows/native/gcsReleases.js';
 import { createJobsEffectHandlers } from '../workflows/native/jobsEffects.js';
-import { runNativeWorkflow } from '../workflows/native/worker.js';
+import { runNativeWorkflow, nativeAsyncSchedulerFor } from '../workflows/native/worker.js';
 import { runNativeMemoryWorkflow } from '../workflows/native/memoryWorker.js';
 import { createNativeProfiler } from '../workflows/native/profiler.js';
 
@@ -73,6 +73,26 @@ export function createNativeJobsRouter({
     }
   });
   return router;
+}
+
+// The persistent GKE Jobs deployment can recover queued native detached
+// executions immediately on startup, without Cloud Tasks or another service.
+// Do not run a detached recovery loop on request-scoped Cloud Run instances.
+export function startNativeDetachedRecovery({ store, releases, handlers } = {}) {
+  if (process.env.AWFL_NATIVE_EXECUTION_ENABLED !== '1' ||
+      process.env.AWFL_NATIVE_DETACHED_GKE_ENABLED !== '1') return null;
+  const nativeStore = store || new NativeExecutionStore({ db: getFirestore() });
+  const nativeReleases = releases || new NativeGcsReleases({
+    storage: new Storage(), bucket: process.env.AWFL_NATIVE_ARTIFACT_BUCKET,
+    verifiedCache: verifiedNativeArtifacts,
+  });
+  const nativeHandlers = handlers || createJobsEffectHandlers({
+    jobsOrigin: process.env.AWFL_NATIVE_JOBS_URL,
+    storage: new Storage(), callbackDb: getFirestore(),
+  });
+  return nativeAsyncSchedulerFor({
+    store: nativeStore, releases: nativeReleases, handlers: nativeHandlers,
+  });
 }
 
 export default createNativeJobsRouter();
