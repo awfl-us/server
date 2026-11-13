@@ -420,3 +420,65 @@ test('streaming IPC capability remains pinned across claims and recovery', async
     artifactSha256:hash, protocolVersion:2, input:{}, streamIpcVersion:2,
   }),/invalid pinned native stream IPC version/);
 });
+
+
+test('confirmed workflow.run child failure commits terminal status, clears lease and prevents retry', async () => {
+  const store = new NativeExecutionStore({ db: fakeFirestore() });
+  const executionId = 'native_' + 'd'.repeat(32);
+  await store.create({
+    executionId, userId: 'owner', projectId: 'project',
+    workflowName: 'ParentWithChild', input: {}, artifactSha256: hash,
+    protocolVersion: 2, allowedOperations: ['workflow.run'],
+  });
+  const { epoch } = await store.claim({ executionId, workerId: 'first' });
+  await store.prepareEffect({
+    executionId, workerId: 'first', epoch, nodeId: '0.0',
+    effectId: 'child_effect', operation: 'workflow.run',
+    args: { workflow_id: 'Child', argument: {} },
+    slots: {}, continuation: { next_step: 1, slots: {}, frames: [] },
+    resultSlot: 's0', protocolVersion: 2,
+  });
+  const error = { message: 'missing field or element: workdir', code: null };
+  await store.failPendingConfirmedEffect({
+    executionId, workerId: 'first', epoch, effectId: 'child_effect',
+    operation: 'workflow.run', error,
+  });
+  const failed = await store.get(executionId);
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.owner, null);
+  assert.equal(failed.leaseUntil, 0);
+  assert.equal(failed.pendingEffect, null);
+  assert.deepEqual(failed.error, error);
+  assert.deepEqual((await store.getEffect(executionId, 'child_effect')).outcome, error);
+  assert.deepEqual(await store.claim({ executionId, workerId: 'retry' }), {
+    failed: true, error,
+  });
+});
+
+test('confirmed workflow.run error can resume at compiled catch edge', async () => {
+  const store = new NativeExecutionStore({ db: fakeFirestore() });
+  const executionId = 'native_' + 'c'.repeat(32);
+  await store.create({
+    executionId, userId: 'owner', projectId: 'project',
+    workflowName: 'ParentWithCatch', input: {}, artifactSha256: hash,
+    protocolVersion: 2, allowedOperations: ['workflow.run'],
+  });
+  const { epoch } = await store.claim({ executionId, workerId: 'first' });
+  await store.prepareEffect({
+    executionId, workerId: 'first', epoch, nodeId: '0.0',
+    effectId: 'child_effect', operation: 'workflow.run',
+    args: { workflow_id: 'Child', argument: {} },
+    slots: {}, continuation: { next_step: 1, slots: {}, frames: [] },
+    resultSlot: 's0', protocolVersion: 2,
+    onError: { nextStep: 7, errorSlot: 's1' },
+  });
+  const failure = { message: 'child raised', code: null };
+  await store.recordEffectFailure({
+    executionId, workerId: 'first', epoch, effectId: 'child_effect', failure,
+  });
+  const resumed = await store.get(executionId);
+  assert.equal(resumed.status, 'ready');
+  assert.equal(resumed.checkpoint.next_step, 7);
+  assert.equal(resumed.pendingEffect, null);
+  assert.deepEqual((await store.getEffect(executionId, 'child_effect')).outcome, failure);
+});

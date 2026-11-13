@@ -499,8 +499,8 @@ export class NativeExecutionStore {
       if (!s.pendingEffect || s.pendingEffect.effectId !== effectId || !s.pendingEffect.onError) {
         throw conflict('effect was not prepared with a compiled error handler');
       }
-      if (failure.code === null && s.pendingEffect.operation !== 'native.parallel') {
-        throw conflict('non-HTTP failures require an authenticated native fork');
+      if (failure.code === null && !['native.parallel', 'workflow.run'].includes(s.pendingEffect.operation)) {
+        throw conflict('non-HTTP failures require a confirmed native fork or child workflow');
       }
       const { fingerprint, onError } = s.pendingEffect;
       if (!s.checkpoint || !Number.isSafeInteger(s.checkpoint.next_step)) {
@@ -522,14 +522,18 @@ export class NativeExecutionStore {
     * parent fork atomically, while journaling the parent fork intent. This
     * never handles uncertain child transport/effect outcomes.
     */
-  async failPendingParallel({ executionId, workerId, epoch, effectId, error }) {
+  async failPendingConfirmedEffect({ executionId, workerId, epoch, effectId,
+                                     operation, error }) {
+    if (!['native.parallel', 'workflow.run'].includes(operation)) {
+      throw new Error('confirmed native effect must be a fork or child workflow');
+    }
     id(effectId);
     requireValue(error, 'error');
-    enforceBytes(error, LIMIT.effectOutcome, 'native confirmed fork failure');
+    enforceBytes(error, LIMIT.effectOutcome, 'native confirmed effect failure');
     return this.mutate(executionId, workerId, epoch, (s, now, journal, tx, ref) => {
-      if (!s.pendingEffect || s.pendingEffect.operation !== 'native.parallel' ||
+      if (!s.pendingEffect || s.pendingEffect.operation !== operation ||
           s.pendingEffect.effectId !== effectId || journal?.exists) {
-        throw conflict('confirmed parallel failure must match a pending fork');
+        throw conflict('confirmed failure must match the pending native effect');
       }
       tx.create(ref, {
         effectId, fingerprint: s.pendingEffect.fingerprint, isError: true,
@@ -539,6 +543,10 @@ export class NativeExecutionStore {
         error: null, errorJson: JSON.stringify(error),
         owner: null, leaseUntil: 0, effectCount: (s.effectCount || 0) + 1 };
     }, effectId);
+  }
+
+  async failPendingParallel(args) {
+    return this.failPendingConfirmedEffect({ ...args, operation: 'native.parallel' });
   }
 
   async fail({ executionId, workerId, epoch, error, effectCount }) {

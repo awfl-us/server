@@ -11,3 +11,18 @@ export class NativeConfirmedHttpFailure extends Error {
     this.status = status;
   }
 }
+
+
+// Only a terminal failure reported by a verified, pinned native child
+// executable is a confirmed workflow.run failure. Transport/configuration
+// errors must remain unclassified so retries cannot mask unknown effects.
+export class NativeConfirmedWorkflowFailure extends Error {
+  constructor(nativeError) {
+    const detail = typeof nativeError === 'string' ? nativeError :
+      nativeError && typeof nativeError.message === 'string' ?
+        nativeError.message : 'native child workflow failed';
+    super(detail.slice(0, 256));
+    this.name = 'NativeConfirmedWorkflowFailure';
+    this.nativeError = nativeError;
+  }
+}

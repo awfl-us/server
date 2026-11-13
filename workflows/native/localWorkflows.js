@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { runNativeArtifact, buildNativeTrustedGlobals,
   createNativeStreamSession } from './runner.js';
 import { tagNativeValue } from './executionStore.js';
+import { NativeConfirmedWorkflowFailure } from './effectErrors.js';
 
 const NAME = /^[A-Za-z][A-Za-z0-9_-]{0,99}$/;
 const SLOT = /^s[0-9]+$/;
@@ -130,9 +131,7 @@ export function createNativeLocalRunner({
           console.error('AWFL_NATIVE_CHILD_FAILURE', workflowName,
             JSON.stringify(response.error).slice(0, 1600));
         }
-        const error = new Error('native workflow failed');
-        error.nativeError = response.error;
-        throw error;
+        throw new NativeConfirmedWorkflowFailure(response.error);
       }
       if (response.status !== 'suspended' || !response.effect || !response.continuation) {
         throw new Error('invalid native memory suspension');

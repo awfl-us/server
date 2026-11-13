@@ -5,7 +5,7 @@ import { performance } from 'node:perf_hooks';
 
 const STORE_OPS = new Set([
   'get', 'claim', 'renew', 'prepareEffect', 'recordEffect',
-  'recordEffectFailure', 'failPendingHttp', 'failPendingParallel',
+  'recordEffectFailure', 'failPendingHttp', 'failPendingParallel', 'failPendingConfirmedEffect',
   'getEffect', 'complete', 'fail',
 ]);
 
