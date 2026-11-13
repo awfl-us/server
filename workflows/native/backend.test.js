@@ -52,16 +52,16 @@ function fixture(trustedGlobalsVersion, parallelVersion, operations = ['http.pos
   };
 }
 
-test('native workflow.run cannot be routed to the legacy durable worker', async () => {
+test('native workflow.run uses durable worker without memory mode and may still opt in to memory', async () => {
   const previous = process.env.AWFL_NATIVE_MEMORY_EXECUTION_ENABLED;
   delete process.env.AWFL_NATIVE_MEMORY_EXECUTION_ENABLED;
   try {
     const old = fixture(1, undefined, ['workflow.run']);
-    await assert.rejects(old.backend.maybeStart({ workflowName: 'NativePilot',
-      userId: 'owner', projectId: 'project-a', argument: {} }),
-    /requires memory-first/);
-    assert.equal(old.states.size, 0);
-    assert.equal(old.tasks.length, 0);
+    await old.backend.maybeStart({ workflowName: 'NativePilot',
+      userId: 'owner', projectId: 'project-a', argument: {} });
+    assert.equal(old.states.get(executionId).executionMode, undefined);
+    assert.deepEqual(old.states.get(executionId).allowedOperations, ['workflow.run']);
+    assert.equal(old.tasks.length, 1);
     process.env.AWFL_NATIVE_MEMORY_EXECUTION_ENABLED = '1';
     const enabled = fixture(1, undefined, ['workflow.run']);
     await enabled.backend.maybeStart({ workflowName: 'NativePilot',

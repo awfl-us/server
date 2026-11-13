@@ -4,6 +4,7 @@
 import { GoogleAuth } from 'google-auth-library';
 import { createNativeLogEffectHandler } from './logEffects.js';
 import { createNativeStorageEffectHandler } from './storageEffects.js';
+import { createNativeCallbackEffects } from './callbackEffects.js';
 
 const METHODS = Object.freeze({
   'http.get': 'GET', 'http.post': 'POST',
@@ -13,7 +14,7 @@ const METHODS = Object.freeze({
 export function createJobsEffectHandlers({
   jobsOrigin, auth = new GoogleAuth(), timeoutMs = 30_000,
   logger = console,
-  profiler = null, storage = null,
+  profiler = null, storage = null, callbackDb = null,
 }) {
   let base;
   try { base = new URL(jobsOrigin); } catch { /* validate below */ }
@@ -28,6 +29,7 @@ export function createJobsEffectHandlers({
   const handlers = {
     'log.write': createNativeLogEffectHandler(logger),
     ...(storage && { 'storage.object_get': createNativeStorageEffectHandler({ storage }) }),
+    ...(callbackDb && createNativeCallbackEffects({ db: callbackDb, jobsOrigin: base.origin })),
   };
   for (const [operation, method] of Object.entries(METHODS)) {
     handlers[operation] = async ({ args, identity, idempotencyKey }) => {
