@@ -356,7 +356,7 @@ jobs:
           JSON_FILE=".github/actions-variables.json"
           if [[ -f "$JSON_FILE" ]]; then
             # Build key=value;key=value ... from JSON. Values are treated as strings.
-            JSON_ENV_VARS=$(jq -r '[to_entries[] | "\(.key)=\(.value|tostring)"] | join(";")' "$JSON_FILE")
+            JSON_ENV_VARS=$(jq -r '[to_entries[] | select(.key != "AWFL_NATIVE_EXECUTION_ENABLED") | "\(.key)=\(.value|tostring)"] | join(";")' "$JSON_FILE")
           else
             JSON_ENV_VARS=""
           fi
@@ -371,7 +371,7 @@ jobs:
           # and server/infra/native-execution (separate remote state) manages
           # the Cloud Tasks queue and Jobs invoker IAM. Native is NEVER enabled
           # merely because the infrastructure has been provisioned.
-          NATIVE_ENABLED="${{ vars.AWFL_NATIVE_EXECUTION_ENABLED || '0' }}"
+          NATIVE_ENABLED="${AWFL_NATIVE_EXECUTION_ENABLED:-${{ vars.AWFL_NATIVE_EXECUTION_ENABLED || '0' }}}"
           if [[ "$NATIVE_ENABLED" != 0 && "$NATIVE_ENABLED" != 1 ]]; then
             echo "AWFL_NATIVE_EXECUTION_ENABLED must be 0 or 1" >&2
             exit 1
@@ -413,6 +413,12 @@ jobs:
       - name: Deploy Jobs service (auth-required)
         run: |
           set -euo pipefail
+          JOBS_CPU_FLAGS=(--cpu-throttling --min-instances=0)
+          if [[ "${AWFL_NATIVE_EXECUTION_ENABLED:-0}" == "1" ]]; then
+            # Cloud Run must continue running locally enqueued native children
+            # after the first Cloud Task response. GKE handles durable recovery.
+            JOBS_CPU_FLAGS=(--no-cpu-throttling --min-instances=1)
+          fi
           gcloud run deploy "${CLOUD_RUN_JOBS_SERVICE}" \
             --quiet \
             --region="${GCP_REGION}" \
@@ -420,12 +426,31 @@ jobs:
             --service-account="${CLOUD_RUN_RUNTIME_SA}" \
             --no-allow-unauthenticated \
             --timeout=3600 \
-            --set-env-vars="^;^${{ steps.common_env.outputs.COMMON_ENV_VARS }};SERVICE_TARGET=start:jobs;CLOUD_RUN_LOCATION=${GCP_REGION}" \
+            "${JOBS_CPU_FLAGS[@]}" \
+            --set-env-vars="^;^${{ steps.common_env.outputs.COMMON_ENV_VARS }};SERVICE_TARGET=start:jobs;CLOUD_RUN_LOCATION=${GCP_REGION};AWFL_NATIVE_DETACHED_GKE_ENABLED=${AWFL_NATIVE_EXECUTION_ENABLED:-0}" \
             ${{ steps.secrets.outputs.SECRET_FLAGS }}
           gcloud run services update-traffic "${CLOUD_RUN_JOBS_SERVICE}" \
             --region="${GCP_REGION}" --to-latest --quiet
 
-      # No GKE provisioning in the application deployment pipeline.
+      # The same immutable Jobs image must also run continuously in GKE
+      # to recover independently persisted native subworkflow continuations.
+      # Terraform in the existing remote state owns the KSA, WI IAM and pod.
+      - name: Install Terraform for native GKE scheduler
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.5
+
+      - name: Reconcile native GKE scheduler through Terraform
+        shell: bash
+        run: |
+          set -euo pipefail
+          terraform -chdir=infra/native-execution init -input=false -no-color
+          terraform -chdir=infra/native-execution plan -input=false -no-color \
+            -out="$RUNNER_TEMP/native-jobs.tfplan" \
+            -var="native_jobs_image=${{ steps.image.outputs.IMAGE_URI }}"
+          terraform -chdir=infra/native-execution apply -input=false -no-color \
+            "$RUNNER_TEMP/native-jobs.tfplan"
+
       - name: Verify both services route 100% to the latest stable revision
         run: |
           set -euo pipefail

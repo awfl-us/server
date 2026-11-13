@@ -79,8 +79,11 @@ export function createNativeJobsRouter({
 // executions immediately on startup, without Cloud Tasks or another service.
 // Do not run a detached recovery loop on request-scoped Cloud Run instances.
 export function startNativeDetachedRecovery({ store, releases, handlers } = {}) {
+  // Cloud Run Jobs can enqueue detached children, but only the always-on GKE
+  // worker may scan and recover them after process restarts.
   if (process.env.AWFL_NATIVE_EXECUTION_ENABLED !== '1' ||
-      process.env.AWFL_NATIVE_DETACHED_GKE_ENABLED !== '1') return null;
+      process.env.AWFL_NATIVE_DETACHED_GKE_ENABLED !== '1' ||
+      process.env.AWFL_NATIVE_PERSISTENT_WORKER !== '1') return null;
   const nativeStore = store || new NativeExecutionStore({ db: getFirestore() });
   const nativeReleases = releases || new NativeGcsReleases({
     storage: new Storage(), bucket: process.env.AWFL_NATIVE_ARTIFACT_BUCKET,
