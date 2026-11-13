@@ -109,3 +109,13 @@ documents, explicit `Try` handler continuation, terminal errors, tenant
 scoping, lease takeover/restart, and progress coalescing. Run an isolated
 Cloud Run Jobs canary and collect cold/warm measurements before enabling
 the new path for regular workflow traffic.
+
+## Stream-capable native binaries
+
+When a pinned release contains `streamIpcVersion:1`, the local child
+runner uses the same isolated, verified Rust process across its requests.
+The Rust code continues to take full JSON continuation input, and Node
+remains responsible for external effects and result persistence. No
+user-scoped process reuse, no additional Cloud Task, no DSL changes.
+The pool is bounded at sixteen distinct compiled releases per execution
+tree; overflow uses one-shot IPC. Old releases remain compatible.

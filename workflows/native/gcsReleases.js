@@ -28,6 +28,7 @@ function validateRelease(data, expectedName) {
       data.schemaVersion !== 1 || data.workflowName !== expectedName ||
       !SHA.test(data.artifactSha256 || '') ||
       data.protocolVersion !== 2 || data.runtimeAbi !== 3 ||
+      (data.streamIpcVersion !== undefined && data.streamIpcVersion !== 1) ||
       (data.trustedGlobalsVersion !== undefined && data.trustedGlobalsVersion !== 1) ||
       (data.parallelVersion !== undefined && data.parallelVersion !== 1) ||
       (data.parallelVersion === 1) !==
@@ -45,6 +46,7 @@ function validateRelease(data, expectedName) {
     protocolVersion: 2,
     allowedOperations: Object.freeze([...data.allowedOperations]),
     ...(data.trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
+    ...(data.streamIpcVersion === 1 && { streamIpcVersion: 1 }),
     ...(data.parallelVersion === 1 && { parallelVersion: 1 }),
   });
 }

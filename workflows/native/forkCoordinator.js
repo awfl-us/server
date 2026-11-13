@@ -103,6 +103,7 @@ export class NativeForkCoordinator {
             input: parent.input, protocolVersion: parent.protocolVersion,
             allowedOperations: parent.allowedOperations,
             ...(parent.trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
+            ...(parent.streamIpcVersion === 1 && { streamIpcVersion: 1 }),
             parallelVersion: 1, forkLane,
           };
           let stored = await this.store.get(childId);
@@ -119,6 +120,7 @@ export class NativeForkCoordinator {
               stored.protocolVersion !== parent.protocolVersion ||
               stored.workflowName !== parent.workflowName ||
               stored.trustedGlobalsVersion !== parent.trustedGlobalsVersion ||
+              stored.streamIpcVersion !== parent.streamIpcVersion ||
               stored.forkLane?.nodeId !== nodeId ||
               stored.forkLane?.generation !== generation ||
               stored.forkLane?.index !== index ||

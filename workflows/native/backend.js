@@ -69,6 +69,7 @@ export class NativeWorkflowBackend {
       protocolVersion: active.protocolVersion,
       allowedOperations: active.allowedOperations,
       ...(active.trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
+      ...(active.streamIpcVersion === 1 && { streamIpcVersion: 1 }),
       ...(active.parallelVersion === 1 && { parallelVersion: 1 }),
       ...(memoryMode && { executionMode: 'memory' }),
     });

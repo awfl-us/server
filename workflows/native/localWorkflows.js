@@ -1,7 +1,8 @@
 // One process-local execution tree. A workflow.run effect invokes a published
 // compiled child directly, not another Cloud Task or Firestore execution.
 import { createHash } from 'node:crypto';
-import { runNativeArtifact, buildNativeTrustedGlobals } from './runner.js';
+import { runNativeArtifact, buildNativeTrustedGlobals,
+  createNativeStreamSession } from './runner.js';
 import { tagNativeValue } from './executionStore.js';
 
 const NAME = /^[A-Za-z][A-Za-z0-9_-]{0,99}$/;
@@ -10,6 +11,7 @@ const MAX_DEPTH = 24;
 const MAX_CHILD_CALLS = 4096;
 const MAX_TRANSITIONS = 100_000;
 const MAX_RELEASES = 64;
+const MAX_STREAM_PROCESSES = 16; // per authenticated local execution tree
 
 function checkedChildArgs(args, project, location) {
   if (!args || typeof args !== 'object' || Array.isArray(args) ||
@@ -46,6 +48,9 @@ export function createNativeLocalRunner({
   region = process.env.WORKFLOWS_LOCATION || 'us-central1',
 }) {
   const loaded = new Map(); // One pinned release and staged ELF per child name.
+  // Stateless generated Rust code can serve multiple calls within one owner's
+  // workflow tree. The session is never shared between distinct executions.
+  const streams = new Map();
   let childCalls = 0, transitions = 0, effectCount = 0;
   let closed = false;
   const rootId = rootExecutionId;
@@ -91,12 +96,27 @@ export function createNativeLocalRunner({
     let continuation = null;
     while (true) {
       if (++transitions > MAX_TRANSITIONS) throw new Error('native execution transition limit reached');
-      const invoke = () => runArtifact({
-        executable: artifact.executable, sha256: artifact.sha256, profiler,
-        input: { protocol_version: 2, input,
-          ...(globals && { trusted_globals: globals }),
-          ...(continuation && { continuation }) },
-      });
+      const payload = { protocol_version: 2, input,
+        ...(globals && { trusted_globals: globals }),
+        ...(continuation && { continuation }) };
+      const invoke = () => {
+        if (release.streamIpcVersion === 1) {
+          let session = streams.get(release.sha256);
+          if (!session && streams.size < MAX_STREAM_PROCESSES) {
+            session = createNativeStreamSession({
+              executable: artifact.executable, sha256: artifact.sha256, profiler,
+            });
+            streams.set(release.sha256, session);
+          }
+          // Explicit bound on process count: uncommon overflow goes through
+          // the proven one-shot path, not an unbounded pool.
+          if (session) return session.run(payload);
+        }
+        return runArtifact({
+          executable: artifact.executable, sha256: artifact.sha256, profiler,
+          input: payload,
+        });
+      };
       const response = profiler ? await profiler.measure('runner.transition', invoke)
         : await invoke();
       if (!response || response.protocol_version !== 2) {
@@ -202,6 +222,8 @@ export function createNativeLocalRunner({
     async close() {
       if (closed) return;
       closed = true;
+      await Promise.all([...streams.values()].map(session => session.close()));
+      streams.clear();
       await Promise.all([...loaded.values()].map(async promise => {
         const value = await promise.catch(() => null);
         await value?.artifact?.cleanup?.();

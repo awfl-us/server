@@ -141,7 +141,8 @@ export class NativeExecutionStore {
 
   async create({ executionId, userId, projectId, artifactSha256, input,
                  protocolVersion = 1, workflowName, allowedOperations,
-                 trustedGlobalsVersion, parallelVersion, forkLane, executionMode, asyncLaunch }) {
+                 trustedGlobalsVersion, streamIpcVersion, parallelVersion,
+                 forkLane, executionMode, asyncLaunch }) {
     id(executionId);
     if (!userId || !projectId || !/^[a-f0-9]{64}$/.test(artifactSha256 || '')) {
       throw new Error('owner and pinned artifact SHA-256 required');
@@ -160,6 +161,10 @@ export class NativeExecutionStore {
          allowedOperations.some(op => !allowed.has(op)) ||
          new Set(allowedOperations).size !== allowedOperations.length)) {
       throw new Error('invalid pinned native operations');
+    }
+    if (streamIpcVersion !== undefined &&
+        (streamIpcVersion !== 1 || protocolVersion !== 2)) {
+      throw new Error('invalid pinned native stream IPC version');
     }
     if (trustedGlobalsVersion !== undefined &&
         (trustedGlobalsVersion !== 1 || protocolVersion !== 2)) {
@@ -216,6 +221,7 @@ export class NativeExecutionStore {
         ...(workflowName && { workflowName }),
         ...(allowedOperations && { allowedOperations: [...allowedOperations] }),
         ...(trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
+        ...(streamIpcVersion === 1 && { streamIpcVersion: 1 }),
         ...(parallelVersion === 1 && { parallelVersion: 1 }),
         ...(executionMode === 'memory' && { executionMode: 'memory' }),
         ...(asyncLaunch === true && { asyncLaunch: true }),

@@ -26,3 +26,9 @@ See `workflows/native/MEMORY.md`. In production this requires the
 explicit `AWFL_NATIVE_DETACHED_GKE_ENABLED=1` flag and a persistent
 GKE Jobs process (not request-scoped Cloud Run). No new Cloud Task per
 native subworkflow. Keep all IAM and infrastructure Terraform-managed.
+
+
+**Current perf plan:** see docs/native-persistent-ipc-plan-2026-11-13.md.
+Use per-execution stream-capable Rust IPC sessions, retaining one-shot
+fallback and owner/release isolation. Do not sacrifice durability or
+duplicate irreversible effects when processes restart.

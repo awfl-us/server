@@ -57,3 +57,24 @@ artifacts of up to 8 MiB each, keyed by bucket/prefix/SHA-256. Each use
 still verifies its digest and stages a new private executable directory,
 which is removed when the worker finishes. The cache is process-local and
 does not alter the active release mapping or durable Firestore state.
+
+## Streaming transport benchmark (November 13, 2026)
+
+For the same compiled, SHA-pinned Rust fixture and 100 identical, purely
+computational requests:
+
+| Transport | Total (100) | Mean/request |
+|---|---:|---:|
+| One-shot verify + stage + spawn + remove | 1,928.4 ms | 19.28 ms |
+| Persistent JSON-lines process | 19.7 ms | 0.20 ms |
+
+After one warm-up request, streaming used one process for all 100 calls.
+The 1,908.7 ms difference is a *matched native invocation benchmark*,
+not end-to-end ProjectManager savings. The compiled full ProjectManager
+parent completed against real local Jobs in 19.387s / 30 effects / zero
+HTTP failures, but the external OpenAI latency varied.
+
+The previously measured 15.074s wall baseline partitions into 12.702s
+Jobs HTTP overlapping wall time and 2.372s outside Jobs, including 1.555s
+exclusively in repeated Rust subprocess lifecycle. Test harness native
+journal was in memory; production Firestore latency is separate.

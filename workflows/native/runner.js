@@ -6,6 +6,7 @@ import { constants } from 'node:fs';
 import { chmod, mkdtemp, open, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+export { createNativeStreamSession } from './streamProcess.js';
 
 const MAX_INPUT = 1024 * 1024;
 const MAX_OUTPUT = 4 * 1024 * 1024;
@@ -129,7 +130,8 @@ export function buildNativeTrustedGlobals({
 // This path is NOT connected to the common production launcher.
 export async function executeNativeStep({ store, executionId, workerId, executable, sha256,
                                           timeoutMs, allowedOperations, gcpProject, region, profiler,
-                                          claimedState = null, retainState = false }) {
+                                          claimedState = null, retainState = false,
+                                          streamSession = null }) {
   const leaseMs = Math.max(60_000, (timeoutMs ?? 30_000) + 10_000);
   // The same Jobs request already owns this fenced lease after a durable
   // checkpoint/effect commit. Keep that verified state in memory rather than
@@ -164,12 +166,12 @@ export async function executeNativeStep({ store, executionId, workerId, executab
   const trustedGlobals = protocolVersion === 2 && state.trustedGlobalsVersion === 1
     ? buildNativeTrustedGlobals({ state, executionId, gcpProject, region })
     : null;
-  const callArtifact = () => runNativeArtifact({
-    executable, sha256, timeoutMs, profiler,
-    input: { protocol_version: protocolVersion, input: state.input,
-      ...(trustedGlobals && { trusted_globals: trustedGlobals }),
-      ...(continuation && { continuation }) },
-  });
+  const payload = { protocol_version: protocolVersion, input: state.input,
+    ...(trustedGlobals && { trusted_globals: trustedGlobals }),
+    ...(continuation && { continuation }) };
+  const callArtifact = () => streamSession
+    ? streamSession.run(payload)
+    : runNativeArtifact({ executable, sha256, timeoutMs, profiler, input: payload });
   const response = profiler ? await profiler.measure('rust.verify_stage_spawn', callArtifact)
     : await callArtifact();
   if (!response || response.protocol_version !== protocolVersion) {
