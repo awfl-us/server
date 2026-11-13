@@ -2,7 +2,7 @@ import { NativeConfirmedHttpFailure } from './effectErrors.js';
 import { NativeConfirmedParallelFailure } from './forkCoordinator.js';
 // Explicit effect execution boundary. Never dispatches an unknown operation or
 // retries an ambiguous external outcome automatically.
-const validOperations = new Set(['http.get', 'http.post', 'http.patch', 'http.delete', 'log.write', 'native.parallel']);
+const validOperations = new Set(['http.get', 'http.post', 'http.patch', 'http.delete', 'log.write', 'native.parallel', 'workflow.run', 'storage.object_get']);
 
 export class NativeEffectDispatcher {
   constructor({ handlers, reconcile = {}, authorizeExecution }) {

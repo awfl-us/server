@@ -45,7 +45,7 @@ export function createNativeJobsRouter({
       });
       const nativeHandlers = handlers || createJobsEffectHandlers({
         jobsOrigin: process.env.AWFL_NATIVE_JOBS_URL,
-        profiler,
+        profiler, storage: new Storage(),
       });
       const runner = req.body.executionMode === 'memory'
         ? executeMemory : execute;

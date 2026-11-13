@@ -283,3 +283,43 @@ test('real Scala-compiled parent executes an HTTP effect inside a local child', 
     assert.equal(requests, 1);
   } finally { await runner.close(); }
 });
+
+test('Scala deployment placeholder resolves for nested native workflow.run children', async () => {
+  const before = process.env.WORKFLOW_ENV;
+  process.env.WORKFLOW_ENV = '-staging';
+  const seen = [];
+  const releases = {
+    active: async name => {
+      seen.push(name);
+      return { workflowName: name, sha256: childSha, protocolVersion: 2,
+        allowedOperations: [] };
+    },
+    materialize: async digest => ({
+      sha256: digest, executable: '/test/child', cleanup: async () => {},
+    }),
+  };
+  const runner = createNativeLocalRunner({
+    releases, handlers: {}, identity, rootExecutionId: rootId,
+    gcpProject: 'awfl-us', region: 'us-central1',
+    runArtifact: async ({ executable, input }) => {
+      if (executable === '/test/child') return {
+        protocol_version: 2, status: 'completed', result: 5,
+      };
+      if (!input.continuation) return suspend('workflow.run',
+        localArgs('LocalChild${WORKFLOW_ENV}', {}));
+      return { protocol_version: 2, status: 'completed', result: 5 };
+    },
+  });
+  try {
+    assert.equal(await runner.run({
+      workflowName: 'Root', release: { sha256: sha, allowedOperations: ['workflow.run'] },
+      artifact: { executable: '/test/root', sha256: sha },
+      executionId: rootId, input: {},
+    }), 5);
+    assert.deepEqual(seen, ['LocalChild-staging']);
+  } finally {
+    await runner.close();
+    if (before === undefined) delete process.env.WORKFLOW_ENV;
+    else process.env.WORKFLOW_ENV = before;
+  }
+});

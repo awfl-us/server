@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { NativeEffectDispatcher } from './effectDispatcher.js';
 import { NativeForkCoordinator } from './forkCoordinator.js';
 import { executeNativeStep } from './runner.js';
+import { createDurableSubworkflowHandler } from './durableSubworkflow.js';
 
 // Shared by all descendants of one root execution. Fork coordinators do not
 // hold a permit while waiting on their children, avoiding nested-fork deadlocks.
@@ -60,6 +61,7 @@ export async function runNativeWorkflow({
     if (!sharedArtifact) await artifact.cleanup();
     throw new Error('native fork artifact digest differs from its parent');
   }
+  let childHandler = null;
   try {
     // A fork is itself an authorized, journaled native effect. Running a
     // child re-enters this same owner-checked worker with an independently
@@ -124,8 +126,15 @@ export async function runNativeWorkflow({
         if (heartbeatPending) await heartbeatPending;
       }
     };
-    const forkHandlers = initial.parallelVersion === 1 ?
-      { ...handlers, 'native.parallel': runFork } : handlers;
+    childHandler = initial.allowedOperations.includes('workflow.run')
+      ? createDurableSubworkflowHandler({
+        releases, handlers, executionId, userId, projectId,
+      }) : null;
+    const forkHandlers = {
+      ...handlers,
+      ...(initial.parallelVersion === 1 && { 'native.parallel': runFork }),
+      ...(childHandler && { 'workflow.run': childHandler.run }),
+    };
     const dispatcher = new NativeEffectDispatcher({
       handlers: forkHandlers,
       reconcile: initial.parallelVersion === 1 ?
@@ -190,6 +199,7 @@ export async function runNativeWorkflow({
     }
     throw new Error('native execution transition budget exhausted');
   } finally {
+    await childHandler?.close();
     if (!sharedArtifact) await artifact.cleanup();
   }
 }

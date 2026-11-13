@@ -3,6 +3,7 @@
 // Jobs requests originate from the trusted server using its own identity.
 import { GoogleAuth } from 'google-auth-library';
 import { createNativeLogEffectHandler } from './logEffects.js';
+import { createNativeStorageEffectHandler } from './storageEffects.js';
 
 const METHODS = Object.freeze({
   'http.get': 'GET', 'http.post': 'POST',
@@ -12,7 +13,7 @@ const METHODS = Object.freeze({
 export function createJobsEffectHandlers({
   jobsOrigin, auth = new GoogleAuth(), timeoutMs = 30_000,
   logger = console,
-  profiler = null,
+  profiler = null, storage = null,
 }) {
   let base;
   try { base = new URL(jobsOrigin); } catch { /* validate below */ }
@@ -24,7 +25,10 @@ export function createJobsEffectHandlers({
   if (typeof auth?.getIdTokenClient !== 'function') {
     throw new Error('Jobs IAM identity provider required');
   }
-  const handlers = { 'log.write': createNativeLogEffectHandler(logger) };
+  const handlers = {
+    'log.write': createNativeLogEffectHandler(logger),
+    ...(storage && { 'storage.object_get': createNativeStorageEffectHandler({ storage }) }),
+  };
   for (const [operation, method] of Object.entries(METHODS)) {
     handlers[operation] = async ({ args, identity, idempotencyKey }) => {
       if (!args || typeof args !== 'object' || Array.isArray(args) ||

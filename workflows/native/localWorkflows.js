@@ -13,7 +13,7 @@ const MAX_RELEASES = 64;
 
 function checkedChildArgs(args, project, location) {
   if (!args || typeof args !== 'object' || Array.isArray(args) ||
-      !NAME.test(args.workflow_id || '') ||
+      typeof args.workflow_id !== 'string' ||
       !Object.hasOwn(args, 'argument') ||
       (args.connector_params !== undefined &&
         (args.connector_params === null ||
@@ -23,7 +23,19 @@ function checkedChildArgs(args, project, location) {
       (args.location !== undefined && args.location !== location)) {
     throw new Error('unsupported or unauthorized local workflow.run arguments');
   }
-  return args.workflow_id;
+
+  // Scala-generated workflow names retain the deployment placeholder before
+  // Google Workflows YAML substitution. Match the existing Workflows naming
+  // convention when compiled Rust calls a local subworkflow instead.
+  const raw = args.workflow_id;
+  const marker = '${WORKFLOW_ENV}';
+  const suffix = process.env.WORKFLOW_ENV || '';
+  const name = raw.endsWith(marker)
+    ? raw.slice(0, -marker.length) + suffix : raw;
+  if (!NAME.test(name)) {
+    throw new Error('unsupported or unauthorized local workflow.run arguments');
+  }
+  return name;
 }
 
 /** The same runner drives the parent and all synchronous children. */
