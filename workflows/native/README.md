@@ -1,6 +1,56 @@
 # Native Rust workflow execution (experimental, opt-in)
 
-**Current server execution plan — November 12, 2026:**
+
+## Current native ProjectManager integration — November 13, 2026
+
+**Active plan:** [native ProjectManager compile/publish/execute](https://github.com/awfl-us/compiler-rust/blob/main/docs/projectmanager-native-integration-plan-2026-11-13.md).
+Older dated "next gate" sections below are **historical**; they do not
+describe the present dependency or merge state.
+
+- [Server #97](https://github.com/awfl-us/server/pull/97) is merged.
+  A durable native.parallel parent can now execute IAM-published,
+  pinned nonparallel workflow.run children in the same protected Jobs
+  process. No extra Cloud Task for each synchronous child.
+- Native storage.object_get is implemented and tested against the
+  restricted workflow-files bucket, capped at 128 KiB/object.
+- [Server #98](https://github.com/awfl-us/server/pull/98) is **open**
+  for callback.create/await, using existing users/{uid}/callbacks
+  records, the ordinary authenticated Jobs registration endpoint,
+  and the existing callback-delivery route. There is no second
+  callback service or new collection.
+- Local native tests on the callback feature branch: **93 passed,
+  zero failed, 42 skipped**, including a genuine compiled tools-CliTools
+  Rust executable running its callback creation, registration, delivery
+  and resumption continuation under a **mocked Jobs HTTP adapter**.
+  That is *not* a successful live Cloud Run callback execution.
+- The full 26-workflow ProjectManager dependency closure now compiles
+  to validated static-musl ELF artifacts using merged
+  [compiler-rust #31](https://github.com/awfl-us/compiler-rust/pull/31)
+  and [workflows #13](https://github.com/awfl-us/workflows/pull/13).
+  Full real GCS publication remains pending.
+- First live native ProjectManager probe reached six real HTTP effects,
+  then failed at native.parallel because an **old tagged Jobs revision**
+  rejected workflow.run in the operation set. The task was removed and
+  the run cancelled. This is not a complete native result.
+
+**Execution order:** complete callback worker merge/deployment; confirm
+the live revision accepts every operation required by ProjectManager;
+publish/inspect all 26 active releases using the single Workflows
+developer command; launch a native canary through authenticated
+Workflows API / Cloud Tasks / Jobs and verify fork, nested children,
+storage, callback and final result. Compare to Google through the same
+public launcher afterward. Keep normal native production routing off.
+Terraform is the only acceptable path for infra/IAM changes.
+
+**Callback limitation:** callback.await currently subscribes to the
+existing Firestore callback document **while holding a Jobs request**
+for up to 25 minutes. It is not a durable asynchronous wake-up service.
+Long-running callbacks and uncached replay require a future design
+decision; do not claim one-hour Workflows callback equivalence.
+
+---
+
+**Historical server execution plan — November 12, 2026:**
 [real-workflow pilot and benchmark](https://github.com/awfl-us/compiler-rust/blob/feat/native-parallel-durable/docs/real-workflow-pilot-and-benchmark-plan.md).
 That plan supersedes the historical numbered gate lists later in this README.
 The first **live Google transport baseline** now uses the newer deployed
@@ -48,7 +98,7 @@ revisit them only if the actual execution architecture or operating evidence
 requires them. This does **not** replace the existing per-execution worker
 lease, which protects crash recovery.
 
-**Next milestone: run real unchanged workflows.** The server CI now compiles
+**Historical next milestone (superseded): run real unchanged workflows.** The server CI now compiles
 the pinned original `LoadConversationHistory.scala` through compiler-rust,
 builds the resulting Rust executable, and runs it through `runNativeWorkflow`
 with a simulated HTTP adapter. This checks server-pinned identity, exact
