@@ -20,6 +20,22 @@ test('authenticated sys.log emits bounded structured log with stable insertId', 
   }]);
 });
 
+test('nested native child log effects accept the runner-generated scoped idempotency key', async () => {
+  const entries = [];
+  const handler = createNativeLogEffectHandler({ info: record => entries.push(record) });
+  const id = 'native_' + 'f'.repeat(32) +
+    ':root:1:2:call_0_0_except_0';
+  assert.equal(await handler({ ...request({ text: 'nested child failed' }),
+    idempotencyKey: id }), null);
+  assert.deepEqual(entries.map(entry => entry['logging.googleapis.com/insertId']), [id]);
+  await assert.rejects(handler({ ...request(),
+    idempotencyKey: id + ':!' }), /invalid authenticated native log effect/);
+  await assert.rejects(handler({ ...request(),
+    idempotencyKey: 'native_abc:root::call1' }), /invalid authenticated native log effect/);
+  await assert.rejects(handler({ ...request(),
+    idempotencyKey: id + ':extra'.repeat(300) }), /invalid authenticated native log effect/);
+});
+
 test('log handler rejects malformed untrusted input without emitting or network calls', async () => {
   const events = [];
   const handler = createNativeLogEffectHandler({ info: value => events.push(value) });

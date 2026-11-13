@@ -13,7 +13,8 @@ export function createNativeLogEffectHandler(logger) {
         typeof identity?.userId !== 'string' || !identity.userId ||
         typeof identity?.projectId !== 'string' || !identity.projectId ||
         typeof idempotencyKey !== 'string' ||
-        !/^[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$/.test(idempotencyKey)) {
+        Buffer.byteLength(idempotencyKey) > 512 ||
+        !/^[A-Za-z0-9_-]+(?::[A-Za-z0-9_-]+)+$/.test(idempotencyKey)) {
       throw new Error('invalid authenticated native log effect');
     }
     // A stable ID lets downstream logging deduplicate entries; the
