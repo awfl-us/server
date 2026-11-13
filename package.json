@@ -8,6 +8,8 @@
     "start:jobs": "node jobs.server.js",
     "dev:api": "nodemon api.server.js",
     "dev:jobs": "nodemon jobs.server.js",
+    "native:local": "node scripts/nativeLocalRun.mjs",
+    "test:native:local": "node --test scripts/nativeLocalDev.test.mjs",
     "test": "mocha test.js",
     "test:jest": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --env=node",
     "test:context": "npm run -s test:jest -- --config ./jest.config.mjs"
