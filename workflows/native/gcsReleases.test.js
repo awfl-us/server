@@ -14,6 +14,15 @@ const metadata = {
   runtimeAbi: 3, allowedOperations: ['http.post'],
 };
 
+test('published v2 releases may explicitly allow synchronous workflow.run', async () => {
+  const releases = fixture({ manifest: {
+    ...metadata, allowedOperations: ['workflow.run'],
+  } }).releases;
+  const active = await releases.active('Example');
+  assert.deepEqual(active.allowedOperations, ['workflow.run']);
+  assert.equal(active.protocolVersion, 2);
+});
+
 function fixture({ manifest = metadata, binary = elf, verifiedCache = null } = {}) {
   const objects = new Map([
     ['native-workflows/active/Example.json', Buffer.from(JSON.stringify(manifest))],

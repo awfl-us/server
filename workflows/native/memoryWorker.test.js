@@ -33,6 +33,9 @@ function memoryDb() {
 
 const binaryPath = process.env.AWFL_NATIVE_TOOLDEFS_BINARY;
 const nestedBinary = process.env.AWFL_NATIVE_NESTED_EFFECTS_BINARY;
+const localParent = process.env.AWFL_NATIVE_LOCAL_PARENT_BINARY;
+const localChild = process.env.AWFL_NATIVE_LOCAL_CHILD_BINARY;
+const localLeaf = process.env.AWFL_NATIVE_LOCAL_LEAF_BINARY;
 test('real Rust ToolDefs runs with no effect journal and one initial claim/final commit', {
   skip: !binaryPath, timeout: 35_000,
 }, async () => {
@@ -221,4 +224,71 @@ test('uncaught effect failure is terminal and is not retried by native memory wo
   assert.equal((await runNativeMemoryWorkflow(params)).status, 'failed');
   assert.equal(calls, 1);
   assert.equal((await store.get(executionId)).status, 'failed');
+});
+
+test('real nested workflow.run tree commits one top-level execution and no child records', {
+  skip: !(localParent && localChild && localLeaf), timeout: 90_000,
+}, async () => {
+  const db = memoryDb();
+  const store = new NativeExecutionStore({ db });
+  const id = 'native_' + '4'.repeat(32);
+  const identity = { userId: 'owner', projectId: 'project' };
+  const shaByName = new Map();
+  for (const [name, binary, ops] of [
+    ['LocalParent', localParent, ['workflow.run']],
+    ['LocalChild', localChild, ['workflow.run']],
+    ['LocalLeaf', localLeaf, []],
+  ]) {
+    shaByName.set(name, { sha256: createHash('sha256').update(await readFile(binary))
+      .digest('hex'), executable: binary, allowedOperations: ops });
+  }
+  await store.create({ executionId: id, ...identity,
+    workflowName: 'LocalParent', artifactSha256: shaByName.get('LocalParent').sha256,
+    allowedOperations: ['workflow.run'], protocolVersion: 2,
+    trustedGlobalsVersion: 1, executionMode: 'memory', input: {} });
+  const counts = { claim: 0, complete: 0, progress: 0 };
+  const watched = Object.create(store);
+  for (const [method, key] of [
+    ['claim', 'claim'], ['complete', 'complete'],
+    ['updateMemoryProgress', 'progress'],
+  ]) {
+    watched[method] = async (...args) => {
+      counts[key]++;
+      return store[method](...args);
+    };
+  }
+  let manifests = 0, artifacts = 0;
+  const previous = process.env.GCP_PROJECT;
+  process.env.GCP_PROJECT = 'awfl-us';
+  try {
+    const result = await runNativeMemoryWorkflow({
+      store: watched, executionId: id, ...identity, progressIntervalMs: 20_000,
+      handlers: {},
+      releases: {
+        active: async name => {
+          manifests++;
+          const match = shaByName.get(name);
+          return match ? { workflowName: name, sha256: match.sha256,
+            protocolVersion: 2, trustedGlobalsVersion: 1,
+            allowedOperations: match.allowedOperations } : null;
+        },
+        materialize: async sha256 => {
+          artifacts++;
+          const match = [...shaByName.values()].find(x => x.sha256 === sha256);
+          assert.ok(match);
+          return { ...match, cleanup: async () => {} };
+        },
+      },
+    });
+    assert.deepEqual(result, Array.from({ length: 20 }, (_, i) => i + 3));
+    assert.deepEqual(counts, { claim: 1, complete: 1, progress: 0 });
+    assert.equal(manifests, 2);
+    assert.equal(artifacts, 3, 'root + one cached executable per child name');
+    assert.equal((await store.get(id)).effectCount, 40);
+    assert.equal((await store.get(id)).status, 'completed');
+    assert.deepEqual([...db.docs.keys()], ['nativeWorkflowExecutions/' + id]);
+  } finally {
+    if (previous === undefined) delete process.env.GCP_PROJECT;
+    else process.env.GCP_PROJECT = previous;
+  }
 });

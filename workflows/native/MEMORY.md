@@ -1,5 +1,30 @@
 # Native memory-first execution (opt-in)
 
+## Local synchronous subworkflows
+
+`CallOperations.WorkflowRun` is dispatched **within the same Jobs request**.
+It uses the IAM-published, SHA-256-verified GCS child release, not another
+Cloud Task or Firestore execution. A shared continuation runner invokes the
+child and returns its result to the parent; nested calls share the root's
+authenticated user/project, external effect handlers, and effect budget.
+The child validates *its own* published allowed operations. Child releases
+are looked up and staged once per unique name within a root execution.
+
+Use `RunWorkflowArgs(workflow_id, argument, location, project_id)` and the
+backend-neutral `CallOperations.WorkflowRun`. Only synchronous calls with
+`connector_params.skip_polling=false` are supported. The requested GCP
+project/location must match the executor's trusted deployment; a different
+project, arbitrary binary, missing/parallel child release, or detached call
+fails explicitly. Nested recursion and total calls are bounded. No new
+GKE/Terraform/IAM resources were introduced. Existing Google-specific
+connector strings must be migrated to `CallOperations.WorkflowRun` in the
+workflow definitions when deploying those workflows natively.
+
+Do not call this a same-process Rust function invocation yet: Rust still
+runs in a short-lived subprocess per continuation. The benefit today is
+**eliminating per-child distributed scheduling and persistence**. Benchmark
+the real compiled parent/child chain before optimizing this boundary.
+
 The AWFL DSL already provides explicit caching through
 `us.awfl.utils.Cache`, which reads and writes Firebase as workflow steps.
 The native runtime therefore **does not automatically persist or deduplicate
