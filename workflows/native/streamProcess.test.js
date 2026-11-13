@@ -69,7 +69,7 @@ test('malformed request fails closed and exits; no replay of child intent', {
 test('one-stream process is killed and cleaned after response timeout', async () => {
   const dir = await mkdtemp(join(tmpdir(),'awfl-stream-test-'));
   const filename = join(dir,'stalled');
-  const source = '#!/usr/bin/env node\nprocess.stdin.resume(); setInterval(()=>{},1000);\n';
+  const source = '#!/bin/sh\nread -r line\nwhile :; do :; done\n';
   await writeFile(filename,source,{mode:0o700});
   await chmod(filename,0o700);
   const sha256 = await hash(filename);
