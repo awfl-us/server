@@ -1,5 +1,13 @@
 # AWFL Server
 
+Native ProjectManager development (GKE): use
+[scripts/README-native-local.md](scripts/README-native-local.md) to run
+the actual compiled Rust workflow and its fork/child logic locally, replay
+already-authorized Jobs responses, and optionally read real GCS workflow
+files. This fast mode does not require a Cloud Run deployment, but it is
+**not** a replacement for real IAM-protected Jobs end-to-end verification.
+
+
 Overview
 - This repository provides the HTTP server that powers both frontend clients (awfl-us/web and awfl-us/cli) and the backend workflows (awfl-us/workflows) used by the AWFL stack.
 - It exposes two primary route groups:
