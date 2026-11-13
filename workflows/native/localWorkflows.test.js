@@ -148,6 +148,30 @@ test('child effect is authorized by child manifest, not parent operation list', 
   await runner.close();
 });
 
+test('workflow.run resolves only the deployment WORKFLOW_ENV suffix from trusted configuration', async () => {
+  for (const suffix of ['', '-dev']) {
+    const f = fixture();
+    const runner = createNativeLocalRunner({
+      releases: f.releases, handlers: {}, identity, rootExecutionId: rootId,
+      gcpProject: 'awfl-us', region: 'us-central1', workflowSuffix: suffix,
+      runArtifact: async ({ executable, input }) => {
+        if (executable === '/test/child') {
+          return { protocol_version: 2, status: 'completed', result: 12 };
+        }
+        return input.continuation
+          ? { protocol_version: 2, status: 'completed', result: input.continuation.slots.s0 }
+          : suspend('workflow.run', localArgs('LocalChild${WORKFLOW_ENV}', {}));
+      },
+    });
+    try {
+      const result = await runner.run({ workflowName: 'LocalParent',
+        release: f.root, artifact: f.artifact, executionId: rootId, input: {} });
+      assert.deepEqual(result, { type: 'integer', value: 12 });
+      assert.deepEqual(f.calls.active, ['LocalChild' + suffix]);
+    } finally { await runner.close(); }
+  }
+});
+
 test('compiled Try edge receives child workflow failure without losing parent continuation', async () => {
   const f = fixture({ childOperations: [] });
   let rootTransitions = 0;
