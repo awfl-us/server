@@ -161,6 +161,9 @@ test('web and MCP launcher use the same scoped Google Workflow arguments', async
       userId: 'owner', projectId: 'proj', workflowName: 'codebase-ProjectManager',
       params: { query: 'test', model: 'gpt-5', sessionId: 's1',
         env: { userId: 'attacker', projectId: 'wrong' } }, client,
+      // This test specifically checks the legacy Google Workflows path.
+      // Production native routing may be enabled independently in CI.
+      nativeBackend: null,
     });
     assert.equal(output.executionName, 'execution-123');
     const args = JSON.parse(created[0].execution.argument);
