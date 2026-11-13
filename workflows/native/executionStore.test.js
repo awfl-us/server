@@ -5,10 +5,28 @@ import { NativeExecutionStore, tagNativeValue } from './executionStore.js';
 function fakeFirestore() {
   const docs = new Map();
   return {
-    collection: name => ({ doc: key => ({ key: `${name}/${key}`, async get() {
-      const value = docs.get(this.key);
-      return { exists: value !== undefined, data: () => structuredClone(value) };
-    } }) }),
+    collection: name => ({
+      doc: key => ({ key: name + '/' + key, async get() {
+        const value = docs.get(this.key);
+        return { exists: value !== undefined, data: () => structuredClone(value) };
+      } }),
+      where(field, operator, expected) {
+        assert.equal(operator, '==');
+        return {
+          limit(max) { return { async get() {
+            const rows = [...docs.entries()]
+              .filter(([key, data]) =>
+                key.startsWith(name + '/') &&
+                !key.slice(name.length + 1).includes('/') &&
+                data[field] === expected)
+              .slice(0, max).map(([key, data]) => ({
+                id: key.slice(name.length + 1), data: () => structuredClone(data),
+              }));
+            return { docs: rows };
+          } }; },
+        };
+      },
+    }),
     async runTransaction(fn) {
       const writes = [];
       const tx = {
@@ -355,4 +373,31 @@ test('uncaught confirmed parallel failure commits parent terminal state and jour
   assert.deepEqual(await store.claim({ executionId, workerId: 'retry' }), {
     failed: true, error: failure,
   });
+});
+
+test('detached execution has a pinned durable record and clears recovery marker on completion', async () => {
+  const db = fakeFirestore();
+  const store = new NativeExecutionStore({ db });
+  const asyncId = 'native_' + 'e'.repeat(32);
+  await store.create({ executionId: asyncId, userId: 'u', projectId: 'p',
+    artifactSha256: hash, protocolVersion: 2, input: { query: 'continue' },
+    workflowName: 'codebase-ProjectManager', allowedOperations: ['native.parallel'],
+    parallelVersion: 1, trustedGlobalsVersion: 1, asyncLaunch: true });
+  const pending = await store.get(asyncId);
+  assert.equal(pending.status, 'ready');
+  assert.equal(pending.asyncLaunch, true);
+  assert.deepEqual(pending.input, { query: 'continue' });
+  assert.deepEqual((await store.listPendingAsync()).map(x => x.executionId), [asyncId]);
+  const claimed = await store.claim({ executionId: asyncId, workerId: 'worker_async' });
+  await store.complete({ executionId: asyncId, workerId: 'worker_async',
+    epoch: claimed.epoch, result: { done: true } });
+  const finished = await store.get(asyncId);
+  assert.equal(finished.status, 'completed');
+  assert.equal(finished.asyncLaunch, false);
+  assert.deepEqual(finished.result, { done: true });
+  assert.deepEqual(await store.listPendingAsync(), []);
+  await assert.rejects(store.listPendingAsync(0), /scan limit/);
+  await assert.rejects(store.create({ executionId: 'native_' + 'd'.repeat(32),
+    userId: 'u', projectId: 'p', artifactSha256: hash,
+    input: {}, asyncLaunch: true, protocolVersion: 1 }), /standalone protocol-v2/);
 });

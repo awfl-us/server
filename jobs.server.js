@@ -1,5 +1,6 @@
 import express from 'express'
 import jobsRoutes from './jobs/index.js'
+import { startNativeDetachedRecovery } from './jobs/native.js'
 
 const app = express()
 app.use(express.json({ limit: '1mb' }))
@@ -29,4 +30,5 @@ app.use((req, res) => {
 const PORT = process.env.PORT || 8080
 app.listen(PORT, () => {
   console.log(`Jobs service listening on port ${PORT}`)
+  startNativeDetachedRecovery()
 })

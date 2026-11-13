@@ -10,13 +10,14 @@ function arg(name) {
 const report = arg('--report') || process.env.AWFL_NATIVE_LOCAL_BUILD_REPORT;
 const inputFile = arg('--input') || process.env.AWFL_NATIVE_LOCAL_INPUT;
 const fixturesFile = arg('--fixtures') || process.env.AWFL_NATIVE_LOCAL_FIXTURES;
-if (!report || !inputFile || !fixturesFile) {
+const localJobsUrl = arg('--local-jobs-url');
+if (!report || !inputFile || (!fixturesFile && !localJobsUrl)) {
   console.error('Usage: node scripts/nativeLocalRun.mjs --report <build-report.json> ' +
     '--input <projectmanager-input.json> --fixtures <recorded-http.json> [--live-storage]');
   process.exit(2);
 }
 const input = JSON.parse(await readFile(resolve(inputFile), 'utf8'));
-const fixtures = JSON.parse(await readFile(resolve(fixturesFile), 'utf8'));
+const fixtures = fixturesFile ? JSON.parse(await readFile(resolve(fixturesFile), 'utf8')) : {};
 const tokenFile = process.argv.includes('--live-storage')
   ? process.env.CLOUDSDK_AUTH_ACCESS_TOKEN_FILE : null;
 // The existing GKE Scala consumer exposes the GCP project under CLOUDSDK.
@@ -27,7 +28,7 @@ const result = await runLocalProjectManager({
     userId: process.env.AWFL_USER_ID,
     projectId: process.env.AWFL_PROJECT_ID,
   },
-  tokenFile,
+  tokenFile, localJobsUrl,
 });
 console.log('AWFL_NATIVE_LOCAL_RESULT ' + JSON.stringify(result).slice(0, 12000));
 if (result.error || result.missing.length || result.status !== 'completed') {

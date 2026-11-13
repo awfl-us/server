@@ -9,6 +9,7 @@ import { NativeExecutionStore } from '../workflows/native/executionStore.js';
 import { runNativeWorkflow } from '../workflows/native/worker.js';
 import { createNativeLogEffectHandler } from '../workflows/native/logEffects.js';
 import { createNativeStorageEffectHandler } from '../workflows/native/storageEffects.js';
+import { createNativeCallbackEffects } from '../workflows/native/callbackEffects.js';
 
 const SHA = /^[a-f0-9]{64}$/;
 const DEFAULT_ORIGIN = 'https://jobs-4wmfqir74q-uc.a.run.app';
@@ -35,7 +36,31 @@ export function createInMemoryFirestore() {
   });
   return {
     _docs: docs,
-    collection: prefix => ({ doc: name => doc(prefix + '/' + name) }),
+    collection: prefix => ({
+      doc: name => doc(prefix + '/' + name),
+      where(field, operator, expected) {
+        if (operator !== '==' || typeof field !== 'string') {
+          throw new Error('unsupported local Firestore query');
+        }
+        return {
+          limit(count) {
+            return { async get() {
+              const docsFound = [...docs.entries()]
+                .filter(([key, value]) =>
+                  key.startsWith(prefix + '/') &&
+                  !key.slice(prefix.length + 1).includes('/') &&
+                  value[field] === expected)
+                .slice(0, count)
+                .map(([key, data]) => ({
+                  id: key.slice(prefix.length + 1),
+                  data: () => clone(data),
+                }));
+              return { docs: docsFound };
+            } };
+          },
+        };
+      },
+    }),
     doc,
     async runTransaction(fn) {
       const previous = pending;
@@ -138,6 +163,75 @@ export function createReplayHttpHandlers({ fixtures, identity,
   ]));
 }
 
+/**
+ * Run native HTTP effects against the actual local Jobs Express application.
+ * Only a pinned production Jobs origin may be redirected, and the destination
+ * is loopback-only. The upstream identity is supplied from trusted execution,
+ * never from arbitrary DSL args.
+ */
+export function createLocalJobsHttpHandlers({
+  identity, jobsOrigin = DEFAULT_ORIGIN, localJobsUrl, seen, missing = [],
+  timeoutMs = 120000, failedRequests = [],
+}) {
+  const local = new URL(localJobsUrl);
+  const expected = new URL(jobsOrigin);
+  if (local.protocol !== 'http:' ||
+      !['127.0.0.1','localhost','[::1]'].includes(local.hostname) ||
+      local.username || local.password || local.search || local.hash ||
+      local.pathname !== '/' || !/^[0-9]+$/.test(local.port) ||
+      expected.protocol !== 'https:' || expected.pathname !== '/') {
+    throw new Error('local Jobs mode requires explicit loopback HTTP and trusted production origin');
+  }
+  const methods = {
+    'http.get': 'GET', 'http.post': 'POST',
+    'http.patch': 'PATCH', 'http.delete': 'DELETE',
+  };
+  return Object.fromEntries(Object.entries(methods).map(([operation, method]) =>
+    [operation, async ({args, identity: actual, idempotencyKey}) => {
+      const original = new URL(args.url);
+      if (original.origin !== expected.origin ||
+          original.username || original.password || original.hash ||
+          original.pathname.startsWith('//') ||
+          (args.auth != null && args.auth.type !== 'OIDC') ||
+          actual?.userId !== identity.userId ||
+          actual?.projectId !== identity.projectId) {
+        throw new Error('local Jobs effect must target the trusted Jobs origin and owner');
+      }
+      const effectId = idempotencyKey.split(':').at(-1);
+      seen.push({op: operation, path:original.pathname, effectId});
+      const url = new URL(original.pathname + original.search, local);
+      const body = Object.hasOwn(args,'body')
+        ? args.body && typeof args.body === 'object' && !Array.isArray(args.body)
+          ? {...args.body, userId: identity.userId, projectId: identity.projectId}
+          : args.body
+        : undefined;
+      const response = await fetch(url, {
+        method, redirect: 'manual',
+        headers: {
+          'x-user-id':identity.userId,
+          'x-project-id':identity.projectId,
+          'x-awfl-idempotency-key':idempotencyKey,
+          ...(body !== undefined ? {'content-type':'application/json'} : {}),
+        },
+        ...(body !== undefined ? {body:JSON.stringify(body)} : {}),
+        signal:AbortSignal.timeout(timeoutMs),
+      });
+      const raw = await response.text();
+      let content = raw;
+      try {content = raw ? JSON.parse(raw) : null} catch {}
+      if (!response.ok) {
+        failedRequests.push({method, path: original.pathname, status:response.status,
+          response: (typeof content === 'string' ? content : JSON.stringify(content)).slice(0, 300)});
+        const error = new Error('local Jobs ' + method + ' ' + original.pathname +
+          ' returned HTTP ' + response.status + ' (not a replay fixture)');
+        error.status = response.status;
+        throw error;
+      }
+      return {code:response.status,body:content};
+    }],
+  ));
+}
+
 export function createLiveGcsStorage(tokenFile) {
   const request = async (bucket, object, fields) => {
     const token = (await readFile(tokenFile, 'utf8')).trim();
@@ -161,7 +255,7 @@ export function createLiveGcsStorage(tokenFile) {
 
 export async function runLocalProjectManager({
   reportPath, input, fixtures = {}, identity, tokenFile = null,
-  jobsOrigin = DEFAULT_ORIGIN, maxTransitions = 120,
+  jobsOrigin = DEFAULT_ORIGIN, localJobsUrl = null, maxTransitions = 120,
   log = console.log,
 }) {
   if (!identity?.userId || !identity?.projectId) {
@@ -183,15 +277,35 @@ export async function runLocalProjectManager({
     ...(root.trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
     input,
   });
-  const seen = [], missing = [], storageErrors = [];
-  const http = createReplayHttpHandlers({
-    fixtures, identity, jobsOrigin, seen, missing,
-  });
+  const seen = [], missing = [], storageErrors = [], failedRequests = [];
+  const http = localJobsUrl
+    ? createLocalJobsHttpHandlers({identity, jobsOrigin, localJobsUrl,
+      seen, missing, failedRequests})
+    : createReplayHttpHandlers({fixtures, identity, jobsOrigin, seen, missing});
   const realStorage = tokenFile ? createNativeStorageEffectHandler({
     storage: createLiveGcsStorage(tokenFile),
   }) : null;
+  // Same native callback service and Firestore records used by Cloud Run.
+  // Only enabled for explicitly local Jobs runs with the existing GKE
+  // user-scoped credential preloader.
+  let callbackHandlers = {};
+  if (localJobsUrl) {
+    const { getFirestore } = await import('firebase-admin/firestore');
+    const actualCallbacks = createNativeCallbackEffects({
+      db: getFirestore(), jobsOrigin,
+    });
+    callbackHandlers = {
+      'callback.create': actualCallbacks['callback.create'],
+      'callback.await': effect => actualCallbacks['callback.await']({
+        ...effect,
+        args: { ...effect.args,
+          timeout: Math.min(effect.args.timeout, 60) },
+      }),
+    };
+  }
   const handlers = {
     ...http,
+    ...callbackHandlers,
     'log.write': createNativeLogEffectHandler({
       info: event => log('NATIVE_LOCAL_LOG ' + JSON.stringify(event).slice(0, 500)),
     }),
@@ -215,10 +329,40 @@ export async function runLocalProjectManager({
     });
   } catch (cause) { error = String(cause?.message || cause); }
   const state = await store.get(executionId);
+  // Local development-only cleanup: workflow uses a session lock in the real
+  // Jobs collection. A failed local process cannot finish the Scala unlock
+  // step, so release only a lock owned by this exact test execution.
+  if (localJobsUrl && state.status !== 'completed') {
+    try {
+      const response = await fetch(new URL('/firebase/locks/release', localJobsUrl), {
+        method: 'POST', headers: {'content-type':'application/json',
+          'x-user-id': identity.userId, 'x-project-id': identity.projectId},
+        body: JSON.stringify({
+          userId:identity.userId, projectId:identity.projectId,
+          collection:'locks.Convo.Session',
+          id: input.sessionId, owner:executionId,
+        }),
+        signal:AbortSignal.timeout(5000),
+      });
+      log('NATIVE_LOCAL_RELEASE_TEST_LOCK status=' + response.status);
+    } catch (cleanupError) {
+      log('NATIVE_LOCAL_RELEASE_TEST_LOCK failed=' +
+        String(cleanupError?.message || cleanupError));
+    }
+  }
   return {
     executionId, durationMs: Math.round(performance.now() - start),
     result, error, status: state.status, effectCount: state.effectCount,
-    fixtureCalls: seen, missing, storageErrors,
+    fixtureCalls: seen, missing, storageErrors, failedRequests,
+    lanes: [...db._docs.entries()].filter(([key]) =>
+      /^nativeWorkflowExecutions\/native_[^/]+$/.test(key))
+      .map(([key, data]) => ({
+        executionId: key.split('/').at(-1), status:data.status,
+        effectCount:data.effectCount,
+        pendingOperation:data.pendingEffect?.operation || null,
+        error: data.errorJson ? String(data.errorJson).slice(0, 600) : null,
+        resultType: data.resultJson ? 'present' : null,
+      })),
     totalNativeExecutions: [...db._docs.keys()].filter(key =>
       /^nativeWorkflowExecutions\/native_/.test(key) &&
       !key.includes('/effects/')).length,
