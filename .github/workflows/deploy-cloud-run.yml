@@ -432,24 +432,28 @@ jobs:
           gcloud run services update-traffic "${CLOUD_RUN_JOBS_SERVICE}" \
             --region="${GCP_REGION}" --to-latest --quiet
 
-      # The same immutable Jobs image must also run continuously in GKE
-      # to recover independently persisted native subworkflow continuations.
-      # Terraform in the existing remote state owns the KSA, WI IAM and pod.
-      - name: Install Terraform for native GKE scheduler
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.13.5
-
-      - name: Reconcile native GKE scheduler through Terraform
+      # Infrastructure and Kubernetes RBAC are provisioned by a separate,
+      # manually applied Terraform root. CI only updates the existing GKE
+      # worker image, exactly like it updates Cloud Run Jobs above.
+      - name: Roll out native GKE Jobs worker image
         shell: bash
         run: |
           set -euo pipefail
-          terraform -chdir=infra/native-execution init -input=false -no-color
-          terraform -chdir=infra/native-execution plan -input=false -no-color \
-            -out="$RUNNER_TEMP/native-jobs.tfplan" \
-            -var="native_jobs_image=${{ steps.image.outputs.IMAGE_URI }}"
-          terraform -chdir=infra/native-execution apply -input=false -no-color \
-            "$RUNNER_TEMP/native-jobs.tfplan"
+          if [[ "${AWFL_NATIVE_EXECUTION_ENABLED:-0}" != "1" ]]; then
+            echo "Native routing is disabled; GKE worker image rollout skipped"
+            exit 0
+          fi
+          gcloud container clusters get-credentials "${GKE_CLUSTER_NAME}" \
+            --region="${GKE_CLUSTER_LOCATION}" --project="${GCP_PROJECT_ID}" --quiet
+          kubectl -n "${K8S_NAMESPACE}" set image deployment/native-jobs \
+            "jobs=${{ steps.image.outputs.IMAGE_URI }}"
+          kubectl -n "${K8S_NAMESPACE}" rollout status deployment/native-jobs --timeout=300s
+          actual="$(kubectl -n "${K8S_NAMESPACE}" get deployment native-jobs \
+            -o jsonpath='{.spec.template.spec.containers[?(@.name=="jobs")].image}')"
+          test "$actual" = "${{ steps.image.outputs.IMAGE_URI }}" || {
+            echo "Native GKE worker did not converge to the expected server image" >&2
+            exit 1
+          }
 
       - name: Verify both services route 100% to the latest stable revision
         run: |

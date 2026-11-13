@@ -50,6 +50,12 @@ resource "kubernetes_service_account_v1" "native_scheduler" {
 }
 
 resource "kubernetes_deployment_v1" "native_scheduler" {
+  # Only bootstrap image is supplied by manual Terraform apply.
+  # Subsequent image revisions are deployed by server CI using kubectl.
+  lifecycle {
+    ignore_changes = [spec[0].template[0].spec[0].container[0].image]
+  }
+
   metadata {
     name      = "native-jobs"
     namespace = "awfl"
@@ -179,4 +185,42 @@ resource "kubernetes_deployment_v1" "native_scheduler" {
 
 output "native_scheduler_deployment" {
   value = kubernetes_deployment_v1.native_scheduler.metadata[0].name
+}
+
+# GitHub deployer can discover the GKE API endpoint; Kubernetes RBAC below
+# limits its actual write access to this deployment in the AWFL namespace.
+resource "google_project_iam_member" "native_scheduler_deployer_cluster_viewer" {
+  project = var.project_id
+  role    = "roles/container.clusterViewer"
+  member  = "serviceAccount:github-deployer@${var.project_id}.iam.gserviceaccount.com"
+}
+
+resource "kubernetes_role_v1" "native_scheduler_image_deployer" {
+  metadata {
+    name      = "native-jobs-image-deployer"
+    namespace = "awfl"
+  }
+  rule {
+    api_groups     = ["apps"]
+    resources      = ["deployments"]
+    resource_names = ["native-jobs"]
+    verbs          = ["get", "patch", "watch"]
+  }
+}
+
+resource "kubernetes_role_binding_v1" "native_scheduler_image_deployer" {
+  metadata {
+    name      = "native-jobs-image-deployer"
+    namespace = "awfl"
+  }
+  role_ref {
+    api_group = "rbac.authorization.k8s.io"
+    kind      = "Role"
+    name      = kubernetes_role_v1.native_scheduler_image_deployer.metadata[0].name
+  }
+  subject {
+    kind      = "User"
+    name      = "github-deployer@${var.project_id}.iam.gserviceaccount.com"
+    api_group = "rbac.authorization.k8s.io"
+  }
 }
