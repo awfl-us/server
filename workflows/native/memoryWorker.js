@@ -63,7 +63,8 @@ export async function runNativeMemoryWorkflow({
     const result = await runner.run({
       workflowName: state.workflowName,
       release: { sha256: state.artifactSha256,
-        allowedOperations: state.allowedOperations },
+        allowedOperations: state.allowedOperations,
+        ...(state.streamIpcVersion === 1 && { streamIpcVersion: 1 }) },
       artifact, input: state.input, executionId, globals,
     });
     await close(); // Drain any pending snapshot before terminal commit.

@@ -401,3 +401,22 @@ test('detached execution has a pinned durable record and clears recovery marker 
     userId: 'u', projectId: 'p', artifactSha256: hash,
     input: {}, asyncLaunch: true, protocolVersion: 1 }), /standalone protocol-v2/);
 });
+
+test('streaming IPC capability remains pinned across claims and recovery', async () => {
+  const store = new NativeExecutionStore({ db: fakeFirestore(), clock: () => 1000 });
+  const executionId = 'native_' + 'e'.repeat(32);
+  await store.create({ executionId, userId:'u', projectId:'p', artifactSha256:hash,
+    workflowName:'Example', protocolVersion:2, input:{ value:1 },
+    allowedOperations:['http.post'], streamIpcVersion:1 });
+  const saved = await store.get(executionId);
+  assert.equal(saved.streamIpcVersion,1);
+  assert.equal((await store.claim({ executionId, workerId:'w1' })).streamIpcVersion,1);
+  await assert.rejects(store.create({
+    executionId:'native_'+'d'.repeat(32),userId:'u',projectId:'p',
+    artifactSha256:hash, protocolVersion:1, input:{}, streamIpcVersion:1,
+  }),/invalid pinned native stream IPC version/);
+  await assert.rejects(store.create({
+    executionId:'native_'+'d'.repeat(32),userId:'u',projectId:'p',
+    artifactSha256:hash, protocolVersion:2, input:{}, streamIpcVersion:2,
+  }),/invalid pinned native stream IPC version/);
+});

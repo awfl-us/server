@@ -748,3 +748,26 @@ Tests:
 - node --test workflows/native/callbackNativeIntegration.test.js
   with AWFL_NATIVE_TEST_TOOLS_BINARY pointing to a real generated ELF
 - node --test workflows/native/*.test.js
+
+### Persistent native Rust IPC, release-gated
+
+Generated ABI-3 binaries now optionally implement
+`AWFL_NATIVE_STREAM_IPC=1` newline-framed JSON transport (one
+request/response per line). A trusted GCS release explicitly advertises
+`streamIpcVersion:1`; this is copied to the persisted execution and
+to fork lanes/detached children. Without the marker, existing one-shot
+stdin EOF behavior is preserved.
+
+`workflows/native/streamProcess.js` verifies and privately stages
+the SHA-256-pinned ELF once per execution-local session; one sanitized
+Rust child process can serve multiple explicit continuation requests.
+Durable workers close their process on termination; synchronous child
+executions share at most sixteen process sessions keyed by SHA *within
+one authenticated execution tree*, never globally across users.
+Each fork lane retains its own session. When the local stream cap is hit,
+additional binaries use the one-shot fallback.
+
+Streaming **does not change** native effect journals, checkpoints, owner
+fences, operation allowlists or retry behavior. Effects remain wholly in
+Node; a crashed Rust process is never treated as a confirmed external
+effect. See [implementation plan](../../docs/native-persistent-ipc-plan-2026-11-13.md).

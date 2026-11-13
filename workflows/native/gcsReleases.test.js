@@ -161,3 +161,13 @@ test('rejects caller-controlled paths, corrupt binaries and unapproved operation
   await assert.rejects(f.releases.materialize(itsHash), /must be a Linux ELF/);
   await assert.rejects(f.releases.materialize('../../bad'), /pinned native artifact digest required/);
 });
+
+test('streaming IPC is explicit and pinned in the IAM release metadata', async () => {
+  const f = fixture({ manifest: {...metadata, streamIpcVersion:1} });
+  const active = await f.releases.active('Example');
+  assert.equal(active.streamIpcVersion,1);
+  f.objects.set('native-workflows/active/Example.json',
+    Buffer.from(JSON.stringify({...metadata,streamIpcVersion:2})));
+  await assert.rejects(f.releases.active('Example'),
+    /invalid IAM-published native release manifest/);
+});

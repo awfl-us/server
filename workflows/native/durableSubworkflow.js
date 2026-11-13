@@ -84,6 +84,7 @@ export function createDurableSubworkflowHandler({
             workflowName: name, artifactSha256: release.sha256,
             protocolVersion: 2, allowedOperations: release.allowedOperations,
             ...(release.trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
+            ...(release.streamIpcVersion === 1 && { streamIpcVersion: 1 }),
             ...(release.parallelVersion === 1 && { parallelVersion: 1 }),
             asyncLaunch: true, input: args.argument,
           });

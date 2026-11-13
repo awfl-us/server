@@ -5,7 +5,7 @@
 import { randomUUID } from 'node:crypto';
 import { NativeEffectDispatcher } from './effectDispatcher.js';
 import { NativeForkCoordinator } from './forkCoordinator.js';
-import { executeNativeStep } from './runner.js';
+import { executeNativeStep, createNativeStreamSession } from './runner.js';
 import { createDurableSubworkflowHandler } from './durableSubworkflow.js';
 import { createNativeAsyncScheduler } from './asyncScheduler.js';
 
@@ -82,6 +82,10 @@ export async function runNativeWorkflow({
     if (!sharedArtifact) await artifact.cleanup();
     throw new Error('native fork artifact digest differs from its parent');
   }
+  const streamSession = initial.streamIpcVersion === 1
+    ? createNativeStreamSession({
+      executable: artifact.executable, sha256: artifact.sha256, profiler,
+    }) : null;
   let childHandler = null;
   try {
     // A fork is itself an authorized, journaled native effect. Running a
@@ -179,7 +183,7 @@ export async function runNativeWorkflow({
         executable: artifact.executable, sha256: artifact.sha256,
         allowedOperations: initial.allowedOperations,
         profiler,
-        claimedState: currentState, retainState: true,
+        claimedState: currentState, retainState: true, streamSession,
       }));
       const outcome = profiler ? await profiler.measure('runner.transition', transition)
         : await transition();
@@ -244,6 +248,7 @@ export async function runNativeWorkflow({
     throw new Error('native execution transition budget exhausted');
   } finally {
     await childHandler?.close();
+    await streamSession?.close();
     if (!sharedArtifact) await artifact.cleanup();
   }
 }

@@ -110,6 +110,7 @@ export async function localReleases(reportPath) {
       allowedOperations: Object.freeze(record.operations),
       ...(manifest.parallel_version === 1 && { parallelVersion: 1 }),
       ...(manifest.trusted_globals_version === 1 && { trustedGlobalsVersion: 1 }),
+      ...(manifest.stream_ipc_version === 1 && { streamIpcVersion: 1 }),
     };
     byName.set(name, release);
     bySha.set(actual, {
@@ -275,6 +276,7 @@ export async function runLocalProjectManager({
     protocolVersion: 2, allowedOperations: [...root.allowedOperations],
     ...(root.parallelVersion === 1 && { parallelVersion: 1 }),
     ...(root.trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
+    ...(root.streamIpcVersion === 1 && { streamIpcVersion: 1 }),
     input,
   });
   const seen = [], missing = [], storageErrors = [], failedRequests = [];
