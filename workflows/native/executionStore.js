@@ -138,7 +138,7 @@ export class NativeExecutionStore {
 
   async create({ executionId, userId, projectId, artifactSha256, input,
                  protocolVersion = 1, workflowName, allowedOperations,
-                 trustedGlobalsVersion, parallelVersion, forkLane }) {
+                 trustedGlobalsVersion, parallelVersion, forkLane, executionMode }) {
     id(executionId);
     if (!userId || !projectId || !/^[a-f0-9]{64}$/.test(artifactSha256 || '')) {
       throw new Error('owner and pinned artifact SHA-256 required');
@@ -170,6 +170,10 @@ export class NativeExecutionStore {
     }
     if (parallelVersion === 1 && !allowedOperations?.includes('native.parallel')) {
       throw new Error('parallel-capable release must authorize native.parallel');
+    }
+    if (executionMode !== undefined && (executionMode !== 'memory' ||
+        protocolVersion !== 2 || parallelVersion === 1 || forkLane !== undefined)) {
+      throw new Error('memory execution requires a non-parallel protocol-v2 release');
     }
     if (forkLane !== undefined) {
       if (parallelVersion !== 1 || !forkLane ||
@@ -206,6 +210,7 @@ export class NativeExecutionStore {
         ...(allowedOperations && { allowedOperations: [...allowedOperations] }),
         ...(trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
         ...(parallelVersion === 1 && { parallelVersion: 1 }),
+        ...(executionMode === 'memory' && { executionMode: 'memory' }),
         ...(forkLane && { forkLane: null, forkLaneJson: JSON.stringify(forkLane) }),
         input: null, inputJson: JSON.stringify(input),
         status: 'ready', epoch: 0, owner: null, leaseUntil: 0,
@@ -226,7 +231,8 @@ export class NativeExecutionStore {
     return snap.exists ? hydrateState(snap.data()) : null;
   }
 
-  async claim({ executionId, workerId, leaseMs = 60_000 }) {
+  async claim({ executionId, workerId, leaseMs = 60_000,
+                expectedUserId, expectedProjectId, expectedExecutionMode }) {
     id(workerId);
     if (!Number.isSafeInteger(leaseMs) || leaseMs < 1000 || leaseMs > 3600000) {
       throw new Error('invalid lease duration');
@@ -236,6 +242,13 @@ export class NativeExecutionStore {
       const snap = await tx.get(ref);
       if (!snap.exists) throw conflict('execution not found');
       const s = snap.data(), now = this.clock();
+      if ((expectedUserId && s.userId !== expectedUserId) ||
+          (expectedProjectId && s.projectId !== expectedProjectId)) {
+        throw conflict('execution owner mismatch');
+      }
+      if (expectedExecutionMode && s.executionMode !== expectedExecutionMode) {
+        throw conflict('native execution mode mismatch');
+      }
       if (s.status === 'completed') return {
         completed: true, result: storedJson(s, 'result'),
       };
@@ -248,7 +261,12 @@ export class NativeExecutionStore {
         throw conflict('lease held');
       }
       const next = { ...s, owner: workerId, epoch: s.epoch + 1,
-        leaseUntil: now + leaseMs, updatedAt: now };
+        leaseUntil: now + leaseMs, updatedAt: now,
+        ...(s.executionMode === 'memory' && {
+          // Recovery is restart-from-input, never replay a partial snapshot.
+          status: 'running', checkpoint: null, pendingEffect: null,
+          progressJson: null, effectCount: 0,
+        }) };
       tx.update(ref, next);
       return hydrateState(next);
     });
@@ -280,6 +298,22 @@ export class NativeExecutionStore {
     return this.mutate(executionId, workerId, epoch, (s, now) => ({
       ...s, leaseUntil: now + leaseMs,
     }));
+  }
+
+  // Observational progress only. The async writer coalesces updates while
+  // running, and a restart ignores this checkpoint and begins from input.
+  async updateMemoryProgress({ executionId, workerId, epoch, progress }) {
+    enforceBytes(progress, LIMIT.checkpoint, 'native execution progress');
+    if (!Number.isSafeInteger(progress?.effectCount) || progress.effectCount < 0) {
+      throw new Error('invalid native progress count');
+    }
+    return this.mutate(executionId, workerId, epoch, s => {
+      if (s.executionMode !== 'memory' || s.status !== 'running') {
+        throw conflict('execution is not running in memory mode');
+      }
+      return { ...s, progressJson: JSON.stringify(progress),
+        effectCount: progress.effectCount };
+    });
   }
 
   // A cancelled execution is terminal. The caller must authenticate the owner;
@@ -472,23 +506,36 @@ export class NativeExecutionStore {
     }, effectId);
   }
 
-  async fail({ executionId, workerId, epoch, error }) {
+  async fail({ executionId, workerId, epoch, error, effectCount }) {
     requireValue(error, 'error');
+    if (effectCount !== undefined &&
+        (!Number.isSafeInteger(effectCount) || effectCount < 0)) {
+      throw new Error('invalid native effect count');
+    }
     enforceBytes(error, LIMIT.checkpoint, 'native workflow failure');
     return this.mutate(executionId, workerId, epoch, s => {
       if (s.pendingEffect) throw conflict('effect outcome unresolved');
       return { ...s, status: 'failed', error: null, errorJson: JSON.stringify(error),
+        ...(s.executionMode === 'memory' && effectCount !== undefined &&
+          { effectCount }),
         owner: null, leaseUntil: 0 };
     });
   }
 
-  async complete({ executionId, workerId, epoch, result }) {
+  async complete({ executionId, workerId, epoch, result, effectCount }) {
     requireValue(result, 'result');
+    if (effectCount !== undefined &&
+        (!Number.isSafeInteger(effectCount) || effectCount < 0)) {
+      throw new Error('invalid native effect count');
+    }
     enforceBytes(result, LIMIT.checkpoint, 'workflow result');
     return this.mutate(executionId, workerId, epoch, s => {
       if (s.pendingEffect) throw conflict('effect outcome unresolved');
       return { ...s, status: 'completed',
-        result: null, resultJson: JSON.stringify(result), owner: null, leaseUntil: 0 };
+        result: null, resultJson: JSON.stringify(result),
+        ...(s.executionMode === 'memory' && effectCount !== undefined &&
+          { effectCount }),
+        owner: null, leaseUntil: 0 };
     });
   }
 }

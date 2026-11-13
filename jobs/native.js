@@ -8,6 +8,7 @@ import { NativeExecutionStore } from '../workflows/native/executionStore.js';
 import { NativeGcsReleases } from '../workflows/native/gcsReleases.js';
 import { createJobsEffectHandlers } from '../workflows/native/jobsEffects.js';
 import { runNativeWorkflow } from '../workflows/native/worker.js';
+import { runNativeMemoryWorkflow } from '../workflows/native/memoryWorker.js';
 import { createNativeProfiler } from '../workflows/native/profiler.js';
 
 // Shared only by requests executing in the same trusted Jobs process.
@@ -16,6 +17,7 @@ const verifiedNativeArtifacts = new Map();
 
 export function createNativeJobsRouter({
   store, releases, handlers, execute = runNativeWorkflow,
+  executeMemory = runNativeMemoryWorkflow,
 } = {}) {
   const router = express.Router();
   router.post('/execute', async (req, res) => {
@@ -45,7 +47,9 @@ export function createNativeJobsRouter({
         jobsOrigin: process.env.AWFL_NATIVE_JOBS_URL,
         profiler,
       });
-      const result = await execute({
+      const runner = req.body.executionMode === 'memory'
+        ? executeMemory : execute;
+      const result = await runner({
         executionId, userId, projectId,
         store: profiler ? profiler.store(nativeStore) : nativeStore,
         releases: profiler ? profiler.releases(nativeReleases) : nativeReleases,
@@ -53,6 +57,12 @@ export function createNativeJobsRouter({
         profiler,
       });
       profiler?.report('completed');
+      if (result?.status === 'failed') {
+        return res.status(200).json({ state: 'FAILED' });
+      }
+      if (result?.status === 'cancelled') {
+        return res.status(200).json({ state: 'CANCELLED' });
+      }
       return res.status(200).json({ state: 'SUCCEEDED', result });
     } catch (error) {
       profiler?.report('error');

@@ -52,6 +52,32 @@ function fixture(trustedGlobalsVersion, parallelVersion) {
   };
 }
 
+test('memory mode is pinned into release and IAM task only when enabled', async () => {
+  const previous = process.env.AWFL_NATIVE_MEMORY_EXECUTION_ENABLED;
+  process.env.AWFL_NATIVE_MEMORY_EXECUTION_ENABLED = '1';
+  try {
+    const f = fixture();
+    const response = await f.backend.maybeStart({ workflowName: 'NativePilot',
+      userId: 'owner', projectId: 'project-a', argument: { env: {} } });
+    assert.equal(f.states.get(executionId).executionMode, 'memory');
+    assert.deepEqual(JSON.parse(Buffer.from(f.tasks[0].task.httpRequest.body,
+      'base64').toString()), { executionId, userId: 'owner',
+      projectId: 'project-a', executionMode: 'memory' });
+    f.states.get(executionId).status = 'running';
+    assert.deepEqual(await response.client.getExecution({ name: response.executionName }),
+      [{ name: response.executionName, state: 'ACTIVE' }]);
+    const parallel = fixture(1, 1);
+    await parallel.backend.maybeStart({ workflowName: 'NativePilot',
+      userId: 'owner', projectId: 'project-a', argument: { env: {} } });
+    assert.equal(parallel.states.get(executionId).executionMode, undefined);
+    assert.equal(JSON.parse(Buffer.from(parallel.tasks[0].task.httpRequest.body,
+      'base64').toString()).executionMode, undefined);
+  } finally {
+    if (previous === undefined) delete process.env.AWFL_NATIVE_MEMORY_EXECUTION_ENABLED;
+    else process.env.AWFL_NATIVE_MEMORY_EXECUTION_ENABLED = previous;
+  }
+});
+
 test('shared launcher pins trusted identity and returns Google-style status adapter', async () => {
   const f = fixture();
   const prev = process.env.GCP_PROJECT, base = process.env.WORKFLOWS_BASE_URL;

@@ -7,7 +7,7 @@ import { NativeGcsReleases } from './gcsReleases.js';
 import { withEnvSuffix } from '../exec/shared.js';
 
 const STATUS = {
-  ready: 'ACTIVE', waiting_effect: 'ACTIVE',
+  ready: 'ACTIVE', running: 'ACTIVE', waiting_effect: 'ACTIVE',
   completed: 'SUCCEEDED', failed: 'FAILED', cancelled: 'CANCELLED',
 };
 
@@ -60,6 +60,9 @@ export class NativeWorkflowBackend {
     const active = await this.releases.active(deployedName);
     if (!active) return null; // Existing Google Workflows remains the default.
     const executionId = 'native_' + this.uuid().replaceAll('-', '');
+    const memoryMode = process.env.AWFL_NATIVE_MEMORY_EXECUTION_ENABLED === '1' &&
+      active.protocolVersion === 2 && active.parallelVersion !== 1 &&
+      !active.allowedOperations.includes('native.parallel');
     await this.store.create({
       executionId, userId, projectId, input: argument,
       workflowName: deployedName, artifactSha256: active.sha256,
@@ -67,6 +70,7 @@ export class NativeWorkflowBackend {
       allowedOperations: active.allowedOperations,
       ...(active.trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
       ...(active.parallelVersion === 1 && { parallelVersion: 1 }),
+      ...(memoryMode && { executionMode: 'memory' }),
     });
     // Only the authenticated Workflows service sends this request. Cloud
     // Tasks signs an OIDC identity that Cloud Run IAM checks before /native.
@@ -83,6 +87,7 @@ export class NativeWorkflowBackend {
         },
         body: Buffer.from(JSON.stringify({
           executionId, userId, projectId,
+          ...(memoryMode && { executionMode: 'memory' }),
         })).toString('base64'),
         oidcToken: {
           serviceAccountEmail: this.taskServiceAccount,

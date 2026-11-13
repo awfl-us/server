@@ -60,6 +60,26 @@ test('internal Jobs native route executes only with verified task context', asyn
   assert.equal(calls.length, 1);
 });
 
+test('IAM-authenticated memory launch selects pinned worker with scoped task identity', async () => {
+  let observed;
+  const app = appFor({ store: {}, releases: {}, handlers: {},
+    execute: async () => { throw new Error('durable path should not run'); },
+    executeMemory: async args => {
+      observed = args;
+      return { done: true };
+    },
+  });
+  const id = 'native_' + 'd'.repeat(32);
+  const response = await request(app).post('/native/execute')
+    .send({ executionId: id, executionMode: 'memory',
+      userId: 'forged-user', projectId: 'forged-project' });
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body, { state: 'SUCCEEDED', result: { done: true } });
+  assert.equal(observed.executionId, id);
+  assert.equal(observed.userId, 'verified-user');
+  assert.equal(observed.projectId, 'project-a');
+});
+
 test('failed native Jobs worker returns retriable error without exposing details', async () => {
   const app = appFor({
     store: {}, releases: {}, handlers: {},
@@ -70,6 +90,16 @@ test('failed native Jobs worker returns retriable error without exposing details
   assert.equal(res.status, 503);
   assert.equal(res.body.error, 'Native execution unavailable');
   assert.equal(JSON.stringify(res.body).includes('sensitive'), false);
+});
+
+test('terminal workflow failure returns HTTP 200, avoiding automatic Tasks replay', async () => {
+  const app = appFor({ store: {}, releases: {}, handlers: {},
+    execute: async () => ({ status: 'failed', error: { message: 'test error' } }),
+  });
+  const response = await request(app).post('/native/execute')
+    .send({ executionId: 'native_' + 'e'.repeat(32) });
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body, { state: 'FAILED' });
 });
 
 test('opt-in native timing leaves HTTP payload unchanged and uses scoped IDs only', async () => {

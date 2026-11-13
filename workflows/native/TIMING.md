@@ -1,5 +1,11 @@
 # Opt-in timing for a native Jobs execution
 
+**New memory-first mode:** see [MEMORY.md](MEMORY.md). This path avoids the
+per-effect Firestore journal altogether for opted-in non-parallel workflows;
+it retains only an initial claim, optional asynchronous progress, and one
+awaited terminal result write. Historical call counts below describe the
+legacy durable execution mode.
+
 ## Reusing the active worker's durable state (November 12, 2026)
 
 The worker now holds the **state returned by each successful Firestore
