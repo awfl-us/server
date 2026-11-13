@@ -33,12 +33,15 @@ const enforceBytes = (value, max, description) => {
 // Firestore rejects an array directly nested inside another array. Native
 // inputs, arguments, outcomes and results can contain arbitrary JSON;
 // persist them as bounded JSON strings and hydrate the store API on reads.
-// Tagged continuation slots remain structured maps for atomic updates.
+// Tagged continuation slots can be deeply nested (e.g. tool definitions),
+// exceeding Firestore's 20-level map nesting limit. Persist checkpoints as
+// JSON strings too; preserve atomic checkpoint + effect-journal transactions.
 const storedJson = (record, field) =>
   Object.hasOwn(record, field + 'Json') ? JSON.parse(record[field + 'Json']) : record[field];
 const hydrateState = state => state && ({
   ...state,
   input: storedJson(state, 'input'),
+  checkpoint: storedJson(state, 'checkpoint'),
   forkLane: storedJson(state, 'forkLane'),
   result: storedJson(state, 'result'),
   error: storedJson(state, 'error'),
@@ -214,10 +217,11 @@ export class NativeExecutionStore {
         ...(forkLane && { forkLane: null, forkLaneJson: JSON.stringify(forkLane) }),
         input: null, inputJson: JSON.stringify(input),
         status: 'ready', epoch: 0, owner: null, leaseUntil: 0,
-        checkpoint: forkLane ? {
+        checkpoint: null,
+        checkpointJson: JSON.stringify(forkLane ? {
           next_step: Number(forkLane.entry.slice(3)),
           slots: forkLane.slots, frames: [],
-        } : null,
+        } : null),
         pendingEffect: null, effectCount: 0, result: null,
         createdAt: now, updatedAt: now };
       await verifyForkAncestors(tx, this.collection, state);
@@ -264,8 +268,8 @@ export class NativeExecutionStore {
         leaseUntil: now + leaseMs, updatedAt: now,
         ...(s.executionMode === 'memory' && {
           // Recovery is restart-from-input, never replay a partial snapshot.
-          status: 'running', checkpoint: null, pendingEffect: null,
-          progressJson: null, effectCount: 0,
+          status: 'running', checkpoint: null, checkpointJson: 'null',
+          pendingEffect: null, progressJson: null, effectCount: 0,
         }) };
       tx.update(ref, next);
       return hydrateState(next);
@@ -285,9 +289,18 @@ export class NativeExecutionStore {
       }
       if (s.status === 'completed' || s.status === 'cancelled' || s.status === 'failed') throw conflict('execution is terminal');
       await verifyForkAncestors(tx, this.collection, s);
-      const next = change(s, now, recorded, tx, effectRef);
-      tx.update(ref, { ...next, updatedAt: now });
-      return hydrateState(next);
+      // Allow reads of legacy structured checkpoints, but always write a
+      // bounded JSON representation. Firestore rejects nested maps >20 levels,
+      // which occur naturally after Rust tags nested tool-definition results.
+      const next = change({ ...s, checkpoint: storedJson(s, 'checkpoint') },
+        now, recorded, tx, effectRef);
+      const persisted = {
+        ...next, checkpoint: null,
+        checkpointJson: JSON.stringify(next.checkpoint ?? null),
+        updatedAt: now,
+      };
+      tx.update(ref, persisted);
+      return hydrateState(persisted);
     });
   }
 

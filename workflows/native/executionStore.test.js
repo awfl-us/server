@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { NativeExecutionStore } from './executionStore.js';
+import { NativeExecutionStore, tagNativeValue } from './executionStore.js';
 
 function fakeFirestore() {
   const docs = new Map();
@@ -119,6 +119,36 @@ test('effect journal is a subcollection and does not grow the execution document
   assert.equal(state.pendingEffect, null);
   assert.deepEqual((await store.getEffect('e1', 'call_39')).outcome, { index: 39 });
   assert.deepEqual((await store.getEffect('e1', 'call_0')).outcome, { index: 0 });
+});
+
+test('deeply nested Rust continuation values store as JSON without exceeding Firestore map depth', async () => {
+  const db = fakeFirestore();
+  const store = new NativeExecutionStore({ db, clock: () => 1000 });
+  await store.create({ executionId: 'deep', userId: 'u', projectId: 'p',
+    artifactSha256: hash, input: {}, protocolVersion: 2 });
+  const { epoch } = await store.claim({ executionId: 'deep', workerId: 'a' });
+  const intent = {
+    executionId: 'deep', workerId: 'a', epoch,
+    effectId: 'call_0', nodeId: '0.0', operation: 'http.get',
+    args: {}, slots: {}, protocolVersion: 2,
+    continuation: { next_step: 1, frames: [], slots: {} }, resultSlot: 's1',
+  };
+  await store.prepareEffect(intent);
+  let outcome = 'deep value';
+  for (let i = 0; i < 28; i++) outcome = { nested: outcome };
+  await store.recordEffect({ executionId: 'deep', workerId: 'a', epoch,
+    effectId: 'call_0', outcome });
+  const raw = (await db.collection('nativeWorkflowExecutions').doc('deep').get()).data();
+  assert.equal(raw.checkpoint, null);
+  assert.equal(typeof raw.checkpointJson, 'string');
+  assert.equal(raw.input, null);
+  const checkpoint = JSON.parse(raw.checkpointJson);
+  assert.deepEqual(checkpoint.slots.s1, tagNativeValue(outcome));
+  assert.deepEqual((await store.get('deep')).checkpoint, checkpoint);
+  assert.deepEqual((await store.claim({ executionId: 'deep', workerId: 'a' })).checkpoint, checkpoint);
+  await store.checkpoint({ executionId: 'deep', workerId: 'a', epoch,
+    nodeId: '0.1', slots: checkpoint.slots });
+  assert.deepEqual((await store.get('deep')).checkpoint.slots, checkpoint.slots);
 });
 
 test('size limits reject large input and effects before persistence', async () => {
