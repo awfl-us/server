@@ -8,6 +8,10 @@ terraform {
       source  = "hashicorp/google"
       version = ">= 7.10.0, < 8.0.0"
     }
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = ">= 2.30.0, < 3.0.0"
+    }
   }
   backend "gcs" {
     bucket = "tfstate-awfl-web"
