@@ -651,3 +651,18 @@ cover malformed output, nonzero exit, and output overflow. The additional
 emulator tests *do* validate Firestore transactions, durable top-level
 continuation, and locally mocked effect dispatch; they **do not** verify
 remote external side effects or production launcher integration.
+
+### Durable native parallel parents and local subworkflows (November 13, 2026)
+
+A compiled native parent can combine native.parallel with workflow.run:
+fork lanes are independently journaled and fenced in Firestore; an ordinary
+workflow.run effect executes an IAM-published, pinned, non-parallel native child
+through the same Jobs process and local runner. Nested synchronous children do
+not create separate Cloud Tasks or Firestore executions. A compiled deployment
+placeholder WORKFLOW_ENV is resolved against the trusted server suffix.
+Uncertain child outcomes are not blindly replayed.
+
+The storage.object_get effect reads alt=media from the IAM-managed
+awfl-us-workflow-files bucket (environment suffix supported), with canonical
+object paths and a 128 KiB size bound, for ProjectManager's scripts/agent.sh
+preload. This does not enable normal production native routing.
