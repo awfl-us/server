@@ -186,8 +186,28 @@ export async function runNativeWorkflow({
       });
       const effectDispatch = () => state.pendingEffect?.operation === 'native.parallel'
         ? dispatch() : withBudget(dispatch);
-      const effect = profiler ? await profiler.measure('dispatcher.total', effectDispatch)
-        : await effectDispatch();
+      const longEffect = ['workflow.run', 'callback.await'].includes(
+        state.pendingEffect?.operation);
+      let leaseFailure = null, leaseRenewal = null;
+      const keepAlive = longEffect && typeof store.renew === 'function'
+        ? setInterval(() => {
+          if (leaseRenewal || leaseFailure) return;
+          leaseRenewal = store.renew({
+            executionId, workerId, epoch: state.epoch, leaseMs: 120_000,
+          }).catch(error => { leaseFailure = error; })
+            .finally(() => { leaseRenewal = null; });
+        }, 15_000)
+        : null;
+      keepAlive?.unref();
+      let effect;
+      try {
+        effect = profiler ? await profiler.measure('dispatcher.total', effectDispatch)
+          : await effectDispatch();
+      } finally {
+        if (keepAlive) clearInterval(keepAlive);
+        if (leaseRenewal) await leaseRenewal;
+      }
+      if (leaseFailure) throw new Error('native callback/child lost its fenced lease');
       if (effect.status === 'uncertain') {
         // No automatic replay for an effect with an uncertain remote outcome.
         throw new Error('native effect reconciliation required');

@@ -63,9 +63,6 @@ export class NativeWorkflowBackend {
     const memoryMode = process.env.AWFL_NATIVE_MEMORY_EXECUTION_ENABLED === '1' &&
       active.protocolVersion === 2 && active.parallelVersion !== 1 &&
       !active.allowedOperations.includes('native.parallel');
-    if (active.allowedOperations.includes('workflow.run') && !memoryMode) {
-      throw new Error('native workflow.run requires memory-first execution');
-    }
     await this.store.create({
       executionId, userId, projectId, input: argument,
       workflowName: deployedName, artifactSha256: active.sha256,

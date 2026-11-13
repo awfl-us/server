@@ -666,3 +666,35 @@ The storage.object_get effect reads alt=media from the IAM-managed
 awfl-us-workflow-files bucket (environment suffix supported), with canonical
 object paths and a 128 KiB size bound, for ProjectManager's scripts/agent.sh
 preload. This does not enable normal production native routing.
+
+
+## Native callback effects via existing AWFL callback service
+
+Compiled events.create_callback_endpoint and events.await_callback map to
+callback.create and callback.await effects in the trusted Jobs dispatcher.
+Callback creation writes an idempotent user-scoped record under
+users/{userId}/callbacks/{callbackId}. Its opaque callback URL is a logical
+internal identifier, not an anonymous HTTP endpoint.
+
+The existing Jobs POST /jobs/callbacks registration step recognizes the URL
+and reuses that same record. An authenticated POST /jobs/callbacks/:id writes
+the native result directly into the record. Duplicate identical delivery is
+idempotent; conflicting delivery returns HTTP 409. User/project identity is
+checked on registration, storage and delivery.
+
+The native await effect subscribes to that Firestore record and resumes its
+Rust continuation with the stored HTTP request body. The durable worker
+renews its fenced lease while running local child workflows or waiting on
+callbacks; native local children retain the same authenticated identity.
+
+Current limitation: callback.await keeps a Jobs request alive during the
+wait, capped to 25 minutes (below the 30-minute Cloud Tasks deadline).
+A durable asynchronous wake/resume is still required for longer waits.
+No additional service, Firestore collection, IAM role or Terraform resource
+is introduced.
+
+Tests:
+- node --test workflows/native/callbackEffects.test.js
+- node --test workflows/native/callbackNativeIntegration.test.js
+  with AWFL_NATIVE_TEST_TOOLS_BINARY pointing to a real generated ELF
+- node --test workflows/native/*.test.js

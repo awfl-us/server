@@ -4,6 +4,7 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { userScopedCollectionPath } from '../utils.js';
 import { GoogleAuth } from 'google-auth-library';
 import { ExecutionService } from '../../mcp/service.js';
+import { recordNativeCallbackDelivery } from '../native/callbackEffects.js';
 
 const router = express.Router();
 const db = getFirestore();
@@ -57,6 +58,30 @@ router.post('/:id', async (req, res) => {
     if (!snap.exists) return res.status(404).json({ error: 'Callback not found' });
 
     const data = snap.data() || {};
+    // Native callbacks use the existing delivery URL and the SAME user-scoped
+    // callback document; their result is recorded before acknowledgement.
+    // The waiting native worker observes this record's Firestore change.
+    if (data.kind === 'native_workflow') {
+      if (!req.projectId || req.projectId !== data.native_project_id ||
+          data.created_by !== userId) {
+        return res.status(403).json({ error: 'Project mismatch' });
+      }
+      try {
+        const result = await recordNativeCallbackDelivery({
+          db, ref, body: req.body,
+          identity: { userId, projectId: req.projectId },
+        });
+        return res.status(200).json({ ok: true, recorded: result === 'recorded' });
+      } catch (error) {
+        if (error.message === 'Callback already delivered') {
+          return res.status(409).json({ error: error.message });
+        }
+        if (error.message === 'Invalid native callback result') {
+          return res.status(400).json({ error: error.message });
+        }
+        return res.status(403).json({ error: 'Callback inaccessible' });
+      }
+    }
     // A local callback sink for MCP. The request uses the same callback_id as
     // every other AWFL tool call; unlike external callback URLs, this result
     // stays inside the API process and never needs a second HTTP credential.
