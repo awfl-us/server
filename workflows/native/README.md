@@ -771,3 +771,29 @@ Streaming **does not change** native effect journals, checkpoints, owner
 fences, operation allowlists or retry behavior. Effects remain wholly in
 Node; a crashed Rust process is never treated as a confirmed external
 effect. See [implementation plan](../../docs/native-persistent-ipc-plan-2026-11-13.md).
+
+
+### Confirmed native child failure versus a stuck lease (Nov 13, 2026)
+
+Production launchers can omit `env.workdir` and
+`env.callingWorkflowExec`. These are optional Scala DSL fields and must
+be compiled as `default(map.get(input.env, key), null)` rather than
+strict field reads. The Rust compiler contains the corresponding fix.
+
+When a pinned, authenticated in-process child Rust binary reports terminal
+`status: failed`, `workflow.run` now signals a
+`NativeConfirmedWorkflowFailure`. The effect dispatcher journals this
+**confirmed** child failure and either (a) resumes the compiled `Try` catch
+edge, or (b) atomically marks the parent `failed`, drops the pending effect,
+and clears its owner/lease. Jobs can acknowledge the terminal result instead
+of returning a 503 that prompts Cloud Tasks into repeated `lease held`
+responses. Unknown network/transport errors are not converted into
+confirmed child failures and remain pending for reconciliation. A retry
+while another worker genuinely holds the execution lease is still rejected
+by Firestore fencing.
+
+Verification: `node --test workflows/native/effectDispatcher.test.js
+workflows/native/durableSubworkflow.test.js
+workflows/native/executionStore.test.js
+workflows/native/localWorkflows.test.js` (including confirmed and
+transport-uncertain child cases).

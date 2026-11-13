@@ -1,4 +1,4 @@
-import { NativeConfirmedHttpFailure } from './effectErrors.js';
+import { NativeConfirmedHttpFailure, NativeConfirmedWorkflowFailure } from './effectErrors.js';
 import { NativeConfirmedParallelFailure } from './forkCoordinator.js';
 // Explicit effect execution boundary. Never dispatches an unknown operation or
 // retries an ambiguous external outcome automatically.
@@ -65,7 +65,8 @@ export class NativeEffectDispatcher {
     const recordConfirmed = async error => {
       const http = error instanceof NativeConfirmedHttpFailure;
       const fork = error instanceof NativeConfirmedParallelFailure;
-      if (!http && !fork) throw error;
+      const child = error instanceof NativeConfirmedWorkflowFailure;
+      if (!http && !fork && !child) throw error;
       const failure = {
         message: error.message, code: http ? error.status : null,
       };
@@ -76,6 +77,15 @@ export class NativeEffectDispatcher {
         });
         return withState({ status: 'failed_recorded', effectId, failure }, persisted);
       }
+      if ((fork || child) && typeof store.failPendingConfirmedEffect === 'function') {
+        const persisted = await store.failPendingConfirmedEffect({
+          executionId, workerId, epoch, effectId, error: failure,
+          operation: fork ? 'native.parallel' : 'workflow.run',
+        });
+        return withState({ status: 'failed_recorded', effectId, failure }, persisted);
+      }
+      // Preserve the old fork-specific store contract for callers still
+      // implementing it, without weakening the confirmed-failure check.
       if (fork && typeof store.failPendingParallel === 'function') {
         const persisted = await store.failPendingParallel({
           executionId, workerId, epoch, effectId, error: failure,

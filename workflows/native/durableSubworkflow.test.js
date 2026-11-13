@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createDurableSubworkflowHandler } from './durableSubworkflow.js';
+import { NativeConfirmedWorkflowFailure } from './effectErrors.js';
 // Exercises the explicit local/test transport; production requires GKE opt-in.
 process.env.NODE_ENV = 'test';
 
@@ -8,7 +9,7 @@ const executionId = 'native_' + 'f'.repeat(32);
 const identity = { userId: 'real-owner', projectId: 'project' };
 const digest = 'a'.repeat(64);
 
-function fixture({ parallel = false, missing = false, store, scheduleAsync } = {}) {
+function fixture({ parallel = false, missing = false, failChild = false, store, scheduleAsync } = {}) {
   const calls = { active: [], materialize: [], cleanup: 0, invoked: [] };
   const releases = {
     async active(name) {
@@ -31,6 +32,8 @@ function fixture({ parallel = false, missing = false, store, scheduleAsync } = {
   const runArtifact = async request => {
     calls.invoked.push(request);
     assert.equal(request.executable, '/test/native-child');
+    if (failChild) return { protocol_version: 2, status: 'failed',
+      error: { message: 'missing field or element: workdir' } };
     return { protocol_version: 2, status: 'completed',
       result: { actual: true, input: request.input.input } };
   };
@@ -169,5 +172,19 @@ test('detached calls refuse unavailable scheduler and invalid connector flags', 
     await assert.rejects(handler.run({ args: {
       ...args, connector_params: { skip_polling: 'yes' },
     }, identity, idempotencyKey: executionId + ':bad' }), /unauthorized/);
+  } finally { await handler.close(); }
+});
+
+
+test('a pinned child terminal Rust error is classified as confirmed, not a transport retry', async () => {
+  const { handler } = fixture({ failChild: true });
+  try {
+    await assert.rejects(handler.run({
+      args, identity, idempotencyKey: executionId + ':child-failed',
+    }), error => {
+      assert.ok(error instanceof NativeConfirmedWorkflowFailure);
+      assert.deepEqual(error.nativeError, { message: 'missing field or element: workdir' });
+      return true;
+    });
   } finally { await handler.close(); }
 });

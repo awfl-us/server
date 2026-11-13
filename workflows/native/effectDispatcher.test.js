@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { NativeEffectDispatcher as BaseNativeEffectDispatcher } from './effectDispatcher.js';
-import { NativeConfirmedHttpFailure } from './effectErrors.js';
+import { NativeConfirmedHttpFailure, NativeConfirmedWorkflowFailure } from './effectErrors.js';
 
 const testAuthorize = async ({ userId, projectId }) => ({
   allowed: true, userId, projectId,
@@ -169,4 +169,49 @@ test('only definitive HTTP failure enters a compiled Try; transport failure stay
   await assert.rejects(sent.dispatch({ store: noHandler, executionId: 'run1',
     workerId: 'worker', epoch: 1, effectId: 'step1' }), /HTTP 503/);
   assert.equal(actions.length, 1);
+});
+
+
+test('confirmed workflow.run child failure follows a compiled Try or ends parent without retry/lease conflict', async () => {
+  for (const handled of [false, true]) {
+    const { store: base } = fixture({ operation: 'workflow.run' });
+    const recorded = [];
+    const store = {
+      ...base,
+      get: async () => ({ ...(await base.get()), pendingEffect: {
+        ...pending, operation: 'workflow.run', fingerprint: 'child-fingerprint',
+        ...(handled && { onError: { nextStep: 8, errorSlot: 's9' } }),
+      } }),
+      recordEffectFailure: async details => recorded.push(['catch', details]),
+      failPendingConfirmedEffect: async details => {
+        recorded.push(['terminal', details]);
+        return { status: 'failed', owner: null, leaseUntil: 0 };
+      },
+    };
+    const dispatcher = new NativeEffectDispatcher({ handlers: {
+      'workflow.run': async () => {
+        throw new NativeConfirmedWorkflowFailure({ message: 'missing field or element: workdir' });
+      },
+    } });
+    const outcome = await dispatcher.dispatch({
+      store, executionId: 'root', workerId: 'worker', epoch: 1, effectId: 'step1',
+    });
+    assert.equal(outcome.status, 'failed_recorded');
+    assert.equal(recorded.length, 1);
+    assert.equal(recorded[0][0], handled ? 'catch' : 'terminal');
+    assert.deepEqual(recorded[0][1].failure ?? recorded[0][1].error, {
+      message: 'missing field or element: workdir', code: null,
+    });
+    if (!handled) {
+      assert.equal(recorded[0][1].operation, 'workflow.run');
+    }
+
+    const transport = new NativeEffectDispatcher({ handlers: {
+      'workflow.run': async () => { throw new Error('connection reset'); },
+    } });
+    await assert.rejects(transport.dispatch({
+      store, executionId: 'root', workerId: 'worker', epoch: 1, effectId: 'step1',
+    }), /connection reset/);
+    assert.equal(recorded.length, 1, 'uncertain child outcome must not be recorded as failed');
+  }
 });
