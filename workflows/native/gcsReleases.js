@@ -8,7 +8,7 @@ import { join } from 'node:path';
 
 const NAME = /^[A-Za-z][A-Za-z0-9_-]{0,99}$/;
 const SHA = /^[a-f0-9]{64}$/;
-const OPERATIONS = new Set(['http.get', 'http.post', 'http.patch', 'http.delete', 'log.write', 'native.parallel']);
+const OPERATIONS = new Set(['http.get', 'http.post', 'http.patch', 'http.delete', 'log.write', 'native.parallel', 'workflow.run']);
 const MAX_METADATA = 16 * 1024;
 const MAX_EXECUTABLE = 64 * 1024 * 1024;
 // Content-addressed artifact bytes may be cached only in the trusted Jobs

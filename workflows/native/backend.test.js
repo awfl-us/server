@@ -6,7 +6,7 @@ import { createWorkflowExecution } from '../services/executeWorkflow.js';
 
 const SHA = 'a'.repeat(64);
 const executionId = 'native_' + '1'.repeat(32);
-function fixture(trustedGlobalsVersion, parallelVersion) {
+function fixture(trustedGlobalsVersion, parallelVersion, operations = ['http.post']) {
   const states = new Map(), tasks = [], queries = [];
   let enabled = true, failTask = false;
   const store = {
@@ -23,7 +23,7 @@ function fixture(trustedGlobalsVersion, parallelVersion) {
       queries.push(name);
       return enabled && name === 'NativePilot' ? {
         workflowName: name, sha256: SHA, protocolVersion: 2,
-        allowedOperations: ['http.post'],
+        allowedOperations: operations,
         ...(trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
         ...(parallelVersion === 1 && { parallelVersion: 1,
           allowedOperations: ['http.post', 'native.parallel'] }),
@@ -51,6 +51,28 @@ function fixture(trustedGlobalsVersion, parallelVersion) {
     }),
   };
 }
+
+test('native workflow.run cannot be routed to the legacy durable worker', async () => {
+  const previous = process.env.AWFL_NATIVE_MEMORY_EXECUTION_ENABLED;
+  delete process.env.AWFL_NATIVE_MEMORY_EXECUTION_ENABLED;
+  try {
+    const old = fixture(1, undefined, ['workflow.run']);
+    await assert.rejects(old.backend.maybeStart({ workflowName: 'NativePilot',
+      userId: 'owner', projectId: 'project-a', argument: {} }),
+    /requires memory-first/);
+    assert.equal(old.states.size, 0);
+    assert.equal(old.tasks.length, 0);
+    process.env.AWFL_NATIVE_MEMORY_EXECUTION_ENABLED = '1';
+    const enabled = fixture(1, undefined, ['workflow.run']);
+    await enabled.backend.maybeStart({ workflowName: 'NativePilot',
+      userId: 'owner', projectId: 'project-a', argument: {} });
+    assert.equal(enabled.states.get(executionId).executionMode, 'memory');
+    assert.equal(enabled.tasks.length, 1);
+  } finally {
+    if (previous === undefined) delete process.env.AWFL_NATIVE_MEMORY_EXECUTION_ENABLED;
+    else process.env.AWFL_NATIVE_MEMORY_EXECUTION_ENABLED = previous;
+  }
+});
 
 test('memory mode is pinned into release and IAM task only when enabled', async () => {
   const previous = process.env.AWFL_NATIVE_MEMORY_EXECUTION_ENABLED;
