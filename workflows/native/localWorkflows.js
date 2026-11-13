@@ -11,9 +11,16 @@ const MAX_CHILD_CALLS = 4096;
 const MAX_TRANSITIONS = 100_000;
 const MAX_RELEASES = 64;
 
-function checkedChildArgs(args, project, location) {
+function checkedChildArgs(args, project, location, workflowSuffix) {
+  // Google YAML deploy substitutes this exact token in workflow IDs. Native
+  // artifacts retain the expression, so resolve it from trusted deployment
+  // configuration, never from caller arguments or the workflow input.
+  const rawName = args?.workflow_id;
+  const token = '${WORKFLOW_ENV}';
+  const name = typeof rawName === 'string' && rawName.endsWith(token)
+    ? rawName.slice(0, -token.length) + workflowSuffix : rawName;
   if (!args || typeof args !== 'object' || Array.isArray(args) ||
-      !NAME.test(args.workflow_id || '') ||
+      !NAME.test(name || '') ||
       !Object.hasOwn(args, 'argument') ||
       (args.connector_params !== undefined &&
         (args.connector_params === null ||
@@ -23,7 +30,7 @@ function checkedChildArgs(args, project, location) {
       (args.location !== undefined && args.location !== location)) {
     throw new Error('unsupported or unauthorized local workflow.run arguments');
   }
-  return args.workflow_id;
+  return name;
 }
 
 /** The same runner drives the parent and all synchronous children. */
@@ -32,13 +39,16 @@ export function createNativeLocalRunner({
   runArtifact = runNativeArtifact, onProgress = () => {},
   gcpProject = process.env.GCP_PROJECT || process.env.GCLOUD_PROJECT,
   region = process.env.WORKFLOWS_LOCATION || 'us-central1',
+  workflowSuffix = process.env.WORKFLOW_ENV || '',
 }) {
   const loaded = new Map(); // One pinned release and staged ELF per child name.
   let childCalls = 0, transitions = 0, effectCount = 0;
   let closed = false;
   const rootId = rootExecutionId;
   if (!/^native_[a-f0-9]{32}$/.test(rootId || '') ||
-      !identity?.userId || !identity?.projectId) {
+      !identity?.userId || !identity?.projectId ||
+      typeof workflowSuffix !== 'string' ||
+      !/^[A-Za-z0-9_-]{0,40}$/.test(workflowSuffix)) {
     throw new Error('local native runner requires trusted root execution context');
   }
 
@@ -122,7 +132,7 @@ export function createNativeLocalRunner({
             return handlers[effect.operation]({ args: effect.args, identity,
               idempotencyKey: `${rootId}:${path}:${effect.effect_id}` });
           }
-          const name = checkedChildArgs(effect.args, gcpProject, region);
+          const name = checkedChildArgs(effect.args, gcpProject, region, workflowSuffix);
           if (++childCalls > MAX_CHILD_CALLS || depth >= MAX_DEPTH) {
             throw new Error('local native subworkflow call limit reached');
           }
