@@ -2,7 +2,51 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   createInMemoryFirestore, createReplayHttpHandlers, localReleases,
+  completedProjectManagerTwoTurnLoop,
 } from './nativeLocalDev.mjs';
+
+test('local runner retains original detached launches after terminal index flag clears', async () => {
+  const db = createInMemoryFirestore();
+  const executionId = 'native_' + 'a'.repeat(32);
+  const ref = db.collection('nativeWorkflowExecutions').doc(executionId);
+  await db.runTransaction(async tx => tx.create(ref, {
+    executionId, workflowName: 'codebase-ProjectManager',
+    asyncLaunch: true, status: 'ready',
+  }));
+  await db.runTransaction(async tx => tx.update(ref, {
+    asyncLaunch: false, status: 'completed',
+  }));
+  assert.deepEqual([...db._detachedLaunches.values()], [
+    { executionId, workflowName: 'codebase-ProjectManager' },
+  ]);
+  assert.equal((await ref.get()).data().asyncLaunch, false);
+});
+
+test('two-turn PM verification rejects missing, failed or tool-requesting detached follow-ups', () => {
+  const done = { workflowName: 'codebase-ProjectManager',
+    status: 'completed', toolCallCount: 0, messageContent: 'Done.' };
+  const result = { status: 'completed',
+    result: { message: { tool_calls: [{ function: { name: 'LIST_DIRECTORY' } }] } },
+    detachedLaunches: [
+    { workflowName: 'Summaries', status: 'failed' }, done,
+  ] };
+  assert.equal(completedProjectManagerTwoTurnLoop(result), true);
+  assert.equal(completedProjectManagerTwoTurnLoop({
+    ...result, detachedLaunches: [{ ...done, status: 'waiting_effect' }],
+  }), false);
+  assert.equal(completedProjectManagerTwoTurnLoop({
+    ...result, detachedLaunches: [{ ...done, toolCallCount: 1 }],
+  }), false);
+  assert.equal(completedProjectManagerTwoTurnLoop({
+    ...result, detachedLaunches: [{ ...done, toolCallCount: null }],
+  }), false);
+  assert.equal(completedProjectManagerTwoTurnLoop({
+    ...result, detachedLaunches: [],
+  }), false);
+  assert.equal(completedProjectManagerTwoTurnLoop({
+    ...result, result: { message: { tool_calls: [] } },
+  }), false);
+});
 
 test('local native transaction adapter serializes concurrent fork lane commits', async () => {
   const db = createInMemoryFirestore();

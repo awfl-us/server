@@ -7,6 +7,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { NativeExecutionStore } from '../workflows/native/executionStore.js';
 import { runNativeWorkflow } from '../workflows/native/worker.js';
+import { nativeAsyncSchedulerFor } from '../workflows/native/worker.js';
 import { createNativeLogEffectHandler } from '../workflows/native/logEffects.js';
 import { createNativeStorageEffectHandler } from '../workflows/native/storageEffects.js';
 import { createNativeCallbackEffects } from '../workflows/native/callbackEffects.js';
@@ -17,6 +18,9 @@ const clone = structuredClone;
 
 export function createInMemoryFirestore() {
   const docs = new Map();
+  // Terminal executions clear asyncLaunch to keep the recovery index small.
+  // Retain the original launch metadata for local test assertions only.
+  const detachedLaunches = new Map();
   let pending = Promise.resolve();
   const watchers = new Map();
   const doc = key => ({
@@ -36,6 +40,7 @@ export function createInMemoryFirestore() {
   });
   return {
     _docs: docs,
+    _detachedLaunches: detachedLaunches,
     collection: prefix => ({
       doc: name => doc(prefix + '/' + name),
       where(field, operator, expected) {
@@ -82,6 +87,13 @@ export function createInMemoryFirestore() {
         };
         const result = await fn(tx);
         for (const [op, key, data] of writes) {
+          if (op === 'create' && data.asyncLaunch === true &&
+              /^nativeWorkflowExecutions\/native_[^/]+$/.test(key)) {
+            detachedLaunches.set(key, {
+              executionId: key.split('/').at(-1),
+              workflowName: data.workflowName,
+            });
+          }
           docs.set(key, op === 'update' ? { ...docs.get(key), ...data } : data);
           for (const notify of watchers.get(key) || []) {
             const change = snapshot(key);
@@ -256,6 +268,7 @@ export function createLiveGcsStorage(tokenFile) {
 export async function runLocalProjectManager({
   reportPath, input, fixtures = {}, identity, tokenFile = null,
   jobsOrigin = DEFAULT_ORIGIN, localJobsUrl = null, maxTransitions = 120,
+  waitDetached = false,
   log = console.log,
 }) {
   if (!identity?.userId || !identity?.projectId) {
@@ -328,6 +341,13 @@ export async function runLocalProjectManager({
       handlers, maxTransitions,
     });
   } catch (cause) { error = String(cause?.message || cause); }
+  // Deterministic integration mode: do not report the parent as a successful
+  // loop while its independent child executions are still running. Draining
+  // includes recursively enqueued continuations from finished children.
+  if (waitDetached) {
+    const scheduler = nativeAsyncSchedulerFor({store, releases, handlers});
+    await scheduler.drain();
+  }
   const state = await store.get(executionId);
   // Local development-only cleanup: workflow uses a session lock in the real
   // Jobs collection. A failed local process cannot finish the Scala unlock
@@ -357,14 +377,41 @@ export async function runLocalProjectManager({
     lanes: [...db._docs.entries()].filter(([key]) =>
       /^nativeWorkflowExecutions\/native_[^/]+$/.test(key))
       .map(([key, data]) => ({
-        executionId: key.split('/').at(-1), status:data.status,
+        executionId: key.split('/').at(-1), workflowName:data.workflowName,
+        asyncLaunch:data.asyncLaunch === true, status:data.status,
         effectCount:data.effectCount,
         pendingOperation:data.pendingEffect?.operation || null,
         error: data.errorJson ? String(data.errorJson).slice(0, 600) : null,
         resultType: data.resultJson ? 'present' : null,
       })),
+    detachedLaunches: [...db._detachedLaunches.entries()].map(([key, original]) => {
+      const state = db._docs.get(key);
+      const result = state?.resultJson ? JSON.parse(state.resultJson) : state?.result;
+      return {
+        ...original,
+        status: state?.status || 'missing',
+        effectCount: state?.effectCount || 0,
+        toolCallCount: Array.isArray(result?.message?.tool_calls)
+          ? result.message.tool_calls.length
+          : result?.message && result.message.tool_calls == null ? 0 : null,
+        messageContent: typeof result?.message?.content === 'string'
+          ? result.message.content.slice(0, 400) : null,
+      };
+    }),
     totalNativeExecutions: [...db._docs.keys()].filter(key =>
       /^nativeWorkflowExecutions\/native_/.test(key) &&
       !key.includes('/effects/')).length,
   };
+}
+
+export function completedProjectManagerTwoTurnLoop(result) {
+  const turns = result?.detachedLaunches?.filter(
+    child => child.workflowName === 'codebase-ProjectManager') || [];
+  return result?.status === 'completed' && !result?.error &&
+    Array.isArray(result?.result?.message?.tool_calls) &&
+    result.result.message.tool_calls.length > 0 &&
+    turns.length === 1 && turns[0].status === 'completed' &&
+    turns[0].toolCallCount === 0 &&
+    typeof turns[0].messageContent === 'string' &&
+    turns[0].messageContent.trim().length > 0;
 }

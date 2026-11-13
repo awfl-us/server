@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createNativeAsyncScheduler } from './asyncScheduler.js';
+import { createInMemoryFirestore } from '../../scripts/nativeLocalDev.mjs';
+import { NativeExecutionStore } from './executionStore.js';
 
 const a = 'native_' + 'a'.repeat(32);
 const b = 'native_' + 'b'.repeat(32);
@@ -75,4 +77,40 @@ test('no unobserved rejection when a detached execution fails, and queue continu
   assert.deepEqual(failures, ['simulated transient child failure']);
   assert.deepEqual(successes, [b]);
   await scheduler.close();
+});
+
+test('new scheduler instance recovers a persisted detached child without an enqueue notification', async () => {
+  // Retain only the durable store across a simulated worker process restart.
+  // This verifies the actual execution-store query and fencing protocol; a
+  // real GKE process restart still requires a separate deployment test.
+  const db = createInMemoryFirestore();
+  const store = new NativeExecutionStore({ db });
+  await store.create({
+    executionId: a, ...owner,
+    workflowName: 'codebase-ProjectManager',
+    artifactSha256: 'a'.repeat(64),
+    protocolVersion: 2, allowedOperations: [],
+    asyncLaunch: true, input: { query: 'resume' },
+  });
+  const observed = [];
+  const recovered = createNativeAsyncScheduler({
+    store,
+    execute: async ({ executionId, userId, projectId }) => {
+      const claim = await store.claim({
+        executionId, workerId: 'restarted_worker',
+        expectedUserId: userId, expectedProjectId: projectId,
+      });
+      observed.push(executionId);
+      await store.complete({
+        executionId, workerId: 'restarted_worker', epoch: claim.epoch,
+        result: { message: { content: 'resumed', tool_calls: [] } },
+      });
+    },
+  });
+  await recovered.scan();
+  await recovered.drain();
+  assert.deepEqual(observed, [a]);
+  assert.equal((await store.get(a)).status, 'completed');
+  assert.deepEqual(await store.listPendingAsync(100), []);
+  await recovered.close();
 });

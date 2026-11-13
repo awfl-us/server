@@ -28,7 +28,10 @@ app.use((req, res) => {
 })
 
 const PORT = process.env.PORT || 8080
-app.listen(PORT, () => {
+// The authenticated local Jobs test server should bind only to loopback.
+// Production keeps the default all-interface bind unless explicitly set.
+const HOST = process.env.AWFL_JOBS_BIND_HOST || '0.0.0.0'
+app.listen(PORT, HOST, () => {
   console.log(`Jobs service listening on port ${PORT}`)
   startNativeDetachedRecovery()
 })

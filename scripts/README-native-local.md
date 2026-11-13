@@ -9,7 +9,7 @@ and a serialized in-memory Firestore test adapter. It can read **real GCS
 workflow files** using the GKE environment's existing authenticated token.
 
 By default, **Jobs HTTP operations are replayed from an authorized prior
-execution**. Pass `--local-jobs-url http://127.0.0.1:5055/` instead of
+execution**. Pass `--local-jobs-url http://127.0.0.1:5057/` instead of
 `--fixtures` for fresh HTTP against the **real local Jobs Express service**.
 The URL must be loopback-only and only calls to the known Jobs origin are
 redirected. Run Jobs in a separate persistent GKE terminal with authorized
@@ -22,6 +22,14 @@ independently of the detached child. The local result's `lanes` shows
 both recorded native executions and their current states. The in-memory
 adapter is intentionally ephemeral: for **restart recovery**, use the
 persistent GKE Jobs service and real Firestore.
+
+For a live two-turn ProjectManager test, the local Jobs process must set
+`AWFL_NATIVE_JOBS_URL` to the trusted published HTTPS Jobs origin. Otherwise
+the callback-registration route allocates a legacy callback ID and Rust
+waits indefinitely for a different native callback record. Bind the
+local Jobs listener to loopback with `AWFL_JOBS_BIND_HOST=127.0.0.1`.
+See [local development](../docs/native-local-development.md) for the
+authenticated Jobs startup and required dev preloader.
 
 This is a fast development test, not a production IAM end-to-end test. The
 GKE consumer service account cannot invoke production Jobs or read
@@ -62,6 +70,14 @@ recorded Jobs replay calls, and **missing HTTP effects**. Record missing
 effects through a live authenticated canary and rerun locally. Never invent
 fixtures and do not interpret an expected missing-fixture failure as a
 production service failure.
+
+When running against local Jobs, add `--wait-detached --require-pm-loop`
+to verify an actual asynchronous ProjectManager continuation. The first
+flag drains detached children; the second rejects a missing or incomplete
+PM self-continuation, additional second-turn tool calls, or a missing
+second-turn final message. Inspect the compact
+`AWFL_NATIVE_LOCAL_ASYNC_SUMMARY` line for the parent status and child
+outcomes. Other independent background children are shown separately.
 
 For the full real HTTP/IAM path, verify only at integration milestones using
 the normal authenticated Workflows API -> Cloud Tasks -> Jobs revision.
