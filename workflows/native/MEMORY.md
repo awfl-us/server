@@ -1,5 +1,13 @@
 # Native memory-first execution (opt-in)
 
+**Production, November 13:** Native Rust routing is live for published
+workflows (`AWFL_NATIVE_EXECUTION_ENABLED=1`); Project Manager's
+foreground `LIST_DIRECTORY` and final response were verified.
+Parallel-capable Project Manager currently uses the **durable native**
+worker. The separate memory-mode flag is not enabled for parallel releases.
+Unpublished workflows still fall back to Google Workflows.
+
+
 ## Local synchronous subworkflows
 
 `CallOperations.WorkflowRun` is dispatched **within the same Jobs request**.
@@ -50,7 +58,7 @@ are **never** blindly retried after a crash.
 Cloud Run may freeze a request-scoped process after the parent response,
 so the executor rejects detached launches in production until the
 persistent GKE opt-in flag is enabled. No Terraform resource or IAM change
-was needed. General native production routing remains disabled.
+was needed. Normal native production routing is enabled; detached launch remains separately gated.
 
 Do not call this a same-process Rust function invocation yet: Rust still
 runs in a short-lived subprocess per continuation. The benefit today is
@@ -90,12 +98,11 @@ explicit `Cache` steps where that matters. A second live delivery cannot
 claim the same execution. Cancellation is best effort while an effect is
 actively running, and the terminal commit cannot overwrite a cancellation.
 
-Only non-parallel protocol-v2 releases opt into memory mode initially.
-Existing executions and parallel-enabled releases stay on the previous
-durable worker without changing their persistence semantics. The feature
-flag defaults to disabled. Normal production traffic stays Google-backed
-until separately enabled and tested. No new IAM, Terraform, Redis,
-background service, or Rust subprocess protocol is required.
+Only non-parallel protocol-v2 releases currently opt into memory mode.
+Parallel releases stay on the durable native worker. Memory mode still
+defaults to disabled; published releases now use native in production,
+while unpublished releases fall back to Google. No new IAM, Terraform,
+Redis, background service, or Rust IPC is required.
 
 ## Tests
 
@@ -119,3 +126,68 @@ remains responsible for external effects and result persistence. No
 user-scoped process reuse, no additional Cloud Task, no DSL changes.
 The pool is bounded at sixteen distinct compiled releases per execution
 tree; overflow uses one-shot IPC. Old releases remain compatible.
+
+
+## Planned memory-first Parallel / ParallelFor (not implemented)
+
+**Difficulty: moderate; primarily server runtime.** Compiled ABI-3/protocol-v2
+already supplies `native.parallel`, pinned `parallelVersion:1`,
+`pc_<n>` lane entry selectors, captured tagged slots and the join
+contract. No DSL or Rust compiler rewrite is expected.
+
+### Implementation
+
+1. Change the four gates together: `backend.js` (opt-in
+   mode selection), `executionStore.create()` (permit only a
+   memory *root* with `parallelVersion:1`),
+   `memoryWorker.js` (accept pinned parallel mode), and
+   `localWorkflows.js` (accept parallel root and sync-child
+   releases, execute `native.parallel`, and resume lanes from
+   validated branch PC/slots instead of an empty continuation).
+2. On each fork, capture immutable parent input/slots. Compute
+   deterministic virtual lane IDs from root/parent path, fork node,
+   generation, and input index. Give each lane an independent
+   continuation; share the root's authenticated user/project and
+   trusted execution globals. Do **not** create Firestore lane
+   documents or per-effect journal entries.
+3. Use one bounded in-process concurrency budget, shared by nested
+   forks: up to eight active effect-bearing branches, at most 1,000
+   lanes/fork and depth three (existing durable limits). A waiting
+   parent must not hold a permit while children run. The existing
+   stream-process serializes short Rust IPC requests safely, while
+   asynchronous external effects still overlap.
+4. Join once in memory, preserving results in input-index order
+   (`ParallelFor` empty/single/many included). Preserve lexical
+   slot isolation and compiled `Try` handlers. On a lane error,
+   stop starting unbegun siblings and await already-running ones.
+   Do not assert that earlier external effects can be undone.
+5. Preserve explicit memory-mode crash semantics: **one root
+   Firestore claim, best-effort coalesced progress, one awaited
+   terminal commit**. On worker death/expired lease, restart the
+   whole tree from input. Uncached side effects from *any* lane
+   can recur; the workflow's own `Cache` and idempotent
+   handlers own replay protection. Root cancellation/epoch
+   fencing still guards terminal commit.
+6. Leave existing durable parallel untouched as the default and
+   rollback. Only new, explicitly memory-pinned executions may
+   use this mode after local tests and isolated Jobs canaries.
+
+### Acceptance
+
+- Run actual generated Rust `Parallel`/`ParallelFor`
+  with 0/1/many lanes, nested forks and synchronous children;
+  ensure correct index ordering and lexical slot isolation.
+- Prove two blocked external handlers overlap; enforce a
+  shared permit limit without nested-fork deadlocks. Exercise
+  branch errors, outer `Try`, cancellation, timeouts,
+  duplicate delivery, and lease takeover.
+- Emulator must show zero fork-child documents and zero effect
+  journals, with one root claim/terminal commit; progress
+  snapshots cannot be mistaken for recovery checkpoints.
+- Test a full generated Project Manager cycle locally, then
+  benchmark an isolated GKE/Jobs canary versus production
+  durable-native and Google; compare tool correctness, Firebase
+  calls and user-visible latency before any rollout.
+
+**Not included:** distributed lane workers, durable per-lane
+recovery, Terraform/IAM, and detached/background agent behavior.
