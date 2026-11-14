@@ -8,7 +8,7 @@ profiling is independent of the planned @awfl-us/storage abstraction.
 
 - AWFL_FIRESTORE_TRACE_ENABLED=1 enables a Node OpenTelemetry tracer before
   importing Firebase Admin; it also sets FIRESTORE_ENABLE_TRACING=ON.
-- AWFL_FIRESTORE_TRACE_SAMPLE_RATE=0.25 samples 25% of trace roots (0..1).
+- AWFL_FIRESTORE_TRACE_SAMPLE_RATE=1 samples 100% of trace roots (0..1).
 - API and Jobs Cloud Run receive these flags from .github/actions-variables.json,
   whose authoritative template is infra/github_variables.tf.
 - infra/native-execution/gke-native-jobs.tf sets the same flags on the

@@ -155,7 +155,7 @@ resource "kubernetes_deployment_v1" "native_scheduler" {
           }
           env {
             name  = "AWFL_FIRESTORE_TRACE_SAMPLE_RATE"
-            value = "0.25"
+            value = "1"
           }
           env {
             name  = "AWFL_NATIVE_ARTIFACT_BUCKET"

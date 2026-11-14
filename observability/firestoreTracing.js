@@ -6,7 +6,7 @@ if (firestoreTracingEnabled) {
   // Firestore's beta tracer reads this when constructing its client.
   process.env.FIRESTORE_ENABLE_TRACING = 'ON';
 
-  const rate = Number(process.env.AWFL_FIRESTORE_TRACE_SAMPLE_RATE ?? '0.25');
+  const rate = Number(process.env.AWFL_FIRESTORE_TRACE_SAMPLE_RATE ?? '1');
   if (!Number.isFinite(rate) || rate < 0 || rate > 1) {
     throw new Error('AWFL_FIRESTORE_TRACE_SAMPLE_RATE must be between 0 and 1');
   }
