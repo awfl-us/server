@@ -228,3 +228,46 @@ Before enabling memory mode for production Project Manager, complete
 isolated real-Jobs canary tests and compare latency/Firestore call counts.
 Cache-based recovery and potential repeated uncached side effects on a
 worker crash remain intentionally different from durable mode.
+
+
+### Isolated production canaries passed — November 13, 2026 ET
+
+[Server PR #112](https://github.com/awfl-us/server/pull/112)
+(merge 83578ab) deployed successfully with the ordinary
+[server production release](https://github.com/awfl-us/server/actions/runs/43540051941).
+API, Jobs and the GKE native worker updated. **The API memory-mode flag is
+still unset: normal Project Manager sessions remain on durable native.**
+
+After the successful release, we created **isolated, manually
+memory-pinned production Firestore roots**, queued through the existing
+Cloud Tasks queue and IAM-authenticated Jobs/OIDC using the published
+26-artifact Project Manager closure. No global routing flag, Terraform,
+IAM, or existing execution was altered.
+
+- **No-tool canary:** real GPT-5 Project Manager, BENCH_OK, **13.22 seconds
+  client-observed** (12.99 seconds lifecycle), 59 native effects,
+  successful terminal result and **zero Firestore effect journals**.
+- **Real-tool canary:** called LIST_DIRECTORY once, received actual
+  workspace entries (Cargo.lock, Cargo.toml, LICENSE); memory-root
+  completed in **19.87 seconds** (19.54 seconds lifecycle), 68 effects
+  and **zero engine effect journals**. The independent detached
+  follow-up ran as a durable child, returned the correct files,
+  and reached Done without error. User-message-to-final-answer time
+  from session timestamps was **37.57 seconds**.
+
+Earlier durable-native Project Manager tests took 31.26 seconds
+for the BENCH_OK lifecycle and 49.43/51.66 seconds from user
+message to final reply for the same directory task. These are
+limited, non-randomized comparisons with variable OpenAI model
+latency and different launch paths; they are functional canaries,
+not proof of precise performance improvements. The canaries
+were seeded directly via authenticated Cloud Tasks/Jobs rather
+than the public Workflows API. Real Firestore emulator tests
+independently verified **zero memory fork documents** and
+zero engine effect journals.
+
+**Rollout decision:** leave the API memory flag off by default
+for ordinary sessions while retaining the durable executor and
+Google fallback. A scoped production rollout and repeated
+same-API A/B test remain follow-ups, with the explicit-cache
+crash/replay contract documented above.
