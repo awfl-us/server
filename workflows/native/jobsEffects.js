@@ -2,6 +2,7 @@
 // uses to call /jobs. Generated Rust does not receive GCP credentials;
 // Jobs requests originate from the trusted server using its own identity.
 import { GoogleAuth } from 'google-auth-library';
+import { context, propagation } from '@opentelemetry/api';
 import { createNativeLogEffectHandler } from './logEffects.js';
 import { createNativeStorageEffectHandler } from './storageEffects.js';
 import { createNativeCallbackEffects } from './callbackEffects.js';
@@ -75,14 +76,16 @@ export function createJobsEffectHandlers({
       const acquireClient = () => auth.getIdTokenClient(base.origin);
       const client = profiler ? await profiler.measure('oidc.client', acquireClient)
         : await acquireClient();
+      const headers = {
+        'x-user-id': identity.userId,
+        'x-project-id': identity.projectId,
+        'x-awfl-idempotency-key': idempotencyKey,
+      };
+      propagation.inject(context.active(), headers);
       const request = () => client.request({
         url: url.toString(), method,
         ...(Object.hasOwn(args, 'body') ? { data } : {}),
-        headers: {
-          'x-user-id': identity.userId,
-          'x-project-id': identity.projectId,
-          'x-awfl-idempotency-key': idempotencyKey,
-        },
+        headers,
         timeout: timeoutMs,
         maxRedirects: 0,
       });

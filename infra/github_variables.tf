@@ -51,6 +51,10 @@ resource "local_file" "actions_variables" {
     # Native published workflows use the in-process memory executor. The
     # durable executor remains available for pinned existing executions.
     AWFL_NATIVE_MEMORY_EXECUTION_ENABLED = "1"
+
+    # Opt-in Firestore Admin SDK OpenTelemetry sampling (Cloud Trace).
+    AWFL_FIRESTORE_TRACE_ENABLED        = "1"
+    AWFL_FIRESTORE_TRACE_SAMPLE_RATE    = "0.25"
     AWFL_NATIVE_ARTIFACT_BUCKET        = lower("${var.project_id}-native-workflows")
     AWFL_NATIVE_TASK_QUEUE             = "native-executions"
     AWFL_NATIVE_TASK_SERVICE_ACCOUNT   = "awfl-native-task-invoker@${var.project_id}.iam.gserviceaccount.com"

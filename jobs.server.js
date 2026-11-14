@@ -1,8 +1,11 @@
+import './observability/firestoreTracing.js';
 import express from 'express'
+import { tracedRequest } from './observability/requestTracing.js'
 import jobsRoutes from './jobs/index.js'
 import { startNativeDetachedRecovery } from './jobs/native.js'
 
 const app = express()
+app.use(tracedRequest)
 app.use(express.json({ limit: '1mb' }))
 
 const logging = (req, _res, next) => {
