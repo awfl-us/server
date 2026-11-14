@@ -31,8 +31,10 @@ Avoid adding a long-lived Rust-process protocol until actual evidence calls
 for it. This simplification should be measured on the isolated Jobs canary,
 not assumed to produce a speedup before cloud benchmarking.
 
-Set `AWFL_NATIVE_PROFILE_ENABLED=1` **only** on an isolated Jobs revision
-with `AWFL_NATIVE_EXECUTION_ENABLED=1`. A successful or failed Jobs request
+The production Jobs service enables `AWFL_NATIVE_PROFILE_ENABLED=1` through
+`server/infra/github_variables.tf`, the generated
+`.github/actions-variables.json`, and the Jobs-only Cloud Run deployment step.
+API remains unprofiled. A successful or failed native Jobs request
 then writes one structured `awfl_native_job_timing` Cloud Logging event,
 containing its execution ID, outcome, total request duration and aggregated
 phase timings. The response body and execution behavior are unchanged.
@@ -49,7 +51,11 @@ includes `rust.spawn_io`).
 Only fixed operation names, duration, outcome, and the native execution ID
 are logged. Workflow inputs, URLs, request/response bodies, user/project
 IDs and credentials are intentionally excluded. The flag defaults to off.
-Restore it to off and remove temporary Cloud Run tags after benchmarking.
+To disable, set `AWFL_NATIVE_PROFILE_ENABLED=0` in the
+Terraform-generated Actions variables and redeploy Jobs. This covers Cloud Run
+`/native/execute` requests. Detached executions driven directly by the
+persistent GKE scheduler do not currently run through the per-request
+`createNativeProfiler` hook and require separate profiling instrumentation.
 
 `NativeGcsReleases.materialize` also supports a bounded per-instance cache of
 verified content-addressed executable bytes. Jobs keeps at most four cached

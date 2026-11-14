@@ -51,6 +51,9 @@ resource "local_file" "actions_variables" {
     # Native published workflows use the in-process memory executor. The
     # durable executor remains available for pinned existing executions.
     AWFL_NATIVE_MEMORY_EXECUTION_ENABLED = "1"
+    # Native phase profiler on IAM-protected Cloud Run Jobs only.
+    # This is independent from Firestore SDK tracing.
+    AWFL_NATIVE_PROFILE_ENABLED          = "1"
 
     # Opt-in Firestore Admin SDK OpenTelemetry sampling (Cloud Trace).
     AWFL_FIRESTORE_TRACE_ENABLED        = "1"
