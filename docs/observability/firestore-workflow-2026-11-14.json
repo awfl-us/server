@@ -1,0 +1,1740 @@
+{
+  "trace_count": 2177,
+  "span_count": 26409,
+  "http_requests": 1634,
+  "scope": "AWFL awfl.http server-side requests and descendant logical Firestore SDK spans",
+  "method_stats": {
+    "DocumentReference.Get": {
+      "n": 5660,
+      "p50": 69.6,
+      "p95": 198.4,
+      "max": 1158.1,
+      "sum": 468001.1
+    },
+    "DocumentReference.ListCollections": {
+      "n": 2270,
+      "p50": 41.7,
+      "p95": 126.1,
+      "max": 278.1,
+      "sum": 130184.2
+    },
+    "Query.Get": {
+      "n": 1950,
+      "p50": 49.4,
+      "p95": 124.7,
+      "max": 1115.7,
+      "sum": 111737.1
+    },
+    "Transaction.Run": {
+      "n": 1724,
+      "p50": 106.6,
+      "p95": 440.7,
+      "max": 1802.9,
+      "sum": 290578.4
+    },
+    "DocumentReference.Set": {
+      "n": 358,
+      "p50": 53.8,
+      "p95": 131.0,
+      "max": 539.4,
+      "sum": 23096.7
+    },
+    "DocumentReference.Update": {
+      "n": 129,
+      "p50": 47.7,
+      "p95": 113.3,
+      "max": 310.1,
+      "sum": 7066.3
+    },
+    "DocumentReference.Create": {
+      "n": 94,
+      "p50": 66.2,
+      "p95": 209.6,
+      "max": 513.8,
+      "sum": 7915.9
+    }
+  },
+  "sdk_raw_counts": {
+    "DocumentReference.Get": 5660,
+    "DocumentReference.ListCollections": 2270,
+    "Query.Get": 1950,
+    "Transaction.Run": 1724,
+    "Batch.Commit": 581,
+    "DocumentReference.Set": 358,
+    "DocumentReference.Update": 129,
+    "DocumentReference.Create": 94
+  },
+  "all_logical_sdk_by_service": {
+    "awfl-native-worker": {
+      "DocumentReference.Get": 337,
+      "Transaction.Run": 170,
+      "Query.Get": 115
+    },
+    "awfl-api": {
+      "DocumentReference.Get": 4447,
+      "DocumentReference.ListCollections": 2250,
+      "Query.Get": 1536,
+      "Transaction.Run": 635,
+      "DocumentReference.Set": 253,
+      "DocumentReference.Update": 105
+    },
+    "awfl-jobs": {
+      "Transaction.Run": 919,
+      "DocumentReference.Get": 876,
+      "Query.Get": 299,
+      "DocumentReference.Set": 105,
+      "DocumentReference.Create": 94,
+      "DocumentReference.Update": 24,
+      "DocumentReference.ListCollections": 20
+    }
+  },
+  "service_method_stats": {
+    "awfl-native-worker": {
+      "Transaction.Run": {
+        "n": 170,
+        "p50": 72.5,
+        "p95": 162.5,
+        "max": 311.5,
+        "sum": 14302.1
+      },
+      "DocumentReference.Get": {
+        "n": 337,
+        "p50": 25.8,
+        "p95": 70.2,
+        "max": 143.7,
+        "sum": 10399.3
+      },
+      "Query.Get": {
+        "n": 115,
+        "p50": 41.4,
+        "p95": 122.2,
+        "max": 486.0,
+        "sum": 6002.6
+      }
+    },
+    "awfl-api": {
+      "Transaction.Run": {
+        "n": 635,
+        "p50": 71.2,
+        "p95": 191.5,
+        "max": 1265.2,
+        "sum": 60206.9
+      },
+      "DocumentReference.Get": {
+        "n": 4447,
+        "p50": 72.0,
+        "p95": 201.4,
+        "max": 1158.1,
+        "sum": 379192.8
+      },
+      "Query.Get": {
+        "n": 1536,
+        "p50": 47.1,
+        "p95": 105.7,
+        "max": 1115.7,
+        "sum": 80485.0
+      },
+      "DocumentReference.Set": {
+        "n": 253,
+        "p50": 43.6,
+        "p95": 114.7,
+        "max": 539.4,
+        "sum": 14872.2
+      },
+      "DocumentReference.ListCollections": {
+        "n": 2250,
+        "p50": 41.4,
+        "p95": 126.7,
+        "max": 278.1,
+        "sum": 128438.5
+      },
+      "DocumentReference.Update": {
+        "n": 105,
+        "p50": 42.8,
+        "p95": 87.4,
+        "max": 310.1,
+        "sum": 5363.9
+      }
+    },
+    "awfl-jobs": {
+      "Query.Get": {
+        "n": 299,
+        "p50": 73.2,
+        "p95": 170.2,
+        "max": 554.2,
+        "sum": 25249.5
+      },
+      "Transaction.Run": {
+        "n": 919,
+        "p50": 169.8,
+        "p95": 732.6,
+        "max": 1802.9,
+        "sum": 216069.3
+      },
+      "DocumentReference.Create": {
+        "n": 94,
+        "p50": 66.2,
+        "p95": 209.6,
+        "max": 513.8,
+        "sum": 7915.9
+      },
+      "DocumentReference.Get": {
+        "n": 876,
+        "p50": 68.6,
+        "p95": 191.5,
+        "max": 801.2,
+        "sum": 78409.0
+      },
+      "DocumentReference.Set": {
+        "n": 105,
+        "p50": 64.9,
+        "p95": 164.6,
+        "max": 478.7,
+        "sum": 8224.6
+      },
+      "DocumentReference.Update": {
+        "n": 24,
+        "p50": 70.7,
+        "p95": 122.3,
+        "max": 129.1,
+        "sum": 1702.4
+      },
+      "DocumentReference.ListCollections": {
+        "n": 20,
+        "p50": 100.5,
+        "p95": 107.0,
+        "max": 109.1,
+        "sum": 1745.6
+      }
+    }
+  },
+  "operations_outside_live_request": [
+    {
+      "service": "awfl-jobs",
+      "reason": "after-http-response",
+      "method": "Transaction.Run",
+      "n": 815,
+      "p50": 176.6,
+      "p95": 858.2,
+      "max": 1802.9,
+      "sum": 201745.2
+    },
+    {
+      "service": "awfl-jobs",
+      "reason": "after-http-response",
+      "method": "DocumentReference.Get",
+      "n": 587,
+      "p50": 59.8,
+      "p95": 190.4,
+      "max": 801.2,
+      "sum": 45591.7
+    },
+    {
+      "service": "awfl-native-worker",
+      "reason": "no-http-ancestor",
+      "method": "DocumentReference.Get",
+      "n": 337,
+      "p50": 25.8,
+      "p95": 70.2,
+      "max": 143.7,
+      "sum": 10399.3
+    },
+    {
+      "service": "awfl-native-worker",
+      "reason": "no-http-ancestor",
+      "method": "Transaction.Run",
+      "n": 170,
+      "p50": 72.5,
+      "p95": 162.5,
+      "max": 311.5,
+      "sum": 14302.1
+    },
+    {
+      "service": "awfl-native-worker",
+      "reason": "no-http-ancestor",
+      "method": "Query.Get",
+      "n": 115,
+      "p50": 41.4,
+      "p95": 122.2,
+      "max": 486.0,
+      "sum": 6002.6
+    },
+    {
+      "service": "awfl-jobs",
+      "reason": "after-http-response",
+      "method": "Query.Get",
+      "n": 115,
+      "p50": 92.7,
+      "p95": 231.6,
+      "max": 554.2,
+      "sum": 12588.9
+    }
+  ],
+  "unattributed": {
+    "after-http-response:awfl-jobs:Transaction.Run": 815,
+    "after-http-response:awfl-jobs:DocumentReference.Get": 587,
+    "no-http-ancestor:awfl-native-worker:DocumentReference.Get": 337,
+    "no-http-ancestor:awfl-native-worker:Transaction.Run": 170,
+    "no-http-ancestor:awfl-native-worker:Query.Get": 115,
+    "after-http-response:awfl-jobs:Query.Get": 115
+  },
+  "services": {
+    "awfl-api": {
+      "requests": 1272,
+      "sdk_total": 9226,
+      "db_covered_sum_ms": 229040,
+      "methods": {
+        "DocumentReference.Get": 4447,
+        "DocumentReference.ListCollections": 2250,
+        "Query.Get": 1536,
+        "Transaction.Run": 635,
+        "DocumentReference.Set": 253,
+        "DocumentReference.Update": 105
+      }
+    },
+    "awfl-jobs": {
+      "requests": 362,
+      "sdk_total": 820,
+      "db_covered_sum_ms": 48547,
+      "methods": {
+        "DocumentReference.Get": 289,
+        "Query.Get": 184,
+        "DocumentReference.Set": 105,
+        "Transaction.Run": 104,
+        "DocumentReference.Create": 94,
+        "DocumentReference.Update": 24,
+        "DocumentReference.ListCollections": 20
+      }
+    }
+  },
+  "routes": [
+    {
+      "service": "awfl-api",
+      "route": "(unrouted:workflows)",
+      "requests": 1034,
+      "duration_ms": {
+        "n": 1034,
+        "p50": 94.3,
+        "p95": 664.3,
+        "max": 3599999.9,
+        "sum": 11027383.2
+      },
+      "db_covered_ms": {
+        "n": 1034,
+        "p50": 90.7,
+        "p95": 624.6,
+        "max": 1334.0,
+        "sum": 175689.1
+      },
+      "db_covered_sum_ms": 175689,
+      "ops_per_request": {
+        "n": 1034,
+        "p50": 2.0,
+        "p95": 40.0,
+        "max": 43,
+        "sum": 8302
+      },
+      "sdk_total": 8302,
+      "methods": {
+        "DocumentReference.Get": 3999,
+        "DocumentReference.ListCollections": 2214,
+        "Query.Get": 1432,
+        "Transaction.Run": 437,
+        "DocumentReference.Set": 169,
+        "DocumentReference.Update": 51
+      }
+    },
+    {
+      "service": "awfl-api",
+      "route": "(unrouted:mcp)",
+      "requests": 46,
+      "duration_ms": {
+        "n": 46,
+        "p50": 1603.9,
+        "p95": 11243.7,
+        "max": 11954.4,
+        "sum": 127293.5
+      },
+      "db_covered_ms": {
+        "n": 46,
+        "p50": 698.7,
+        "p95": 1404.7,
+        "max": 1759.9,
+        "sum": 34100.0
+      },
+      "db_covered_sum_ms": 34100,
+      "ops_per_request": {
+        "n": 46,
+        "p50": 16.0,
+        "p95": 22.5,
+        "max": 31,
+        "sum": 631
+      },
+      "sdk_total": 631,
+      "methods": {
+        "DocumentReference.Get": 385,
+        "Query.Get": 89,
+        "DocumentReference.Set": 79,
+        "DocumentReference.Update": 52,
+        "Transaction.Run": 26
+      }
+    },
+    {
+      "service": "awfl-api",
+      "route": "/workflows/projects/:id/consumer-heartbeat",
+      "requests": 166,
+      "duration_ms": {
+        "n": 166,
+        "p50": 73.6,
+        "p95": 186.0,
+        "max": 272.7,
+        "sum": 14801.2
+      },
+      "db_covered_ms": {
+        "n": 166,
+        "p50": 71.0,
+        "p95": 181.0,
+        "max": 270.5,
+        "sum": 14311.9
+      },
+      "db_covered_sum_ms": 14312,
+      "ops_per_request": {
+        "n": 166,
+        "p50": 1.0,
+        "p95": 1.0,
+        "max": 1,
+        "sum": 166
+      },
+      "sdk_total": 166,
+      "methods": {
+        "Transaction.Run": 166
+      }
+    },
+    {
+      "service": "awfl-jobs",
+      "route": "/context/topicContextYoj/run",
+      "requests": 11,
+      "duration_ms": {
+        "n": 11,
+        "p50": 751.8,
+        "p95": 1117.1,
+        "max": 1234.4,
+        "sum": 7270.6
+      },
+      "db_covered_ms": {
+        "n": 11,
+        "p50": 719.4,
+        "p95": 1069.0,
+        "max": 1181.2,
+        "sum": 6910.4
+      },
+      "db_covered_sum_ms": 6910,
+      "ops_per_request": {
+        "n": 11,
+        "p50": 32.0,
+        "p95": 41.0,
+        "max": 42,
+        "sum": 299
+      },
+      "sdk_total": 299,
+      "methods": {
+        "DocumentReference.Get": 222,
+        "Query.Get": 77
+      }
+    },
+    {
+      "service": "awfl-jobs",
+      "route": "/firebase/create",
+      "requests": 75,
+      "duration_ms": {
+        "n": 75,
+        "p50": 69.7,
+        "p95": 160.5,
+        "max": 372.5,
+        "sum": 6014.4
+      },
+      "db_covered_ms": {
+        "n": 75,
+        "p50": 67.5,
+        "p95": 158.5,
+        "max": 357.3,
+        "sum": 5818.8
+      },
+      "db_covered_sum_ms": 5819,
+      "ops_per_request": {
+        "n": 75,
+        "p50": 1.0,
+        "p95": 1.0,
+        "max": 1,
+        "sum": 75
+      },
+      "sdk_total": 75,
+      "methods": {
+        "DocumentReference.Create": 75
+      }
+    },
+    {
+      "service": "awfl-jobs",
+      "route": "/firebase/locks/acquire",
+      "requests": 36,
+      "duration_ms": {
+        "n": 36,
+        "p50": 115.8,
+        "p95": 491.2,
+        "max": 733.2,
+        "sum": 5874.7
+      },
+      "db_covered_ms": {
+        "n": 36,
+        "p50": 113.3,
+        "p95": 489.3,
+        "max": 730.9,
+        "sum": 5690.9
+      },
+      "db_covered_sum_ms": 5691,
+      "ops_per_request": {
+        "n": 36,
+        "p50": 1.0,
+        "p95": 1.0,
+        "max": 1,
+        "sum": 36
+      },
+      "sdk_total": 36,
+      "methods": {
+        "Transaction.Run": 36
+      }
+    },
+    {
+      "service": "awfl-jobs",
+      "route": "(unrouted:firebase)",
+      "requests": 50,
+      "duration_ms": {
+        "n": 50,
+        "p50": 71.5,
+        "p95": 404.6,
+        "max": 734.1,
+        "sum": 5692.7
+      },
+      "db_covered_ms": {
+        "n": 50,
+        "p50": 70.1,
+        "p95": 402.1,
+        "max": 732.3,
+        "sum": 5512.1
+      },
+      "db_covered_sum_ms": 5512,
+      "ops_per_request": {
+        "n": 50,
+        "p50": 1.0,
+        "p95": 1.0,
+        "max": 15,
+        "sum": 70
+      },
+      "sdk_total": 70,
+      "methods": {
+        "DocumentReference.ListCollections": 20,
+        "DocumentReference.Create": 19,
+        "Transaction.Run": 16,
+        "Query.Get": 9,
+        "DocumentReference.Update": 6
+      }
+    },
+    {
+      "service": "awfl-jobs",
+      "route": "/producer/start",
+      "requests": 19,
+      "duration_ms": {
+        "n": 19,
+        "p50": 224.2,
+        "p95": 323.4,
+        "max": 398.5,
+        "sum": 4361.0
+      },
+      "db_covered_ms": {
+        "n": 19,
+        "p50": 219.9,
+        "p95": 318.2,
+        "max": 392.8,
+        "sum": 4269.0
+      },
+      "db_covered_sum_ms": 4269,
+      "ops_per_request": {
+        "n": 19,
+        "p50": 3.0,
+        "p95": 3.0,
+        "max": 3,
+        "sum": 57
+      },
+      "sdk_total": 57,
+      "methods": {
+        "Query.Get": 38,
+        "Transaction.Run": 19
+      }
+    },
+    {
+      "service": "awfl-jobs",
+      "route": "/events",
+      "requests": 19,
+      "duration_ms": {
+        "n": 19,
+        "p50": 154.6,
+        "p95": 344.7,
+        "max": 685.3,
+        "sum": 3731.1
+      },
+      "db_covered_ms": {
+        "n": 19,
+        "p50": 153.0,
+        "p95": 341.5,
+        "max": 678.2,
+        "sum": 3617.3
+      },
+      "db_covered_sum_ms": 3617,
+      "ops_per_request": {
+        "n": 19,
+        "p50": 2.0,
+        "p95": 2.0,
+        "max": 2,
+        "sum": 38
+      },
+      "sdk_total": 38,
+      "methods": {
+        "DocumentReference.Set": 38
+      }
+    },
+    {
+      "service": "awfl-jobs",
+      "route": "(unrouted:events)",
+      "requests": 19,
+      "duration_ms": {
+        "n": 19,
+        "p50": 138.4,
+        "p95": 313.9,
+        "max": 331.7,
+        "sum": 2897.1
+      },
+      "db_covered_ms": {
+        "n": 19,
+        "p50": 136.8,
+        "p95": 311.7,
+        "max": 326.5,
+        "sum": 2828.3
+      },
+      "db_covered_sum_ms": 2828,
+      "ops_per_request": {
+        "n": 19,
+        "p50": 2.0,
+        "p95": 2.0,
+        "max": 2,
+        "sum": 38
+      },
+      "sdk_total": 38,
+      "methods": {
+        "DocumentReference.Set": 38
+      }
+    },
+    {
+      "service": "awfl-jobs",
+      "route": "/native/execute",
+      "requests": 1,
+      "duration_ms": {
+        "n": 1,
+        "p50": 23993.0,
+        "p95": 23993.0,
+        "max": 23993.0,
+        "sum": 23993.0
+      },
+      "db_covered_ms": {
+        "n": 1,
+        "p50": 2464.5,
+        "p95": 2464.5,
+        "max": 2464.5,
+        "sum": 2464.5
+      },
+      "db_covered_sum_ms": 2465,
+      "ops_per_request": {
+        "n": 1,
+        "p50": 35.0,
+        "p95": 35.0,
+        "max": 35,
+        "sum": 35
+      },
+      "sdk_total": 35,
+      "methods": {
+        "Transaction.Run": 24,
+        "DocumentReference.Get": 10,
+        "Query.Get": 1
+      }
+    },
+    {
+      "service": "awfl-jobs",
+      "route": "/firebase/segmentsForSession",
+      "requests": 20,
+      "duration_ms": {
+        "n": 20,
+        "p50": 53.4,
+        "p95": 322.4,
+        "max": 602.8,
+        "sum": 2247.8
+      },
+      "db_covered_ms": {
+        "n": 20,
+        "p50": 50.8,
+        "p95": 313.4,
+        "max": 545.1,
+        "sum": 2129.5
+      },
+      "db_covered_sum_ms": 2130,
+      "ops_per_request": {
+        "n": 20,
+        "p50": 1.0,
+        "p95": 1.0,
+        "max": 1,
+        "sum": 20
+      },
+      "sdk_total": 20,
+      "methods": {
+        "Query.Get": 20
+      }
+    },
+    {
+      "service": "awfl-jobs",
+      "route": "/firebase/update",
+      "requests": 18,
+      "duration_ms": {
+        "n": 18,
+        "p50": 73.0,
+        "p95": 126.0,
+        "max": 132.4,
+        "sum": 1385.0
+      },
+      "db_covered_ms": {
+        "n": 18,
+        "p50": 71.2,
+        "p95": 123.5,
+        "max": 129.1,
+        "sum": 1338.0
+      },
+      "db_covered_sum_ms": 1338,
+      "ops_per_request": {
+        "n": 18,
+        "p50": 1.0,
+        "p95": 1.0,
+        "max": 1,
+        "sum": 18
+      },
+      "sdk_total": 18,
+      "methods": {
+        "DocumentReference.Update": 18
+      }
+    },
+    {
+      "service": "awfl-jobs",
+      "route": "/workflows/exec/status/update",
+      "requests": 7,
+      "duration_ms": {
+        "n": 7,
+        "p50": 168.6,
+        "p95": 296.3,
+        "max": 338.0,
+        "sum": 1270.2
+      },
+      "db_covered_ms": {
+        "n": 7,
+        "p50": 165.3,
+        "p95": 291.8,
+        "max": 335.4,
+        "sum": 1245.7
+      },
+      "db_covered_sum_ms": 1246,
+      "ops_per_request": {
+        "n": 7,
+        "p50": 4.0,
+        "p95": 4.0,
+        "max": 4,
+        "sum": 28
+      },
+      "sdk_total": 28,
+      "methods": {
+        "DocumentReference.Set": 14,
+        "DocumentReference.Get": 7,
+        "Query.Get": 7
+      }
+    },
+    {
+      "service": "awfl-jobs",
+      "route": "/llm/chat",
+      "requests": 9,
+      "duration_ms": {
+        "n": 9,
+        "p50": 6525.4,
+        "p95": 11662.7,
+        "max": 11778.2,
+        "sum": 67567.0
+      },
+      "db_covered_ms": {
+        "n": 9,
+        "p50": 132.3,
+        "p95": 187.2,
+        "max": 215.5,
+        "sum": 1177.6
+      },
+      "db_covered_sum_ms": 1178,
+      "ops_per_request": {
+        "n": 9,
+        "p50": 2.0,
+        "p95": 2.0,
+        "max": 2,
+        "sum": 18
+      },
+      "sdk_total": 18,
+      "methods": {
+        "DocumentReference.Get": 9,
+        "DocumentReference.Set": 9
+      }
+    },
+    {
+      "service": "awfl-api",
+      "route": "/workflows/exec/status/latest/:id",
+      "requests": 1,
+      "duration_ms": {
+        "n": 1,
+        "p50": 1378.5,
+        "p95": 1378.5,
+        "max": 1378.5,
+        "sum": 1378.5
+      },
+      "db_covered_ms": {
+        "n": 1,
+        "p50": 1140.8,
+        "p95": 1140.8,
+        "max": 1140.8,
+        "sum": 1140.8
+      },
+      "db_covered_sum_ms": 1141,
+      "ops_per_request": {
+        "n": 1,
+        "p50": 6.0,
+        "p95": 6.0,
+        "max": 6,
+        "sum": 6
+      },
+      "sdk_total": 6,
+      "methods": {
+        "DocumentReference.Get": 5,
+        "Query.Get": 1
+      }
+    },
+    {
+      "service": "awfl-jobs",
+      "route": "/tasks/by-session/:id",
+      "requests": 16,
+      "duration_ms": {
+        "n": 16,
+        "p50": 55.0,
+        "p95": 121.0,
+        "max": 265.3,
+        "sum": 1078.8
+      },
+      "db_covered_ms": {
+        "n": 16,
+        "p50": 52.3,
+        "p95": 117.5,
+        "max": 261.2,
+        "sum": 1033.3
+      },
+      "db_covered_sum_ms": 1033,
+      "ops_per_request": {
+        "n": 16,
+        "p50": 1.0,
+        "p95": 1.0,
+        "max": 1,
+        "sum": 16
+      },
+      "sdk_total": 16,
+      "methods": {
+        "Query.Get": 16
+      }
+    },
+    {
+      "service": "awfl-jobs",
+      "route": "/firebase/locks/release",
+      "requests": 8,
+      "duration_ms": {
+        "n": 8,
+        "p50": 124.3,
+        "p95": 195.5,
+        "max": 203.8,
+        "sum": 1043.8
+      },
+      "db_covered_ms": {
+        "n": 8,
+        "p50": 122.2,
+        "p95": 192.3,
+        "max": 199.7,
+        "sum": 1026.4
+      },
+      "db_covered_sum_ms": 1026,
+      "ops_per_request": {
+        "n": 8,
+        "p50": 1.0,
+        "p95": 1.0,
+        "max": 1,
+        "sum": 8
+      },
+      "sdk_total": 8,
+      "methods": {
+        "Transaction.Run": 8
+      }
+    },
+    {
+      "service": "awfl-api",
+      "route": "/workflows/context/topicContextYoj/run",
+      "requests": 1,
+      "duration_ms": {
+        "n": 1,
+        "p50": 966.9,
+        "p95": 966.9,
+        "max": 966.9,
+        "sum": 966.9
+      },
+      "db_covered_ms": {
+        "n": 1,
+        "p50": 956.6,
+        "p95": 956.6,
+        "max": 956.6,
+        "sum": 956.6
+      },
+      "db_covered_sum_ms": 957,
+      "ops_per_request": {
+        "n": 1,
+        "p50": 32.0,
+        "p95": 32.0,
+        "max": 32,
+        "sum": 32
+      },
+      "sdk_total": 32,
+      "methods": {
+        "DocumentReference.Get": 23,
+        "Query.Get": 9
+      }
+    },
+    {
+      "service": "awfl-jobs",
+      "route": "/callbacks",
+      "requests": 21,
+      "duration_ms": {
+        "n": 21,
+        "p50": 44.8,
+        "p95": 64.3,
+        "max": 77.5,
+        "sum": 927.2
+      },
+      "db_covered_ms": {
+        "n": 21,
+        "p50": 43.2,
+        "p95": 62.3,
+        "max": 75.8,
+        "sum": 886.3
+      },
+      "db_covered_sum_ms": 886,
+      "ops_per_request": {
+        "n": 21,
+        "p50": 1.0,
+        "p95": 1.0,
+        "max": 1,
+        "sum": 21
+      },
+      "sdk_total": 21,
+      "methods": {
+        "DocumentReference.Get": 21
+      }
+    },
+    {
+      "service": "awfl-api",
+      "route": "(unrouted:other)",
+      "requests": 13,
+      "duration_ms": {
+        "n": 13,
+        "p50": 73.6,
+        "p95": 390.4,
+        "max": 461.1,
+        "sum": 1694.7
+      },
+      "db_covered_ms": {
+        "n": 13,
+        "p50": 21.3,
+        "p95": 312.1,
+        "max": 335.8,
+        "sum": 806.6
+      },
+      "db_covered_sum_ms": 807,
+      "ops_per_request": {
+        "n": 13,
+        "p50": 1.0,
+        "p95": 4.0,
+        "max": 4,
+        "sum": 16
+      },
+      "sdk_total": 16,
+      "methods": {
+        "DocumentReference.Get": 16
+      }
+    },
+    {
+      "service": "awfl-api",
+      "route": "/mcp",
+      "requests": 1,
+      "duration_ms": {
+        "n": 1,
+        "p50": 1547.9,
+        "p95": 1547.9,
+        "max": 1547.9,
+        "sum": 1547.9
+      },
+      "db_covered_ms": {
+        "n": 1,
+        "p50": 516.8,
+        "p95": 516.8,
+        "max": 516.8,
+        "sum": 516.8
+      },
+      "db_covered_sum_ms": 517,
+      "ops_per_request": {
+        "n": 1,
+        "p50": 18.0,
+        "p95": 18.0,
+        "max": 18,
+        "sum": 18
+      },
+      "sdk_total": 18,
+      "methods": {
+        "DocumentReference.Get": 10,
+        "DocumentReference.Set": 3,
+        "Query.Get": 2,
+        "DocumentReference.Update": 2,
+        "Transaction.Run": 1
+      }
+    },
+    {
+      "service": "awfl-jobs",
+      "route": "(unrouted:tasks)",
+      "requests": 8,
+      "duration_ms": {
+        "n": 8,
+        "p50": 65.2,
+        "p95": 92.0,
+        "max": 95.5,
+        "sum": 547.6
+      },
+      "db_covered_ms": {
+        "n": 8,
+        "p50": 62.0,
+        "p95": 88.3,
+        "max": 91.8,
+        "sum": 511.2
+      },
+      "db_covered_sum_ms": 511,
+      "ops_per_request": {
+        "n": 8,
+        "p50": 1.0,
+        "p95": 1.0,
+        "max": 1,
+        "sum": 8
+      },
+      "sdk_total": 8,
+      "methods": {
+        "Query.Get": 8
+      }
+    },
+    {
+      "service": "awfl-jobs",
+      "route": "(unrouted:workflows)",
+      "requests": 2,
+      "duration_ms": {
+        "n": 2,
+        "p50": 253.8,
+        "p95": 257.7,
+        "max": 258.1,
+        "sum": 507.6
+      },
+      "db_covered_ms": {
+        "n": 2,
+        "p50": 244.8,
+        "p95": 254.3,
+        "max": 255.4,
+        "sum": 489.5
+      },
+      "db_covered_sum_ms": 490,
+      "ops_per_request": {
+        "n": 2,
+        "p50": 4.0,
+        "p95": 4.0,
+        "max": 4,
+        "sum": 8
+      },
+      "sdk_total": 8,
+      "methods": {
+        "DocumentReference.Set": 4,
+        "DocumentReference.Get": 2,
+        "Query.Get": 2
+      }
+    },
+    {
+      "service": "awfl-api",
+      "route": "/workflows/callbacks/:id",
+      "requests": 3,
+      "duration_ms": {
+        "n": 3,
+        "p50": 132.6,
+        "p95": 151.1,
+        "max": 153.1,
+        "sum": 415.1
+      },
+      "db_covered_ms": {
+        "n": 3,
+        "p50": 128.3,
+        "p95": 147.2,
+        "max": 149.3,
+        "sum": 404.0
+      },
+      "db_covered_sum_ms": 404,
+      "ops_per_request": {
+        "n": 3,
+        "p50": 3.0,
+        "p95": 3.9,
+        "max": 4,
+        "sum": 10
+      },
+      "sdk_total": 10,
+      "methods": {
+        "DocumentReference.Get": 7,
+        "Transaction.Run": 3
+      }
+    },
+    {
+      "service": "awfl-jobs",
+      "route": "/agents/session/:id",
+      "requests": 7,
+      "duration_ms": {
+        "n": 7,
+        "p50": 52.5,
+        "p95": 105.7,
+        "max": 116.9,
+        "sum": 413.4
+      },
+      "db_covered_ms": {
+        "n": 7,
+        "p50": 50.9,
+        "p95": 102.2,
+        "max": 114.1,
+        "sum": 387.2
+      },
+      "db_covered_sum_ms": 387,
+      "ops_per_request": {
+        "n": 7,
+        "p50": 1.0,
+        "p95": 1.0,
+        "max": 1,
+        "sum": 7
+      },
+      "sdk_total": 7,
+      "methods": {
+        "DocumentReference.Get": 7
+      }
+    },
+    {
+      "service": "awfl-api",
+      "route": "/workflows/context/sessions/list",
+      "requests": 2,
+      "duration_ms": {
+        "n": 2,
+        "p50": 142.2,
+        "p95": 154.6,
+        "max": 155.9,
+        "sum": 284.4
+      },
+      "db_covered_ms": {
+        "n": 2,
+        "p50": 140.2,
+        "p95": 152.4,
+        "max": 153.7,
+        "sum": 280.4
+      },
+      "db_covered_sum_ms": 280,
+      "ops_per_request": {
+        "n": 2,
+        "p50": 19.0,
+        "p95": 19.0,
+        "max": 19,
+        "sum": 38
+      },
+      "sdk_total": 38,
+      "methods": {
+        "DocumentReference.ListCollections": 36,
+        "Query.Get": 2
+      }
+    },
+    {
+      "service": "awfl-api",
+      "route": "/workflows/tasks/by-session/:id",
+      "requests": 1,
+      "duration_ms": {
+        "n": 1,
+        "p50": 924.4,
+        "p95": 924.4,
+        "max": 924.4,
+        "sum": 924.4
+      },
+      "db_covered_ms": {
+        "n": 1,
+        "p50": 276.3,
+        "p95": 276.3,
+        "max": 276.3,
+        "sum": 276.3
+      },
+      "db_covered_sum_ms": 276,
+      "ops_per_request": {
+        "n": 1,
+        "p50": 1.0,
+        "p95": 1.0,
+        "max": 1,
+        "sum": 1
+      },
+      "sdk_total": 1,
+      "methods": {
+        "Query.Get": 1
+      }
+    },
+    {
+      "service": "awfl-jobs",
+      "route": "(unrouted:other)",
+      "requests": 1,
+      "duration_ms": {
+        "n": 1,
+        "p50": 279.5,
+        "p95": 279.5,
+        "max": 279.5,
+        "sum": 279.5
+      },
+      "db_covered_ms": {
+        "n": 1,
+        "p50": 274.1,
+        "p95": 274.1,
+        "max": 274.1,
+        "sum": 274.1
+      },
+      "db_covered_sum_ms": 274,
+      "ops_per_request": {
+        "n": 1,
+        "p50": 3.0,
+        "p95": 3.0,
+        "max": 3,
+        "sum": 3
+      },
+      "sdk_total": 3,
+      "methods": {
+        "Query.Get": 2,
+        "Transaction.Run": 1
+      }
+    },
+    {
+      "service": "awfl-jobs",
+      "route": "/tasks/:id",
+      "requests": 1,
+      "duration_ms": {
+        "n": 1,
+        "p50": 275.0,
+        "p95": 275.0,
+        "max": 275.0,
+        "sum": 275.0
+      },
+      "db_covered_ms": {
+        "n": 1,
+        "p50": 271.9,
+        "p95": 271.9,
+        "max": 271.9,
+        "sum": 271.9
+      },
+      "db_covered_sum_ms": 272,
+      "ops_per_request": {
+        "n": 1,
+        "p50": 3.0,
+        "p95": 3.0,
+        "max": 3,
+        "sum": 3
+      },
+      "sdk_total": 3,
+      "methods": {
+        "DocumentReference.Get": 2,
+        "DocumentReference.Set": 1
+      }
+    },
+    {
+      "service": "awfl-jobs",
+      "route": "/agents/project-manager/tools",
+      "requests": 5,
+      "duration_ms": {
+        "n": 5,
+        "p50": 65.5,
+        "p95": 112.1,
+        "max": 119.0,
+        "sum": 374.0
+      },
+      "db_covered_ms": {
+        "n": 5,
+        "p50": 51.7,
+        "p95": 59.2,
+        "max": 60.3,
+        "sum": 253.2
+      },
+      "db_covered_sum_ms": 253,
+      "ops_per_request": {
+        "n": 5,
+        "p50": 1.0,
+        "p95": 1.0,
+        "max": 1,
+        "sum": 5
+      },
+      "sdk_total": 5,
+      "methods": {
+        "DocumentReference.Get": 5
+      }
+    },
+    {
+      "service": "awfl-jobs",
+      "route": "(unrouted:agents)",
+      "requests": 4,
+      "duration_ms": {
+        "n": 4,
+        "p50": 62.0,
+        "p95": 184.6,
+        "max": 197.8,
+        "sum": 335.5
+      },
+      "db_covered_ms": {
+        "n": 4,
+        "p50": 47.9,
+        "p95": 101.6,
+        "max": 104.7,
+        "sum": 211.2
+      },
+      "db_covered_sum_ms": 211,
+      "ops_per_request": {
+        "n": 4,
+        "p50": 1.0,
+        "p95": 1.0,
+        "max": 1,
+        "sum": 4
+      },
+      "sdk_total": 4,
+      "methods": {
+        "DocumentReference.Get": 4
+      }
+    },
+    {
+      "service": "awfl-api",
+      "route": "/workflows/events/cursors",
+      "requests": 2,
+      "duration_ms": {
+        "n": 2,
+        "p50": 102.4,
+        "p95": 112.7,
+        "max": 113.9,
+        "sum": 204.9
+      },
+      "db_covered_ms": {
+        "n": 2,
+        "p50": 97.6,
+        "p95": 110.3,
+        "max": 111.7,
+        "sum": 195.3
+      },
+      "db_covered_sum_ms": 195,
+      "ops_per_request": {
+        "n": 2,
+        "p50": 2.0,
+        "p95": 2.0,
+        "max": 2,
+        "sum": 4
+      },
+      "sdk_total": 4,
+      "methods": {
+        "DocumentReference.Get": 2,
+        "DocumentReference.Set": 2
+      }
+    },
+    {
+      "service": "awfl-api",
+      "route": "(unrouted:oauth)",
+      "requests": 1,
+      "duration_ms": {
+        "n": 1,
+        "p50": 306.6,
+        "p95": 306.6,
+        "max": 306.6,
+        "sum": 306.6
+      },
+      "db_covered_ms": {
+        "n": 1,
+        "p50": 194.1,
+        "p95": 194.1,
+        "max": 194.1,
+        "sum": 194.1
+      },
+      "db_covered_sum_ms": 194,
+      "ops_per_request": {
+        "n": 1,
+        "p50": 1.0,
+        "p95": 1.0,
+        "max": 1,
+        "sum": 1
+      },
+      "sdk_total": 1,
+      "methods": {
+        "Transaction.Run": 1
+      }
+    },
+    {
+      "service": "awfl-api",
+      "route": "/workflows/projects/:id/consumer-lock/acquire",
+      "requests": 1,
+      "duration_ms": {
+        "n": 1,
+        "p50": 178.3,
+        "p95": 178.3,
+        "max": 178.3,
+        "sum": 178.3
+      },
+      "db_covered_ms": {
+        "n": 1,
+        "p50": 168.6,
+        "p95": 168.6,
+        "max": 168.6,
+        "sum": 168.6
+      },
+      "db_covered_sum_ms": 169,
+      "ops_per_request": {
+        "n": 1,
+        "p50": 1.0,
+        "p95": 1.0,
+        "max": 1,
+        "sum": 1
+      },
+      "sdk_total": 1,
+      "methods": {
+        "Transaction.Run": 1
+      }
+    },
+    {
+      "service": "awfl-jobs",
+      "route": "(unrouted:context)",
+      "requests": 4,
+      "duration_ms": {
+        "n": 4,
+        "p50": 46.5,
+        "p95": 57.0,
+        "max": 58.5,
+        "sum": 173.2
+      },
+      "db_covered_ms": {
+        "n": 4,
+        "p50": 42.1,
+        "p95": 49.3,
+        "max": 50.1,
+        "sum": 153.5
+      },
+      "db_covered_sum_ms": 154,
+      "ops_per_request": {
+        "n": 4,
+        "p50": 1.0,
+        "p95": 1.0,
+        "max": 1,
+        "sum": 4
+      },
+      "sdk_total": 4,
+      "methods": {
+        "Query.Get": 4
+      }
+    },
+    {
+      "service": "awfl-jobs",
+      "route": "/tasks",
+      "requests": 1,
+      "duration_ms": {
+        "n": 1,
+        "p50": 52.1,
+        "p95": 52.1,
+        "max": 52.1,
+        "sum": 52.1
+      },
+      "db_covered_ms": {
+        "n": 1,
+        "p50": 47.4,
+        "p95": 47.4,
+        "max": 47.4,
+        "sum": 47.4
+      },
+      "db_covered_sum_ms": 47,
+      "ops_per_request": {
+        "n": 1,
+        "p50": 1.0,
+        "p95": 1.0,
+        "max": 1,
+        "sum": 1
+      },
+      "sdk_total": 1,
+      "methods": {
+        "DocumentReference.Set": 1
+      }
+    }
+  ],
+  "high_db_requests": [
+    {
+      "route": "/native/execute",
+      "service": "awfl-jobs",
+      "duration_ms": 23993,
+      "db_covered_ms": 2465,
+      "sdk_count": 35,
+      "methods": {
+        "Transaction.Run": 24,
+        "DocumentReference.Get": 10,
+        "Query.Get": 1
+      }
+    },
+    {
+      "route": "(unrouted:mcp)",
+      "service": "awfl-api",
+      "duration_ms": 11954,
+      "db_covered_ms": 1760,
+      "sdk_count": 16,
+      "methods": {
+        "DocumentReference.Get": 8,
+        "DocumentReference.Set": 3,
+        "Query.Get": 2,
+        "DocumentReference.Update": 2,
+        "Transaction.Run": 1
+      }
+    },
+    {
+      "route": "(unrouted:mcp)",
+      "service": "awfl-api",
+      "duration_ms": 3453,
+      "db_covered_ms": 1646,
+      "sdk_count": 19,
+      "methods": {
+        "DocumentReference.Get": 11,
+        "DocumentReference.Set": 3,
+        "Query.Get": 2,
+        "DocumentReference.Update": 2,
+        "Transaction.Run": 1
+      }
+    },
+    {
+      "route": "(unrouted:mcp)",
+      "service": "awfl-api",
+      "duration_ms": 1863,
+      "db_covered_ms": 1405,
+      "sdk_count": 19,
+      "methods": {
+        "DocumentReference.Get": 11,
+        "DocumentReference.Set": 3,
+        "Query.Get": 2,
+        "DocumentReference.Update": 2,
+        "Transaction.Run": 1
+      }
+    },
+    {
+      "route": "(unrouted:mcp)",
+      "service": "awfl-api",
+      "duration_ms": 2061,
+      "db_covered_ms": 1403,
+      "sdk_count": 21,
+      "methods": {
+        "DocumentReference.Get": 13,
+        "DocumentReference.Set": 3,
+        "Query.Get": 2,
+        "DocumentReference.Update": 2,
+        "Transaction.Run": 1
+      }
+    },
+    {
+      "route": "(unrouted:mcp)",
+      "service": "awfl-api",
+      "duration_ms": 11414,
+      "db_covered_ms": 1374,
+      "sdk_count": 16,
+      "methods": {
+        "DocumentReference.Get": 8,
+        "DocumentReference.Set": 3,
+        "Query.Get": 2,
+        "DocumentReference.Update": 2,
+        "Transaction.Run": 1
+      }
+    },
+    {
+      "route": "(unrouted:mcp)",
+      "service": "awfl-api",
+      "duration_ms": 1805,
+      "db_covered_ms": 1341,
+      "sdk_count": 19,
+      "methods": {
+        "DocumentReference.Get": 11,
+        "DocumentReference.Set": 3,
+        "Query.Get": 2,
+        "DocumentReference.Update": 2,
+        "Transaction.Run": 1
+      }
+    },
+    {
+      "route": "(unrouted:workflows)",
+      "service": "awfl-api",
+      "duration_ms": 3599998,
+      "db_covered_ms": 1334,
+      "sdk_count": 25,
+      "methods": {
+        "DocumentReference.Update": 22,
+        "DocumentReference.Get": 2,
+        "Query.Get": 1
+      }
+    },
+    {
+      "route": "(unrouted:mcp)",
+      "service": "awfl-api",
+      "duration_ms": 2214,
+      "db_covered_ms": 1288,
+      "sdk_count": 17,
+      "methods": {
+        "DocumentReference.Get": 9,
+        "DocumentReference.Set": 3,
+        "Query.Get": 2,
+        "DocumentReference.Update": 2,
+        "Transaction.Run": 1
+      }
+    },
+    {
+      "route": "(unrouted:mcp)",
+      "service": "awfl-api",
+      "duration_ms": 1285,
+      "db_covered_ms": 1269,
+      "sdk_count": 11,
+      "methods": {
+        "DocumentReference.Get": 9,
+        "Query.Get": 2
+      }
+    },
+    {
+      "route": "(unrouted:workflows)",
+      "service": "awfl-api",
+      "duration_ms": 1269,
+      "db_covered_ms": 1265,
+      "sdk_count": 1,
+      "methods": {
+        "Transaction.Run": 1
+      }
+    },
+    {
+      "route": "(unrouted:workflows)",
+      "service": "awfl-api",
+      "duration_ms": 1332,
+      "db_covered_ms": 1254,
+      "sdk_count": 29,
+      "methods": {
+        "DocumentReference.Get": 20,
+        "Query.Get": 9
+      }
+    },
+    {
+      "route": "(unrouted:workflows)",
+      "service": "awfl-api",
+      "duration_ms": 1723,
+      "db_covered_ms": 1248,
+      "sdk_count": 1,
+      "methods": {
+        "Transaction.Run": 1
+      }
+    },
+    {
+      "route": "(unrouted:workflows)",
+      "service": "awfl-api",
+      "duration_ms": 3600000,
+      "db_covered_ms": 1243,
+      "sdk_count": 15,
+      "methods": {
+        "DocumentReference.Update": 12,
+        "DocumentReference.Get": 2,
+        "Query.Get": 1
+      }
+    },
+    {
+      "route": "(unrouted:workflows)",
+      "service": "awfl-api",
+      "duration_ms": 1372,
+      "db_covered_ms": 1183,
+      "sdk_count": 6,
+      "methods": {
+        "DocumentReference.Get": 5,
+        "Query.Get": 1
+      }
+    },
+    {
+      "route": "/context/topicContextYoj/run",
+      "service": "awfl-jobs",
+      "duration_ms": 1234,
+      "db_covered_ms": 1181,
+      "sdk_count": 32,
+      "methods": {
+        "DocumentReference.Get": 23,
+        "Query.Get": 9
+      }
+    },
+    {
+      "route": "(unrouted:workflows)",
+      "service": "awfl-api",
+      "duration_ms": 2182,
+      "db_covered_ms": 1158,
+      "sdk_count": 1,
+      "methods": {
+        "DocumentReference.Get": 1
+      }
+    },
+    {
+      "route": "(unrouted:workflows)",
+      "service": "awfl-api",
+      "duration_ms": 1517,
+      "db_covered_ms": 1156,
+      "sdk_count": 1,
+      "methods": {
+        "DocumentReference.Get": 1
+      }
+    },
+    {
+      "route": "(unrouted:mcp)",
+      "service": "awfl-api",
+      "duration_ms": 11262,
+      "db_covered_ms": 1145,
+      "sdk_count": 16,
+      "methods": {
+        "DocumentReference.Get": 8,
+        "DocumentReference.Set": 3,
+        "Query.Get": 2,
+        "DocumentReference.Update": 2,
+        "Transaction.Run": 1
+      }
+    },
+    {
+      "route": "/workflows/exec/status/latest/:id",
+      "service": "awfl-api",
+      "duration_ms": 1379,
+      "db_covered_ms": 1141,
+      "sdk_count": 6,
+      "methods": {
+        "DocumentReference.Get": 5,
+        "Query.Get": 1
+      }
+    }
+  ],
+  "window_start": "2026-11-14T04:25:00Z",
+  "window_end": "2026-11-14T04:55:00Z",
+  "pagination_truncated": false
+}
