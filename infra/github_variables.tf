@@ -48,6 +48,9 @@ resource "local_file" "actions_variables" {
     # artifact bucket. The independent infra/native-execution root owns
     # queue and Jobs IAM, with its own GCS remote state.
     AWFL_NATIVE_EXECUTION_ENABLED      = "1"
+    # Native published workflows use the in-process memory executor. The
+    # durable executor remains available for pinned existing executions.
+    AWFL_NATIVE_MEMORY_EXECUTION_ENABLED = "1"
     AWFL_NATIVE_ARTIFACT_BUCKET        = lower("${var.project_id}-native-workflows")
     AWFL_NATIVE_TASK_QUEUE             = "native-executions"
     AWFL_NATIVE_TASK_SERVICE_ACCOUNT   = "awfl-native-task-invoker@${var.project_id}.iam.gserviceaccount.com"
