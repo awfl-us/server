@@ -360,7 +360,7 @@ jobs:
           JSON_FILE=".github/actions-variables.json"
           if [[ -f "$JSON_FILE" ]]; then
             # Build key=value;key=value ... from JSON. Values are treated as strings.
-            JSON_ENV_VARS=$(jq -r '[to_entries[] | select(.key != "AWFL_NATIVE_EXECUTION_ENABLED") | "\(.key)=\(.value|tostring)"] | join(";")' "$JSON_FILE")
+            JSON_ENV_VARS=$(jq -r '[to_entries[] | select(.key != "AWFL_NATIVE_EXECUTION_ENABLED" and .key != "AWFL_NATIVE_PROFILE_ENABLED") | "\(.key)=\(.value|tostring)"] | join(";")' "$JSON_FILE")
           else
             JSON_ENV_VARS=""
           fi
@@ -423,6 +423,12 @@ jobs:
             # after the first Cloud Task response. GKE handles durable recovery.
             JOBS_CPU_FLAGS=(--no-cpu-throttling --min-instances=1)
           fi
+          # Native phase profiler is Jobs-only, never API.
+          NATIVE_PROFILE_ENABLED="${AWFL_NATIVE_PROFILE_ENABLED:-0}"
+          if [[ "$NATIVE_PROFILE_ENABLED" != 0 && "$NATIVE_PROFILE_ENABLED" != 1 ]]; then
+            echo "AWFL_NATIVE_PROFILE_ENABLED must be 0 or 1" >&2
+            exit 1
+          fi
           gcloud run deploy "${CLOUD_RUN_JOBS_SERVICE}" \
             --quiet \
             --region="${GCP_REGION}" \
@@ -431,7 +437,7 @@ jobs:
             --no-allow-unauthenticated \
             --timeout=3600 \
             "${JOBS_CPU_FLAGS[@]}" \
-            --set-env-vars="^;^${{ steps.common_env.outputs.COMMON_ENV_VARS }};SERVICE_TARGET=start:jobs;CLOUD_RUN_LOCATION=${GCP_REGION};AWFL_NATIVE_DETACHED_GKE_ENABLED=${AWFL_NATIVE_EXECUTION_ENABLED:-0}" \
+            --set-env-vars="^;^${{ steps.common_env.outputs.COMMON_ENV_VARS }};SERVICE_TARGET=start:jobs;CLOUD_RUN_LOCATION=${GCP_REGION};AWFL_NATIVE_DETACHED_GKE_ENABLED=${AWFL_NATIVE_EXECUTION_ENABLED:-0};AWFL_NATIVE_PROFILE_ENABLED=${NATIVE_PROFILE_ENABLED}" \
             ${{ steps.secrets.outputs.SECRET_FLAGS }}
           gcloud run services update-traffic "${CLOUD_RUN_JOBS_SERVICE}" \
             --region="${GCP_REGION}" --to-latest --quiet
