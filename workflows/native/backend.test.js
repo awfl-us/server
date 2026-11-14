@@ -91,9 +91,10 @@ test('memory mode is pinned into release and IAM task only when enabled', async 
     const parallel = fixture(1, 1);
     await parallel.backend.maybeStart({ workflowName: 'NativePilot',
       userId: 'owner', projectId: 'project-a', argument: { env: {} } });
-    assert.equal(parallel.states.get(executionId).executionMode, undefined);
+    assert.equal(parallel.states.get(executionId).executionMode, 'memory');
+    assert.equal(parallel.states.get(executionId).parallelVersion, 1);
     assert.equal(JSON.parse(Buffer.from(parallel.tasks[0].task.httpRequest.body,
-      'base64').toString()).executionMode, undefined);
+      'base64').toString()).executionMode, 'memory');
   } finally {
     if (previous === undefined) delete process.env.AWFL_NATIVE_MEMORY_EXECUTION_ENABLED;
     else process.env.AWFL_NATIVE_MEMORY_EXECUTION_ENABLED = previous;

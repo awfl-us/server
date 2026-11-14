@@ -180,8 +180,8 @@ export class NativeExecutionStore {
       throw new Error('parallel-capable release must authorize native.parallel');
     }
     if (executionMode !== undefined && (executionMode !== 'memory' ||
-        protocolVersion !== 2 || parallelVersion === 1 || forkLane !== undefined)) {
-      throw new Error('memory execution requires a non-parallel protocol-v2 release');
+        protocolVersion !== 2 || forkLane !== undefined)) {
+      throw new Error('memory execution requires a root protocol-v2 release');
     }
     if (asyncLaunch !== undefined &&
         (asyncLaunch !== true || forkLane !== undefined || protocolVersion !== 2)) {

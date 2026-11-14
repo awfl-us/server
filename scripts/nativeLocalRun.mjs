@@ -11,6 +11,7 @@ const report = arg('--report') || process.env.AWFL_NATIVE_LOCAL_BUILD_REPORT;
 const inputFile = arg('--input') || process.env.AWFL_NATIVE_LOCAL_INPUT;
 const fixturesFile = arg('--fixtures') || process.env.AWFL_NATIVE_LOCAL_FIXTURES;
 const localJobsUrl = arg('--local-jobs-url');
+const executionMode = process.argv.includes('--memory') ? 'memory' : 'durable';
 if (!report || !inputFile || (!fixturesFile && !localJobsUrl)) {
   console.error('Usage: node scripts/nativeLocalRun.mjs --report <build-report.json> ' +
     '--input <projectmanager-input.json> --fixtures <recorded-http.json> [--live-storage]');
@@ -28,7 +29,7 @@ const result = await runLocalProjectManager({
     userId: process.env.AWFL_USER_ID,
     projectId: process.env.AWFL_PROJECT_ID,
   },
-  tokenFile, localJobsUrl,
+  tokenFile, localJobsUrl, executionMode,
 });
 console.log('AWFL_NATIVE_LOCAL_RESULT ' + JSON.stringify(result).slice(0, 12000));
 if (result.error || result.missing.length || result.status !== 'completed') {

@@ -153,6 +153,9 @@ jobs:
             workflows/native/forkCoordinator.test.js \
             workflows/native/nestedForkFencing.test.js \
             workflows/native/parallelIntegration.test.js \
+            workflows/native/memoryParallel.integration.test.js \
+            workflows/native/memoryWorker.test.js \
+            workflows/native/localWorkflows.test.js \
             workflows/native/realWorkflowIntegration.test.js \
             workflows/native/trustedGlobals.test.js \
             workflows/native/gcsReleases.test.js \

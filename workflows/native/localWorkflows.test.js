@@ -103,7 +103,7 @@ test('many calls to the same child reuse one release and executable', async () =
   assert.equal(calls.cleanup, 1);
 });
 
-test('rejects missing unpublished child, detached calls, and caller-selected GCP project', async () => {
+test('rejects missing unpublished child, unconfigured detached calls and caller-selected GCP project', async () => {
   const bad = [
     localArgs('LocalChild', {}, { connector_params: { skip_polling: true } }),
     localArgs('LocalChild', {}, { project_id: 'other-project' }),
@@ -121,7 +121,7 @@ test('rejects missing unpublished child, detached calls, and caller-selected GCP
     });
     await assert.rejects(runner.run({ workflowName: 'LocalParent',
       release: f.root, artifact: f.artifact, executionId: rootId, input: {} }),
-    /unauthorized local workflow.run arguments/);
+    /unauthorized local workflow.run arguments|memory detached scheduler unavailable/);
     assert.equal(f.calls.active.length, 0);
     await runner.close();
   }

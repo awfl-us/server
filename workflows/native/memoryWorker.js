@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { runNativeArtifact, buildNativeTrustedGlobals } from './runner.js';
 import { createNativeLocalRunner } from './localWorkflows.js';
 import { createNativeProgressWriter } from './progressWriter.js';
+import { createMemoryDetachedLauncher } from './memoryDetached.js';
 
 const EXECUTION_LEASE_MS = 30 * 60 * 1000; // Cloud Tasks dispatch deadline.
 const MAX_TRANSITIONS = 10_000;
@@ -13,7 +14,7 @@ export async function runNativeMemoryWorkflow({
   store, releases, handlers, executionId, userId, projectId,
   workerId = 'worker_' + randomUUID().replaceAll('-', ''),
   profiler = null, progressIntervalMs = 1500,
-  runArtifact = runNativeArtifact,
+  runArtifact = runNativeArtifact, asyncScheduler = null,
 }) {
   // The claim authenticates the owner and pins the execution in one
   // transaction. A second delivery cannot execute during this live lease.
@@ -25,8 +26,10 @@ export async function runNativeMemoryWorkflow({
   if (state.cancelled) return { status: 'cancelled' };
   if (state.executionMode !== 'memory' || state.status !== 'running' ||
       state.userId !== userId || state.projectId !== projectId ||
-      state.protocolVersion !== 2 || state.parallelVersion === 1 ||
-      !Array.isArray(state.allowedOperations) || !state.workflowName) {
+      state.protocolVersion !== 2 ||
+      !Array.isArray(state.allowedOperations) ||
+      (state.parallelVersion === 1) !==
+        state.allowedOperations.includes('native.parallel') || !state.workflowName) {
     throw new Error('native memory execution does not match pinned release and owner');
   }
 
@@ -55,15 +58,26 @@ export async function runNativeMemoryWorkflow({
   const close = async () => {
     if (!closed) { closed = true; await writer.close(); }
   };
+  // Non-detached tests and fixtures need only materialize(); resolve the
+  // durable child launcher on demand if a workflow actually detaches.
+  let detachedLauncher;
   const runner = createNativeLocalRunner({
     releases, handlers, rootExecutionId: executionId, identity, profiler,
     runArtifact, onProgress: progress => writer.publish(progress),
+    runDetached: request => {
+      detachedLauncher ||= createMemoryDetachedLauncher({
+        store, releases, handlers, executionId, userId, projectId,
+        asyncScheduler,
+      });
+      return detachedLauncher(request);
+    },
   });
   try {
     const result = await runner.run({
       workflowName: state.workflowName,
       release: { sha256: state.artifactSha256,
         allowedOperations: state.allowedOperations,
+        ...(state.parallelVersion === 1 && { parallelVersion: 1 }),
         ...(state.streamIpcVersion === 1 && { streamIpcVersion: 1 }) },
       artifact, input: state.input, executionId, globals,
     });
