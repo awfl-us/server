@@ -98,3 +98,23 @@ response and a real authenticated cloud call in reports. They are not
 interchangeable. Keep production native routing disabled until verified.
 
 **All permanent infrastructure/IAM changes must be in Terraform.**
+
+
+## Experimental memory-first parallel runner
+
+Run the existing local Project Manager harness with --memory to select
+the in-process memory executor (and omit it for the current durable
+executor). Continue passing --report, --input, and either --fixtures
+or --local-jobs-url; use --live-storage for authenticated GCS reads
+in a properly authorized local environment.
+
+The standalone CLI initializes Firebase before creating callback
+handlers. The development consumer may still lack Firestore write
+permissions. Treat a local Jobs PERMISSION_DENIED as an IAM/setup
+constraint, not a Rust failure, and avoid broadening IAM merely for
+the smoke test. Use a properly authenticated isolated Jobs canary.
+
+Each memory root persists only its own claim, optional observational
+progress, and final result; detached workflow.run children launch as
+independent durable roots. Existing production traffic continues using
+the durable executor until memory-parallel end-to-end validation passes.

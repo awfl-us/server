@@ -61,8 +61,9 @@ export class NativeWorkflowBackend {
     if (!active) return null; // Existing Google Workflows remains the default.
     const executionId = 'native_' + this.uuid().replaceAll('-', '');
     const memoryMode = process.env.AWFL_NATIVE_MEMORY_EXECUTION_ENABLED === '1' &&
-      active.protocolVersion === 2 && active.parallelVersion !== 1 &&
-      !active.allowedOperations.includes('native.parallel');
+      active.protocolVersion === 2 &&
+      (active.parallelVersion === 1) ===
+        active.allowedOperations.includes('native.parallel');
     await this.store.create({
       executionId, userId, projectId, input: argument,
       workflowName: deployedName, artifactSha256: active.sha256,

@@ -128,7 +128,7 @@ The pool is bounded at sixteen distinct compiled releases per execution
 tree; overflow uses one-shot IPC. Old releases remain compatible.
 
 
-## Planned memory-first Parallel / ParallelFor (not implemented)
+## Memory-first Parallel / ParallelFor — implementation and rollout status
 
 **Difficulty: moderate; primarily server runtime.** Compiled ABI-3/protocol-v2
 already supplies `native.parallel`, pinned `parallelVersion:1`,
@@ -191,3 +191,40 @@ contract. No DSL or Rust compiler rewrite is expected.
 
 **Not included:** distributed lane workers, durable per-lane
 recovery, Terraform/IAM, and detached/background agent behavior.
+
+
+### Implementation progress — November 13
+
+The feature branch implements memory-first Parallel and ParallelFor using
+the existing compiler-generated ABI 3/protocol 2 fork selectors, tagged
+captured slots, and ordered join outputs. The added
+memoryParallel.js scheduler shares one eight-effect concurrency budget
+across nested forks, while localWorkflows.js handles independent
+branch continuations and stable virtual lane identities. Repeated fork
+instructions and workflow calls inside loops get deterministic
+per-invocation ordinals rather than globally shared ordering.
+
+A detached workflow.run with skip_polling=true still launches a
+*separate durable execution*, with its own Firestore root record and
+persistent GKE dispatch, so its lifetime does not depend on the parent.
+Detached children are distinct from in-memory parallel lanes.
+
+Real compiled Rust fixture tests cover Parallel, ParallelFor (0/1/many),
+nested branches, overlapping effects, caught and uncaught branch Raise,
+and root-only persistence with no branch documents or effect journals.
+A real Firestore emulator integration test was added to the native CI
+suite, with duplicate-delivery fencing checks.
+
+The local Project Manager test runner now supports --memory. The
+development GKE consumer hit PERMISSION_DENIED on the real Jobs Firebase
+write, an existing local IAM limitation rather than a native compiler
+or fork/join failure. Do not grant broader development credentials to
+bypass this requirement: an isolated authenticated Jobs canary is the
+appropriate final end-to-end test.
+
+This implementation is gated and **not enabled in production**.
+The production Project Manager remains on durable native parallel.
+Before enabling memory mode for production Project Manager, complete
+isolated real-Jobs canary tests and compare latency/Firestore call counts.
+Cache-based recovery and potential repeated uncached side effects on a
+worker crash remain intentionally different from durable mode.

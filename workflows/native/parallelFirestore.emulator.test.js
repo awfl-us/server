@@ -14,6 +14,7 @@ import { initializeApp, deleteApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { NativeExecutionStore } from './executionStore.js';
 import { runNativeWorkflow } from './worker.js';
+import { runNativeMemoryWorkflow } from './memoryWorker.js';
 import { forkLaneId } from './forkCoordinator.js';
 
 const binary = process.env.AWFL_NATIVE_PARALLEL_BRANCHES_BINARY;
@@ -332,3 +333,66 @@ test('emulator + generated Rust: actual three-level nested forks journal and rep
     assert.equal(await f.execute(f.makeStore()), 'nested-complete');
     assert.equal(calls, 4, 'a fresh worker cannot re-dispatch nested effects');
   });
+
+
+test('emulator + generated Rust memory Parallel: root-only Firestore persistence', {
+  skip: !enabled, timeout: 120_000,
+}, async () => {
+  const collection = 'nativeMemoryParallelEmulator_' + randomUUID().replaceAll('-', '');
+  const executionId = 'native_' + randomUUID().replaceAll('-', '');
+  const artifactSha256 = createHash('sha256').update(await readFile(binary)).digest('hex');
+  const store = new NativeExecutionStore({ db, collection });
+  const userId = 'parallel-memory-owner', projectId = 'parallel-memory-project';
+  await store.create({
+    executionId, userId, projectId, workflowName: 'NativeMemoryParallel',
+    input: null, artifactSha256, protocolVersion: 2, parallelVersion: 1,
+    allowedOperations: ['native.parallel', 'http.post'],
+    executionMode: 'memory',
+  });
+  const releases = { materialize: async sha => {
+    assert.equal(sha, artifactSha256);
+    return { executable: binary, sha256: artifactSha256, cleanup: async () => {} };
+  } };
+  let active = 0, peak = 0, calls = 0, release, ready;
+  const barrier = new Promise(resolve => { release = resolve; });
+  const bothReady = new Promise(resolve => { ready = resolve; });
+  const handlers = { 'http.post': async ({ args }) => {
+    calls++;
+    active++; peak = Math.max(peak, active);
+    if (peak === 2) ready();
+    await barrier;
+    active--;
+    return args + '-memory';
+  } };
+  const execute = () => runNativeMemoryWorkflow({
+    store: new NativeExecutionStore({ db, collection }),
+    releases, executionId, userId, projectId, handlers,
+    progressIntervalMs: 60000,
+  });
+  const pending = execute();
+  let watchdog;
+  try {
+    await Promise.race([bothReady, new Promise((_, reject) => {
+      watchdog = setTimeout(() => reject(new Error('memory fork handlers serialized')), 20000);
+    })]);
+    await assert.rejects(execute(), /lease held/,
+      'second live delivery cannot steal memory root ownership');
+  } finally {
+    clearTimeout(watchdog);
+    release();
+  }
+  assert.deepEqual(await pending, { a: 'first-memory', b: 'second-memory' });
+  assert.equal(peak, 2);
+  assert.equal(calls, 2);
+  const state = await store.get(executionId);
+  assert.equal(state.status, 'completed');
+  assert.equal(state.effectCount, 3);
+  const documents = await db.collection(collection).get();
+  assert.equal(documents.size, 1,
+    'memory fork must not create durable lane records');
+  const journals = await db.collection(collection).doc(executionId)
+    .collection('effects').get();
+  assert.equal(journals.size, 0, 'memory execution must not create effect journals');
+  assert.deepEqual(await execute(), { a: 'first-memory', b: 'second-memory' });
+  assert.equal(calls, 2, 'terminal re-delivery must not repeat effects');
+});

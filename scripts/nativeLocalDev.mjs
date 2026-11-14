@@ -7,6 +7,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { NativeExecutionStore } from '../workflows/native/executionStore.js';
 import { runNativeWorkflow } from '../workflows/native/worker.js';
+import { runNativeMemoryWorkflow } from '../workflows/native/memoryWorker.js';
 import { createNativeLogEffectHandler } from '../workflows/native/logEffects.js';
 import { createNativeStorageEffectHandler } from '../workflows/native/storageEffects.js';
 import { createNativeCallbackEffects } from '../workflows/native/callbackEffects.js';
@@ -257,7 +258,7 @@ export function createLiveGcsStorage(tokenFile) {
 export async function runLocalProjectManager({
   reportPath, input, fixtures = {}, identity, tokenFile = null,
   jobsOrigin = DEFAULT_ORIGIN, localJobsUrl = null, maxTransitions = 120,
-  log = console.log,
+  executionMode = 'durable', log = console.log,
 }) {
   if (!identity?.userId || !identity?.projectId) {
     throw new Error('explicit authenticated development identity required');
@@ -277,6 +278,7 @@ export async function runLocalProjectManager({
     ...(root.parallelVersion === 1 && { parallelVersion: 1 }),
     ...(root.trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
     ...(root.streamIpcVersion === 1 && { streamIpcVersion: 1 }),
+    ...(executionMode === 'memory' && { executionMode: 'memory' }),
     input,
   });
   const seen = [], missing = [], storageErrors = [], failedRequests = [];
@@ -292,6 +294,12 @@ export async function runLocalProjectManager({
   // user-scoped credential preloader.
   let callbackHandlers = {};
   if (localJobsUrl) {
+    // This is a standalone test CLI, unlike the normal Jobs Express
+    // application which initializes Firebase before mounting handlers.
+    const { getApps, initializeApp } = await import('firebase-admin/app');
+    if (getApps().length === 0) {
+      initializeApp({ projectId: process.env.GCP_PROJECT || 'awfl-us' });
+    }
     const { getFirestore } = await import('firebase-admin/firestore');
     const actualCallbacks = createNativeCallbackEffects({
       db: getFirestore(), jobsOrigin,
@@ -324,7 +332,9 @@ export async function runLocalProjectManager({
   let result, error;
   const start = performance.now();
   try {
-    result = await runNativeWorkflow({
+    const run = executionMode === 'memory'
+      ? runNativeMemoryWorkflow : runNativeWorkflow;
+    result = await run({
       store, releases, executionId,
       userId: identity.userId, projectId: identity.projectId,
       handlers, maxTransitions,
@@ -353,7 +363,7 @@ export async function runLocalProjectManager({
     }
   }
   return {
-    executionId, durationMs: Math.round(performance.now() - start),
+    executionId, executionMode, durationMs: Math.round(performance.now() - start),
     result, error, status: state.status, effectCount: state.effectCount,
     fixtureCalls: seen, missing, storageErrors, failedRequests,
     lanes: [...db._docs.entries()].filter(([key]) =>
