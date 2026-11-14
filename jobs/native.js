@@ -2,6 +2,7 @@
 // --no-allow-unauthenticated; workflowsUserInject has already trusted the
 // upstream IAM-authenticated service and extracted the forwarded user ID.
 import express from 'express';
+import { trace } from '@opentelemetry/api';
 import { getFirestore } from 'firebase-admin/firestore';
 import { Storage } from '@google-cloud/storage';
 import { NativeExecutionStore } from '../workflows/native/executionStore.js';
@@ -47,6 +48,11 @@ export function createNativeJobsRouter({
         jobsOrigin: process.env.AWFL_NATIVE_JOBS_URL,
         profiler, storage: new Storage(), callbackDb: getFirestore(),
       });
+      const span = trace.getActiveSpan();
+      if (span?.isRecording()) {
+        span.setAttribute('awfl.execution_id', executionId);
+        span.setAttribute('awfl.execution_mode', req.body.executionMode === 'memory' ? 'memory' : 'durable');
+      }
       const runner = req.body.executionMode === 'memory'
         ? executeMemory : execute;
       const result = await runner({

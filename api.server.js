@@ -1,5 +1,7 @@
+import './observability/firestoreTracing.js';
 import consumerCredentialRefresh from './workflows/googleCloud/consumerRefresh.js';
 import express from 'express'
+import { tracedRequest } from './observability/requestTracing.js'
 import workflowsRoutes from './workflows/index.js'
 import { getFirestore } from 'firebase-admin/firestore'
 import { ExecutionService } from './mcp/service.js'
@@ -10,6 +12,7 @@ import { githubAppCallback } from './workflows/githubApp/index.js'
 import { googleCloudCallback } from './workflows/googleCloud/index.js'
 
 const app = express()
+app.use(tracedRequest)
 app.use(express.json({ limit: '1mb' }))
 
 // --- CORS for prod (api.awfl.us) ---

@@ -84,11 +84,33 @@ resource "kubernetes_deployment_v1" "native_scheduler" {
       spec {
         service_account_name             = kubernetes_service_account_v1.native_scheduler.metadata[0].name
         termination_grace_period_seconds = 45
+        # Match the existing live pod security/scheduling configuration.
+        security_context {
+          run_as_non_root = false
+          seccomp_profile {
+            type = "RuntimeDefault"
+          }
+        }
+        toleration {
+          key      = "kubernetes.io/arch"
+          operator = "Equal"
+          value    = "amd64"
+          effect   = "NoSchedule"
+        }
 
         container {
           name              = "jobs"
           image             = var.native_jobs_image
           image_pull_policy = "Always"
+          security_context {
+            allow_privilege_escalation = false
+            privileged                 = false
+            read_only_root_filesystem = false
+            run_as_non_root            = false
+            capabilities {
+              drop = ["NET_RAW"]
+            }
+          }
 
           port {
             name           = "http"
@@ -126,6 +148,15 @@ resource "kubernetes_deployment_v1" "native_scheduler" {
             name  = "AWFL_NATIVE_PERSISTENT_WORKER"
             value = "1"
           }
+          # Same in-process Firestore tracing as Cloud Run Jobs.
+          env {
+            name  = "AWFL_FIRESTORE_TRACE_ENABLED"
+            value = "1"
+          }
+          env {
+            name  = "AWFL_FIRESTORE_TRACE_SAMPLE_RATE"
+            value = "0.25"
+          }
           env {
             name  = "AWFL_NATIVE_ARTIFACT_BUCKET"
             value = "${var.project_id}-native-workflows"
@@ -156,7 +187,7 @@ resource "kubernetes_deployment_v1" "native_scheduler" {
             limits = {
               cpu               = "2000m"
               memory            = "4Gi"
-              ephemeral-storage = "2Gi"
+              ephemeral-storage = "1Gi"
             }
           }
 
