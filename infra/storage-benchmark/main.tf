@@ -21,6 +21,12 @@ variable "client_service_account" {
   type    = string
   default = "awfl-consumer@awfl-us.iam.gserviceaccount.com"
 }
+variable "benchmark_user_email" {
+  type        = string
+  description = "Optional Google account permitted to connect via Cloud SQL IAM authentication"
+  default     = ""
+}
+
 provider "google" {
   project = var.project_id
   region  = var.region
@@ -99,6 +105,26 @@ resource "google_sql_user" "benchmark" {
   type           = "CLOUD_IAM_SERVICE_ACCOUNT"
   database_roles = ["cloudsqlsuperuser"]
 }
+resource "google_sql_user" "benchmark_user" {
+  count    = var.benchmark_user_email == "" ? 0 : 1
+  project  = var.project_id
+  instance = google_sql_database_instance.benchmark.name
+  name     = var.benchmark_user_email
+  type     = "CLOUD_IAM_USER"
+}
+resource "google_project_iam_member" "bench_user_cloudsql_connect" {
+  count   = var.benchmark_user_email == "" ? 0 : 1
+  project = var.project_id
+  role    = "roles/cloudsql.client"
+  member  = "user:${var.benchmark_user_email}"
+}
+resource "google_project_iam_member" "bench_user_cloudsql_login" {
+  count   = var.benchmark_user_email == "" ? 0 : 1
+  project = var.project_id
+  role    = "roles/cloudsql.instanceUser"
+  member  = "user:${var.benchmark_user_email}"
+}
+
 resource "google_project_iam_member" "bench_cloudsql_connect" {
   project = var.project_id
   role    = "roles/cloudsql.client"
