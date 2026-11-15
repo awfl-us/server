@@ -17,10 +17,28 @@ if (!['firestore', 'rtdb', 'postgres'].includes(backend) || !Number.isInteger(ru
 }
 async function createBackend() {
   if (backend === 'firestore') {
-    const { initializeApp, getApps } = await import('firebase-admin/app');
-    const { getFirestore } = await import('firebase-admin/firestore');
-    if (!getApps().length) initializeApp({projectId:process.env.GCP_PROJECT_ID || 'awfl-us'});
-    return new FirestoreAtomicRecords({db:getFirestore(),collection:'nativeStorageBenchmark'});
+    let db;
+    if (process.env.GOOGLE_ACCESS_TOKEN_FILE && !process.env.FIRESTORE_EMULATOR_HOST) {
+      // Use the exact injected user OAuth principal without granting the GKE
+      // runtime broad Firestore IAM roles just for the benchmark.
+      const { Firestore } = await import('@google-cloud/firestore');
+      const { GoogleAuth, OAuth2Client } = await import('google-auth-library');
+      const token = (await readFile(process.env.GOOGLE_ACCESS_TOKEN_FILE, 'utf8')).trim();
+      if (!token) throw new Error('injected Firestore token file is empty');
+      const oauth = new OAuth2Client();
+      oauth.setCredentials({access_token:token, expiry_date:Date.now()+20*60_000});
+      const auth = new GoogleAuth({projectId:process.env.GCP_PROJECT_ID || 'awfl-us'});
+      // google-gax supports passing a GoogleAuth instance via Firestore's
+      // settings. The public Admin SDK does not expose OAuth token injection.
+      auth.getClient = async () => oauth;
+      db = new Firestore({projectId:process.env.GCP_PROJECT_ID || 'awfl-us',auth});
+    } else {
+      const { initializeApp, getApps } = await import('firebase-admin/app');
+      const { getFirestore } = await import('firebase-admin/firestore');
+      if (!getApps().length) initializeApp({projectId:process.env.GCP_PROJECT_ID || 'awfl-us'});
+      db = getFirestore();
+    }
+    return new FirestoreAtomicRecords({db,collection:'nativeStorageBenchmark'});
   }
   if (backend === 'rtdb') {
     const emulatorHost = process.env.RTDB_EMULATOR_HOST;
@@ -87,6 +105,10 @@ const begun = Date.now();
 try {
   // Prime SDK auth, pool, and TCP/TLS setup before recording samples.
   for (let i=0;i<warmup;i++) await sequence(-i-1,false);
+  const warmupFailures = errors.length;
+  if (warmupFailures) {
+    throw new Error(`${backend}: ${warmupFailures} warmup cycles failed: ${JSON.stringify(errors.slice(0, 3))}`);
+  }
   const runIndex = { next:0 };
   await Promise.all(Array.from({length:concurrency}, async () => {
     while (runIndex.next<runs) {
@@ -94,7 +116,14 @@ try {
       await sequence(i,true);
     }
   }));
-  const output={backend,region:'us-central1',runs,concurrency,warmup,durationMs:Date.now()-begun,
+  const emulator = backend === 'firestore' ? Boolean(process.env.FIRESTORE_EMULATOR_HOST)
+    : backend === 'rtdb' && Boolean(process.env.RTDB_EMULATOR_HOST);
+  const localPostgres = backend === 'postgres' &&
+    ['127.0.0.1', 'localhost', '::1'].includes(process.env.PGHOST || '127.0.0.1') &&
+    !process.env.CLOUD_SQL_PROXY_INSTANCE;
+  const environment = emulator ? 'firebase-emulator' : localPostgres ? 'postgres-local-or-proxy' : 'managed-gcp';
+  const output={backend,environment,region: process.env.GCP_REGION || 'us-central1',
+    runs,concurrency,warmup,durationMs:Date.now()-begun,
     latencyMs:timings.report(),failures:errors.length,
     errorExamples:errors.slice(0,5)};
   console.log(JSON.stringify(output,null,2));

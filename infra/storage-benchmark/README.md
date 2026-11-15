@@ -36,3 +36,15 @@ Cloud SQL Auth Proxy for the same principal, and never commit credential values.
 
 See `docs/storage-pilot-managed-firestore-baseline-2026-11-14.md` for a
 read-only managed Firestore latency sample and the current provisioning status.
+
+## Provisioned managed benchmark status (Nov 14 ET / Nov 15 UTC)
+
+The isolated RTDB and Cloud SQL PostgreSQL 15 `db-f1-micro` resources have now
+been provisioned via the injected user OAuth token, and the final Terraform
+plan returned **No changes**. RTDB client security rules deny all end users;
+Cloud SQL authenticates via IAM, without static database passwords. The
+Cloud SQL instance continues to incur the benchmark's idle instance cost even
+when no benchmarks are running. Terraform owns all created resources.
+
+See the managed three-way benchmark report in
+`../../docs/storage-pilot-managed-three-backend-benchmark-2026-11-14.md`.

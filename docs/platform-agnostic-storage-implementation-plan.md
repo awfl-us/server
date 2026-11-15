@@ -1,12 +1,12 @@
 # AWFL platform-agnostic document storage: audit and implementation plan
 
-Status: proposed full-platform design; scoped three-backend investigation approved. No production backend cutover.
+Status: full-platform design still proposed; Phase 0A managed three-backend benchmark **completed** November 14, 2026 ET. No production backend cutover.
 Date: November 13, 2026 (ET).
 Initial backend: existing production Firestore. Future backends: optional and not part of this migration.
 
 ## Phase 0A — Three-backend execution-state investigation (November 14, 2026)
 
-**Approved next work:** build the smallest executable storage contract around a native **memory-mode root execution's** lifecycle, and benchmark **Firestore (current `nam5`), Firebase Realtime Database (`us-central1`), and Cloud SQL PostgreSQL (`db-f1-micro`, `us-central1`)** using identical calls from the same AWFL GKE/Jobs environment. This supersedes the earlier assumption that the first phase has no alternative backend or infrastructure; it does **not** authorize a production data cutover.
+**Original investigation scope (implemented and benchmarked):** build the smallest executable storage contract around a native **memory-mode root execution's** lifecycle, and benchmark **Firestore (current `nam5`), Firebase Realtime Database (`us-central1`), and Cloud SQL PostgreSQL (`db-f1-micro`, `us-central1`)** using identical calls from the same AWFL GKE/Jobs environment. This supersedes the earlier assumption that the first phase has no alternative backend or infrastructure; it does **not** authorize a production data cutover.
 
 Scope the pilot to `create/get/claim/progress/complete` on one root execution record, with safe owner/epoch fencing, cancellation-conflict behavior, create-only and concurrent-claim tests. Preserve existing `NativeExecutionStore` API semantics. Keep the public design objective of one complete document `Storage` interface including subscriptions and transactions, but explicitly distinguish **pilot-verified single-record semantics** from full platform conformance. An RTDB adapter must not silently claim support for Firestore cross-document transactions, collection-group queries, or subscriptions with identical ordering. These capabilities must be emulated with formally tested algorithms or fail closed before use; do not load an incomplete adapter as general production `Storage`.
 
@@ -21,15 +21,15 @@ Implementation steps:
 
 **Exit:** all three adapters pass the shared pilot contract and have comparable measured distributions, or record an explicit blocker with completed measurements. Select the eventual full backend based on latency *and* semantics, not just fast unguarded writes. Retain the full-platform phased migration described below.
 
-**Managed-service verification:** [read-only Cloud Firestore latency and correct injected OAuth identity](storage-pilot-managed-firestore-baseline-2026-11-14.md) documents 55 warmed reads (p50 34.11 ms); RTDB and Cloud SQL instances are not yet provisioned.
+**Phase 0A completed — actual managed-service measurements:** [Firestore vs RTDB vs PostgreSQL 15 `db-f1-micro`, 1,800 successful execution lifecycles](storage-pilot-managed-three-backend-benchmark-2026-11-14.md), plus six committed raw JSON outputs. Firestore guarded completion p50 45.06 ms; RTDB 40.49 ms; PostgreSQL 5.20 ms. The older [read-only Firestore measurement](storage-pilot-managed-firestore-baseline-2026-11-14.md) was a pre-provisioning snapshot and does not supersede the completed benchmark.
 
 **Local measured baseline:** See [storage pilot local PostgreSQL results](storage-pilot-local-results-2026-11-14.md) for actual 400+400-cycle measurements; serial local PostgreSQL completion p50 1.93 ms and p95 2.96 ms, with 16-concurrent p50 14.88 ms and p95 83.83 ms. This is not a Cloud SQL nor three-backend comparison.
 
-**Implementation update (November 14, 2026):**
+**Historical implementation checkpoint (before managed resources were created, November 14, 2026):**
 - Branch/PR: `feat/storage-execution-benchmark` / server PR #121. A local provider-neutral single-record `AtomicRecords` contract, `NativeMemoryExecutionPilotStore`, Firestore adapter, Realtime Database REST ETag CAS adapter, PostgreSQL JSONB adapter, common benchmark harness, Terraform stack and CI checks are implemented.
 - Unit/mock SQL contract tests: 7 passing. Terraform 1.13.5 `init -backend=false` and `validate` succeeded using Google providers 7.46.2; this is syntax/schema validation, not a cloud apply.
-- **Not done:** real RTDB/Cloud SQL provisioning, live three-way timings, full platform Storage extraction, cross-document transaction/subscription conformance and backend cutover.
-- **Cloud IAM blocker:** current GKE consumer cannot list the existing `tfstate-awfl-web` bucket; Cloud SQL Admin API is disabled. The existing GitHub Cloud Run deploy identity lacks the required state/IAM/Firebase/SQL provisioning rights. Run the dedicated Terraform stack with an already authorized infrastructure identity, or bootstrap an appropriately limited CI infrastructure identity via the main Terraform stack. No unmanaged GCP resources or local Terraform state.
+- **Remaining after Phase 0A:** full platform Storage extraction, cross-document transaction/subscription conformance, and any actual production backend cutover. Live RTDB/Cloud SQL provisioning and benchmark measurements are complete; see the Phase 0A report above.
+- **Resolved infrastructure authentication:** The GKE consumer has a separate injected **Google user OAuth token** with project Owner permissions; `gcloud auth list` incorrectly suggested the token itself belonged to `awfl-consumer`. Terraform used the user token for managed GCS state and provider access, provisioned RTDB and Cloud SQL, and reached a final no-change plan. Cloud SQL used workload identity `awfl-consumer` via IAM Auth Proxy for benchmarks. No unmanaged GCP resources or local Terraform state.
 - **Release policy:** incremental code and safely disabled adapters can merge to `main` and flow through production CI/CD as tests pass. A real state-backend switch remains gated by per-provider correctness tests, live benchmark results and a consistent creation/read/execution routing plan, to avoid splitting in-flight records across databases.
 
 

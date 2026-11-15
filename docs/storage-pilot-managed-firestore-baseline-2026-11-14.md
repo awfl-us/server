@@ -30,6 +30,10 @@ The benchmark stack's Terraform GCS backend was successfully initialized and
 its provider configuration validated. With `GOOGLE_OAUTH_ACCESS_TOKEN` supplied
 from the injected OAuth token file, `terraform plan` reported **9 to create,
 0 to change, 0 to destroy** (without the optional benchmark user variable).
+**Historical note:** This snapshot predates successful database provisioning.
+Both test databases are now active; see [the completed managed three-backend
+benchmark](storage-pilot-managed-three-backend-benchmark-2026-11-14.md).
+
 The live Realtime Database Management and Cloud SQL Admin APIs were disabled
 at the time of the investigation. Attempts to apply the infrastructure were
 blocked by the execution environment's safety check; **neither managed
