@@ -17,7 +17,7 @@ import { createNativeProfiler } from '../workflows/native/profiler.js';
 const verifiedNativeArtifacts = new Map();
 
 export function createNativeJobsRouter({
-  store, releases, handlers, execute = runNativeWorkflow,
+  store, memoryStore, releases, handlers, execute = runNativeWorkflow,
   executeMemory = runNativeMemoryWorkflow,
 } = {}) {
   const router = express.Router();
@@ -39,7 +39,10 @@ export function createNativeJobsRouter({
       profiler = createNativeProfiler({
         enabled: process.env.AWFL_NATIVE_PROFILE_ENABLED === '1', executionId,
       });
-      const nativeStore = store || new NativeExecutionStore({ db: getFirestore() });
+      // The pilot memory-root execution store can be injected for isolated tests.
+      // Production keeps using NativeExecutionStore unless explicitly composed.
+      const nativeStore = req.body.executionMode === 'memory' && memoryStore
+        ? memoryStore : (store || new NativeExecutionStore({ db: getFirestore() }));
       const nativeReleases = releases || new NativeGcsReleases({
         storage: new Storage(), bucket: process.env.AWFL_NATIVE_ARTIFACT_BUCKET,
         verifiedCache: verifiedNativeArtifacts,
