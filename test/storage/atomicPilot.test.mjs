@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { FirestoreAtomicRecords } from '../../storage/pilot/adapters/firestore.js';
 import { RealtimeAtomicRecords } from '../../storage/pilot/adapters/realtime.js';
+import { PostgresAtomicRecords } from '../../storage/pilot/adapters/postgres.js';
 import { NativeMemoryExecutionPilotStore } from '../../storage/pilot/memoryExecutionState.js';
 import { RecordConflictError } from '../../storage/pilot/contract.js';
 
@@ -41,10 +42,32 @@ function realtimeDb() {
   };
   return new RealtimeAtomicRecords({databaseURL:'https://example.firebaseio.com',tokenProvider:async()=> 'fake', fetchImpl});
 }
+// SQL-aware in-memory pool exercising pg's command and transaction sequencing.
+// Not a substitute for the live Cloud SQL PostgreSQL benchmark.
+function fakePgPool() {
+  const records = new Map();
+  const query = async (sql, values = []) => {
+    if (/^CREATE TABLE/i.test(sql)) return { rows: [], rowCount: 0 };
+    if (/^SELECT state/i.test(sql)) return { rows: records.has(values[0]) ?
+      [{ state: structuredClone(records.get(values[0])) }] : [], rowCount: records.has(values[0]) ? 1 : 0 };
+    if (/^INSERT INTO/i.test(sql)) {
+      const [id, json] = values;
+      const existed = records.has(id);
+      if (!existed || /DO UPDATE/.test(sql)) records.set(id, JSON.parse(json));
+      return {rows:[],rowCount:existed && /DO NOTHING/.test(sql) ? 0 : 1};
+    }
+    if (/^UPDATE/i.test(sql)) { records.set(values[0], JSON.parse(values[1])); return {rows:[],rowCount:1}; }
+    if (/^DELETE/i.test(sql)) { records.delete(values[0]); return {rows:[],rowCount:1}; }
+    if (/^(BEGIN|COMMIT|ROLLBACK)$/i.test(sql)) return {rows:[],rowCount:0};
+    throw new Error(`unexpected SQL ${sql}`);
+  };
+  const pool = { query, connect:async()=>({query,release:()=>{}}),end:async()=>{} };
+  return new PostgresAtomicRecords({pool});
+}
 const state = { userId:'u1', projectId:'p1', artifactSha256:'a'.repeat(64),
   input:{hello:'world'}, workflowName:'ProjectManager', allowedOperations:['http.post'],
   protocolVersion:2, executionMode:'memory' };
-for (const [kind, builder] of [['Firestore adapter', fireDb], ['Realtime ETag adapter', realtimeDb]]) {
+for (const [kind, builder] of [['Firestore adapter', fireDb], ['Realtime ETag adapter', realtimeDb], ['PostgreSQL adapter SQL lifecycle', fakePgPool]]) {
   test(`${kind}: memory execution ownership and terminal invariants`, async () => {
     const records = builder();
     const store = new NativeMemoryExecutionPilotStore({records});
