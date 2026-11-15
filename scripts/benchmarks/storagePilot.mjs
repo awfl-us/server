@@ -94,7 +94,14 @@ try {
       await sequence(i,true);
     }
   }));
-  const output={backend,region:'us-central1',runs,concurrency,warmup,durationMs:Date.now()-begun,
+  const emulator = backend === 'firestore' ? Boolean(process.env.FIRESTORE_EMULATOR_HOST)
+    : backend === 'rtdb' && Boolean(process.env.RTDB_EMULATOR_HOST);
+  const localPostgres = backend === 'postgres' &&
+    ['127.0.0.1', 'localhost', '::1'].includes(process.env.PGHOST || '127.0.0.1');
+  const environment = emulator ? 'firebase-emulator' : localPostgres ? 'local-postgres' : 'remote';
+  const output={backend,environment,region: environment==='remote' ?
+    (process.env.GCP_REGION || 'us-central1') : null,
+    runs,concurrency,warmup,durationMs:Date.now()-begun,
     latencyMs:timings.report(),failures:errors.length,
     errorExamples:errors.slice(0,5)};
   console.log(JSON.stringify(output,null,2));

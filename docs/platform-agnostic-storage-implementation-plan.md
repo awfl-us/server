@@ -21,6 +21,8 @@ Implementation steps:
 
 **Exit:** all three adapters pass the shared pilot contract and have comparable measured distributions, or record an explicit blocker with completed measurements. Select the eventual full backend based on latency *and* semantics, not just fast unguarded writes. Retain the full-platform phased migration described below.
 
+**Three-backend local investigation:** [Firebase emulator vs local PostgreSQL execution-state benchmark](storage-pilot-local-three-backend-benchmark-2026-11-14.md) records both emulators and PostgreSQL on the AWFL GKE consumer (75 serial and 75 concurrent cycles each, zero errors). These are loopback/emulator results, not managed-service latency or db-f1-micro performance.
+
 **Local measured baseline:** See [storage pilot local PostgreSQL results](storage-pilot-local-results-2026-11-14.md) for actual 400+400-cycle measurements; serial local PostgreSQL completion p50 1.93 ms and p95 2.96 ms, with 16-concurrent p50 14.88 ms and p95 83.83 ms. This is not a Cloud SQL nor three-backend comparison.
 
 **Implementation update (November 14, 2026):**
