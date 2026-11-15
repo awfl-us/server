@@ -1,8 +1,25 @@
 # AWFL platform-agnostic document storage: audit and implementation plan
 
-Status: proposed design; audit and plan only. No runtime, SDK, data, IAM, or Terraform changes in this work.
+Status: proposed full-platform design; scoped three-backend investigation approved. No production backend cutover.
 Date: November 13, 2026 (ET).
 Initial backend: existing production Firestore. Future backends: optional and not part of this migration.
+
+## Phase 0A — Three-backend execution-state investigation (November 14, 2026)
+
+**Approved next work:** build the smallest executable storage contract around a native **memory-mode root execution's** lifecycle, and benchmark **Firestore (current `nam5`), Firebase Realtime Database (`us-central1`), and Cloud SQL PostgreSQL (`db-f1-micro`, `us-central1`)** using identical calls from the same AWFL GKE/Jobs environment. This supersedes the earlier assumption that the first phase has no alternative backend or infrastructure; it does **not** authorize a production data cutover.
+
+Scope the pilot to `create/get/claim/progress/complete` on one root execution record, with safe owner/epoch fencing, cancellation-conflict behavior, create-only and concurrent-claim tests. Preserve existing `NativeExecutionStore` API semantics. Keep the public design objective of one complete document `Storage` interface including subscriptions and transactions, but explicitly distinguish **pilot-verified single-record semantics** from full platform conformance. An RTDB adapter must not silently claim support for Firestore cross-document transactions, collection-group queries, or subscriptions with identical ordering. These capabilities must be emulated with formally tested algorithms or fail closed before use; do not load an incomplete adapter as general production `Storage`.
+
+Implementation steps:
+
+1. Create an SDK-independent pilot operation contract and driver-level latency hook; add independent adapters for current Firestore, Admin SDK RTDB, and PostgreSQL using `pg`, with predictable errors and one stable JSON schema. Prefer provider-specific packages according to the long-term layout; a local workspace implementation is acceptable for the **experiment only**, with follow-up extraction tracked.
+2. Apply the contract to a small, isolated **memory-root execution-state path** behind an explicit selection/injection boundary; default all production API/Jobs/agent execution to the unchanged Firestore path. Do not change durable effect journals, detached-branch ancestry validation or event subscriptions. Never route an existing in-flight execution to a different backend.
+3. Add Terraform for a dedicated RTDB instance and Cloud SQL `db-f1-micro` PostgreSQL 15+ **ZONAL** instance (smallest supported disk), service APIs, database, IAM/network access and benchmark credentials. No committed plaintext passwords and no public authorized CIDRs. Use IAM database authentication and an authenticated Cloud SQL connector/proxy or private IP; permit a narrow benchmark SA only. RTDB instance/security rules must deny all end-user access; Admin-only benchmark paths. Keep the cloud resources separately identifiable and removable.
+4. Validate correctness before latency: concurrent claimant fencing, expired lease, terminal result immutability, missing key, owner/epoch mismatch, cancel vs complete and replay; test small (1–4 KiB) and realistic 4–64 KiB payloads. Do not benchmark only raw writes when application requires transactional completion.
+5. Run warmed, serial and concurrent benchmark operations with persistent SDK/database connections **from the same compute location**. Measure end-to-end `get`, `create`, `claim`, `progress`, `complete`; additionally report the corresponding raw read/write. Report p50/p90/p95/p99, per-operation count, failures, retries, concurrency, sample size, SQL sync durability and connection/TLS setup separately. Compare median and tail latency, not just aggregate time. Reuse only test records under a unique prefix and clean them after.
+6. Commit adapter source, tests, Terraform and documented commands/results; record database version, tier, location and predicted ongoing cost. Keep Terraform state in the existing managed state workflow, never check in credentials. Do not claim benchmarks for a database unless the resources were provisioned and the operations actually executed.
+
+**Exit:** all three adapters pass the shared pilot contract and have comparable measured distributions, or record an explicit blocker with completed measurements. Select the eventual full backend based on latency *and* semantics, not just fast unguarded writes. Retain the full-platform phased migration described below.
 
 ## Decision
 
