@@ -59,3 +59,28 @@ Terraform-capable infrastructure identity must provision the dedicated stack.
 Do not work around this by creating resources outside Terraform or checking
 in a local Terraform state file. Until provisioned, there are no legitimate
 three-backend measured latency results.
+
+### Local Firebase emulator verification (no GCP credentials)
+
+This verifies **real local** Firebase Admin SDK/Firestore transactions and
+Realtime Database REST ETag conditional writes against emulators. It does not
+approximate cloud network latency or Firestore multi-region commit time.
+Install a compatible JDK (21+) and `firebase-tools`, then run from repo root:
+
+```
+firebase emulators:exec --only firestore,database --project demo-awfl \
+  --config scripts/benchmarks/firebase.emulators.json \
+  './scripts/benchmarks/runFirebaseEmulatorPilot.sh'
+```
+
+To also measure local emulator timings, prefix the command with `BENCHMARK=1`
+(and optionally `BENCHMARK_RUNS=200 BENCHMARK_CONCURRENCY=16`). The demo
+rules in `firebase.emulator.rules.json` are intentionally permissive and must
+**never** be deployed to production. The RTDB adapter permits unauthenticated
+plain HTTP only in explicit loopback-emulator mode; its production path still
+requires HTTPS and an OAuth token provider. The conformance test covers 16
+competing claims, create-only semantics, owner fencing, progress and completion.
+
+**Verified locally on Nov 14 ET / Nov 15 UTC:** the Firebase emulators (Cloud
+Firestore emulator v1.22.0, Realtime Database emulator v4.11.2) passed all
+four live-emulator test assertions with the provider adapters; zero failures.
