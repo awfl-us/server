@@ -21,12 +21,30 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: benchmark-ci
+          POSTGRES_USER: benchmark-ci
+          POSTGRES_DB: benchmark_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U benchmark-ci"
+          --health-interval 3s
+          --health-timeout 5s
+          --health-retries 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Test execution-state contract and mocked adapters
+      - name: Install PostgreSQL client for real integration test
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Test execution-state contract and mocked adapters plus real PostgreSQL concurrency
+        env:
+          PGTEST_URL: postgres://benchmark-ci:benchmark-ci@127.0.0.1:5432/benchmark_ci
         run: node --test test/storage/*.test.mjs
       - uses: hashicorp/setup-terraform@v3
         with:
