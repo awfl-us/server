@@ -27,5 +27,5 @@ export class FirestoreAtomicRecords {
     });
   }
   async delete(key) { await this.ref(key).delete(); }
-  async close() {}
+  async close() { if (typeof this.db.terminate === 'function') await this.db.terminate(); }
 }

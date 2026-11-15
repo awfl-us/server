@@ -52,13 +52,15 @@ and are excluded from success latency distributions. A dedicated benchmark
 identity needs `roles/datastore.user` for the Firestore baseline. No live
 successful comparison has been recorded yet.
 
-**Current provisioning block:** The AWFL cloud consumer identity does not have
-read access to the remote Terraform state bucket and neither it nor the GitHub
-Cloud Run deployer has permissions to administer the requested databases. A
-Terraform-capable infrastructure identity must provision the dedicated stack.
-Do not work around this by creating resources outside Terraform or checking
-in a local Terraform state file. Until provisioned, there are no legitimate
-three-backend measured latency results.
+**Managed benchmark completed:** The dedicated RTDB and `db-f1-micro` Cloud SQL
+PostgreSQL instances are provisioned through the Terraform stack and its
+shared GCS backend. The injected **user OAuth token** has the project Owner
+rights needed for Terraform; do not confuse it with the `gcloud` configured
+account label. The real 300-cycle sequential and 300-cycle 16-worker results
+per backend are documented in
+`docs/storage-pilot-managed-three-backend-benchmark-2026-11-14.md` along with
+all six raw JSON result files. All 1,800 measured lifecycles succeeded. See
+that report for significant high-concurrency PostgreSQL tail latency.
 
 ### Local Firebase emulator verification (no GCP credentials)
 
@@ -84,3 +86,29 @@ competing claims, create-only semantics, owner fencing, progress and completion.
 **Verified locally on Nov 14 ET / Nov 15 UTC:** the Firebase emulators (Cloud
 Firestore emulator v1.22.0, Realtime Database emulator v4.11.2) passed all
 four live-emulator test assertions with the provider adapters; zero failures.
+
+### Managed benchmark authentication
+
+To run **against real services** from the AWFL GKE consumer, set
+`GOOGLE_ACCESS_TOKEN_FILE` to the existing injected user OAuth token-file path
+(`CLOUDSDK_AUTH_ACCESS_TOKEN_FILE`). The Firestore benchmark then uses the
+normal Node Firestore client with a `google-gax`-supported `GoogleAuth` object
+whose OAuth2 client holds the injected user token. This does not grant the GKE
+service account additional Firestore permissions. RTDB uses the same token
+through HTTPS REST. Do not log, print, or commit OAuth tokens.
+
+For Cloud SQL, start the Cloud SQL Auth Proxy as a **persistent process**, e.g.:
+
+```
+cloud-sql-proxy --auto-iam-authn --port=5433 \
+  awfl-us:us-central1:awfl-native-storage-bench
+```
+
+The proxy uses the attached GKE `awfl-consumer` workload identity and connects
+to the *real* Cloud SQL instance; `PGHOST=127.0.0.1` is only the proxy's local
+listener. Configure `PGPORT=5433`, `PGUSER=awfl-consumer@awfl-us.iam`,
+`PGDATABASE=awfl_bench`, and `CLOUD_SQL_PROXY_INSTANCE` to make the benchmark
+output mark it as managed. Run the `--backend=postgres` benchmark with a warm
+connection pool. For all three backends repeat with `--concurrency=16`.
+
+**Do not treat Firebase emulator measurements as managed service results.**

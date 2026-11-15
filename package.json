@@ -53,6 +53,7 @@
     "zod": "3.25.76"
   },
   "devDependencies": {
+    "@google-cloud/firestore": "^7.11.6",
     "jest": "^29.7.0",
     "nodemon": "^3.1.10"
   },
