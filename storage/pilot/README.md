@@ -46,6 +46,12 @@ clean up benchmark keys. Timings include provider SDK or HTTP client overhead
 and use the same state transitions for all backends. Compare durability
 semantics separately (RTDB's rules and replication are not Firestore-equivalent).
 
+**Observed attempt:** The real GKE Firestore pilot emitted `PERMISSION_DENIED`
+when creating synthetic records; those operations are invalid benchmark samples
+and are excluded from success latency distributions. A dedicated benchmark
+identity needs `roles/datastore.user` for the Firestore baseline. No live
+successful comparison has been recorded yet.
+
 **Current provisioning block:** The AWFL cloud consumer identity does not have
 read access to the remote Terraform state bucket and neither it nor the GitHub
 Cloud Run deployer has permissions to administer the requested databases. A
