@@ -312,3 +312,13 @@ Troubleshooting
 
 License
 - MIT (see LICENSE)
+
+## Document storage direction (November 2026)
+
+**Selected target:** Cloud SQL PostgreSQL 15, `db-f1-micro` shared-core, behind one database-independent `Storage` contract. The real managed-service execution-state pilot measured **5.20 ms median guarded completion on PostgreSQL**, compared with **45.06 ms on Firestore** and **40.49 ms on Realtime Database** (300 serial cycles each, zero failures). No larger instance tier is planned merely to reduce concurrency p99. The running application still uses Firestore pending its migration.
+
+- [PostgreSQL implementation and cutover plan](docs/postgres-storage-migration-plan.md)
+- [Full platform-agnostic storage interface/audit](docs/platform-agnostic-storage-implementation-plan.md)
+- [Measured managed benchmark and raw results](docs/storage-pilot-managed-three-backend-benchmark-2026-11-14.md)
+
+Firebase Authentication is **not** part of this database migration. The shared GCS files/artifacts storage is also a separate concern.

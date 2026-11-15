@@ -1,5 +1,7 @@
 # Native Rust workflow execution (experimental, opt-in)
 
+**Storage selection update — November 14, 2026:** AWFL selected **PostgreSQL 15 on Cloud SQL `db-f1-micro`** for native execution state after [1,800 successful managed-service benchmark cycles](../../docs/storage-pilot-managed-three-backend-benchmark-2026-11-14.md). Sequential guarded completion p50: PostgreSQL **5.20 ms**, Firestore **45.06 ms**, RTDB **40.49 ms**. The high-concurrency PostgreSQL p99 outlier is accepted at current scale; no dedicated-core upgrade is planned. **The native execution implementation still uses Firestore until migrated.** [Next steps: PostgreSQL storage integration](../../docs/postgres-storage-migration-plan.md). Historical Firestore references below describe the earlier implementation.
+
 
 ## Current native ProjectManager integration — November 13, 2026
 

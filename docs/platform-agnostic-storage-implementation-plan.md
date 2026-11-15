@@ -1,12 +1,32 @@
-# AWFL platform-agnostic document storage: audit and implementation plan
+# AWFL document storage: PostgreSQL selection and platform-agnostic migration plan
 
-Status: full-platform design still proposed; Phase 0A managed three-backend benchmark **completed** November 14, 2026 ET. No production backend cutover.
-Date: November 13, 2026 (ET).
-Initial backend: existing production Firestore. Future backends: optional and not part of this migration.
+**Decision (November 14, 2026 ET): PostgreSQL is the selected destination for AWFL document storage.** Use the existing Cloud SQL PostgreSQL 15 **`db-f1-micro` shared-core** configuration in `us-central1`; do **not** upgrade to dedicated-core or make high-concurrency p99 tuning a prerequisite. Target an in-process, SDK-independent `Storage` interface, a separate PostgreSQL adapter, and an incremental migration from Firestore. See the [actionable PostgreSQL migration plan](postgres-storage-migration-plan.md).
 
-## Phase 0A — Three-backend execution-state investigation (November 14, 2026)
+**Status:** Decision and managed-service benchmark complete; the full provider-independent contract, PostgreSQL application integration, data migration, and production switch are **not yet implemented**. The actual running application still uses Firestore. The initial single-record pilot is not the full Storage implementation.
 
-**Original investigation scope (implemented and benchmarked):** build the smallest executable storage contract around a native **memory-mode root execution's** lifecycle, and benchmark **Firestore (current `nam5`), Firebase Realtime Database (`us-central1`), and Cloud SQL PostgreSQL (`db-f1-micro`, `us-central1`)** using identical calls from the same AWFL GKE/Jobs environment. This supersedes the earlier assumption that the first phase has no alternative backend or infrastructure; it does **not** authorize a production data cutover.
+**Scope:** Keep Firebase Auth/ID-token verification for now; the database decision does not require replacing authentication. Retain the existing Firestore adapter/compatibility path until migration finishes. Realtime Database remains a *tested alternative*, not the selected platform backend; no further RTDB work is needed absent a concrete requirement.
+
+## Measured evidence behind the decision
+
+The [managed-service benchmark](storage-pilot-managed-three-backend-benchmark-2026-11-14.md) exercised 1,800 successful native memory-root execution-state lifecycles against **actual managed GCP databases** from the same GKE consumer: 300 measured cycles per backend at concurrency 1 and 16, plus 25 warmups per condition; zero failures. These measure a scoped record/transaction lifecycle, not every server query or subscription.
+
+| Operation (p50, ms) | Firestore `nam5` | RTDB `us-central1` | PostgreSQL `db-f1-micro` |
+| --- | ---: | ---: | ---: |
+| Sequential read | 11.39 | 18.20 | **1.16** |
+| Sequential write | 30.49 | 21.20 | **1.90** |
+| Sequential guarded completion | 45.06 | 40.49 | **5.20** |
+| Guarded completion, 16 workers | 83.95 | 68.08 | **16.76** |
+| Guarded completion p95, 16 workers | 206.30 | 167.46 | **81.64** |
+
+PostgreSQL has **~8.7× lower median** guarded-completion latency than Firestore and **~7.8× lower** than RTDB sequentially. Disk durability was not turned off (`synchronous_commit=on`, `fsync=on`). Its 16-worker guarded-completion **p99 was 488.21 ms**, versus 280.94 ms (Firestore) and 266.21 ms (RTDB); that outlier is **explicitly accepted for the current no-paying-customer scale**. Monitor it, but do not block or expand the instance tier solely to reduce p99. Reconsider sizing only if actual production workload, reliability, or latency requirements justify it.
+
+**Cost assumption:** `db-f1-micro` plus 10 GiB SSD is approximately **$10–15/month fixed** at the tested configuration, excluding additional storage, backup, networking, other AWFL services and variable usage. This is a planning estimate, **not an audited GCP invoice**. Keep resource spend lean; upgrade only from observed constraints. Use connection pooling sparingly with PostgreSQL's measured 25-connection limit.
+
+**Follow-up priority:** Complete [the PostgreSQL storage migration](postgres-storage-migration-plan.md), beginning with the real native **memory execution-state** integration and then the full shared Storage contract. Do not keep benchmarking new database tiers instead of implementing the chosen backend.
+
+## Historical Phase 0A — completed database investigation (November 14, 2026)
+
+**Historical investigation scope (implemented and benchmarked):** build the smallest executable storage contract around a native **memory-mode root execution's** lifecycle, and benchmark **Firestore (current `nam5`), Firebase Realtime Database (`us-central1`), and Cloud SQL PostgreSQL (`db-f1-micro`, `us-central1`)** using identical calls from the same AWFL GKE/Jobs environment. This supersedes the earlier assumption that the first phase has no alternative backend or infrastructure; it does **not** authorize a production data cutover.
 
 Scope the pilot to `create/get/claim/progress/complete` on one root execution record, with safe owner/epoch fencing, cancellation-conflict behavior, create-only and concurrent-claim tests. Preserve existing `NativeExecutionStore` API semantics. Keep the public design objective of one complete document `Storage` interface including subscriptions and transactions, but explicitly distinguish **pilot-verified single-record semantics** from full platform conformance. An RTDB adapter must not silently claim support for Firestore cross-document transactions, collection-group queries, or subscriptions with identical ordering. These capabilities must be emulated with formally tested algorithms or fail closed before use; do not load an incomplete adapter as general production `Storage`.
 
@@ -19,7 +39,7 @@ Implementation steps:
 5. Run warmed, serial and concurrent benchmark operations with persistent SDK/database connections **from the same compute location**. Measure end-to-end `get`, `create`, `claim`, `progress`, `complete`; additionally report the corresponding raw read/write. Report p50/p90/p95/p99, per-operation count, failures, retries, concurrency, sample size, SQL sync durability and connection/TLS setup separately. Compare median and tail latency, not just aggregate time. Reuse only test records under a unique prefix and clean them after.
 6. Commit adapter source, tests, Terraform and documented commands/results; record database version, tier, location and predicted ongoing cost. Keep Terraform state in the existing managed state workflow, never check in credentials. Do not claim benchmarks for a database unless the resources were provisioned and the operations actually executed.
 
-**Exit:** all three adapters pass the shared pilot contract and have comparable measured distributions, or record an explicit blocker with completed measurements. Select the eventual full backend based on latency *and* semantics, not just fast unguarded writes. Retain the full-platform phased migration described below.
+**Exit: completed.** The three single-record pilot adapters and measured comparison are committed. The selected backend is PostgreSQL; see the implementation plan below. Full platform conformance and data migration are separate remaining tasks.
 
 **Phase 0A completed — actual managed-service measurements:** [Firestore vs RTDB vs PostgreSQL 15 `db-f1-micro`, 1,800 successful execution lifecycles](storage-pilot-managed-three-backend-benchmark-2026-11-14.md), plus six committed raw JSON outputs. Firestore guarded completion p50 45.06 ms; RTDB 40.49 ms; PostgreSQL 5.20 ms. The older [read-only Firestore measurement](storage-pilot-managed-firestore-baseline-2026-11-14.md) was a pre-provisioning snapshot and does not supersede the completed benchmark.
 
@@ -43,7 +63,7 @@ Keep the document storage contract independent of Firebase, Google Cloud, Expres
 - **awfl-us/storage-firestore**, package name **@awfl-us/storage-firestore**: an in-process adapter implementing the contract using Firebase Admin / Firestore, including SDK initialization, credentials, timestamps, query translation, listener handling, and error normalization. The Firebase SDK dependency lives here, not in @awfl-us/storage or application modules.
 - **awfl-us/server**: chooses the adapter at the API/Jobs/worker *composition root*, injects Storage into services, and knows only the @awfl-us/storage contract in its domain and workflow code. At runtime the Firebase adapter and SDK are still loaded into the same process; this is a **package boundary, not a new network service**. We must not add a proxy hop to each database operation.
 
-These are proposed repositories/packages and provisional package names (verify package-registry scope ownership before publishing), not already-created deliverables. Keep package distribution pinning, CI and release automation explicit; use pinned released versions or immutable SHAs, not mutable branch dependencies. All adapters run the same conformance suite. Do **not** adopt an ORM or a key-value-only library as the platform-wide interface. A SQL driver can use Kysely internally when we actually build one; SQL must not leak into the shared API.
+These are proposed repositories/packages and provisional package names (verify package-registry scope ownership before publishing), not already-created deliverables. Keep package distribution pinning, CI and release automation explicit; use pinned released versions or immutable SHAs, not mutable branch dependencies. All adapters run the same conformance suite. Do **not** adopt an ORM or a key-value-only library as the platform-wide interface. Start with `pg` and explicit, parameterized SQL for the selected Postgres adapter; an ORM/query builder is optional only if it solves a measured maintainability problem. SQL must not leak into the shared API.
 
 ## High-level code audit (server main at 2e1dbae)
 
@@ -106,7 +126,13 @@ This contract must support **all** defined operations; don't silently mark subsc
       src/testing               (reusable adapter conformance suite)
       src/telemetry             (SDK-neutral timing/count hook)
 
-    @awfl-us/storage-firestore       (depends on @awfl-us/storage + firebase-admin)
+    @awfl-us/storage-postgres        (depends on @awfl-us/storage + pg)
+      src/postgresStorage       (CRUD/query/batch/transaction and SQL schema)
+      src/postgresWatch         (durable change log + LISTEN/NOTIFY wakeups)
+      src/codec                (portable JSON, time and numeric types)
+      test                     (real PostgreSQL contract and concurrency tests)
+
+    @awfl-us/storage-firestore       (temporary compatibility adapter)
       src/firestoreStorage      (CRUD, query, transaction, batch)
       src/firestoreWatch        (snapshot subscriptions and unsubscribe)
       src/codec                 (values, timestamps, sentinels, snapshots)
@@ -124,74 +150,43 @@ Firebase Admin initialization must move out of arbitrary imported route modules.
 
 ### Config and rollout
 
-Start with STORAGE_BACKEND=firestore and the same production Google credentials/database. The adapter selection happens once at process startup; an unknown or non-conforming driver fails startup rather than falling back to an unrelated or empty database. No per-request remote adapter microservice. Keep the existing document paths, schema, indexes, record IDs, and HTTP protocol stable throughout extraction.
+The *current running server* starts with Firestore. The selected destination is `STORAGE_BACKEND=postgres` once the target has the required data and consistent routing. Initially expose the PostgreSQL adapter behind an explicitly bounded execution-state integration; do not enable a global switch until its module-specific operations are implemented. For existing workflow executions, keep a single backend from root creation through completion; drain or migrate active records as one coherent unit, not with per-request random selection. The adapter selection happens once at process startup; an unknown or non-conforming driver fails startup rather than falling back to an unrelated or empty database. No per-request remote adapter microservice. Keep public document paths, record IDs and HTTP/Jobs contracts stable while mapping the hierarchy to SQL tables and indexes. Do not assume Firestore's query/index layout maps directly to PostgreSQL; implement query-equivalent ordering, index and type semantics. Preserve authorization on the service side.
 
-Feature-gate any incremental migration of server modules, not database selection per individual request. A single logical write must use one backend and one atomic operation; **no dual-write** or mixed-backend transactions during the initial migration. Roll back service code/config to the old Firestore path without migrating data back. Do not toggle production database targets under an in-flight execution.
+Develop and test in short, locally verified increments; merge working changes without waiting for deployments. For data cutover, **do not dual-write** or mix backends inside a transaction. Take an inventory/snapshot of any developer data worth keeping, copy/import it with explicit record counts and verification, and route *new* executions consistently to PostgreSQL once their paths work. Drain existing Firestore executions, or migrate their records and all dependent paths together. Do not assume that flipping a flag alone provides rollback after PostgreSQL-only writes; any fallback needs a deliberate data strategy. There are no paying customers, so favor an uncomplicated one-time cutover over long-lived compatibility scaffolding.
 
-## Step-by-step implementation
+## Implementation order — PostgreSQL selected
 
-### Phase 0 — baseline and contract specification
+**Source of truth for actionable tasks:** [PostgreSQL storage migration plan](postgres-storage-migration-plan.md). This replaces the older Firestore-only abstraction phases. The app currently runs on Firestore; the following steps are **planned**, not completed by the benchmark.
 
-1. Build an exhaustive call-site inventory from AST/static search plus runtime traces, with module owner and required operations (including SDK handles passed through constructor parameters). Include API, Jobs, MCP, Agents MCP, background recovery, GKE consumer and CLI/Web boundary; keep the inventory in the plan/test suite.
-2. Record representative production latency distributions (p50/p95) for native memory Project Manager, durable native execution/recovery, SSE, MCP command wakeups, task queries and LLM/accounting. Turn on bounded SDK-neutral timing later; do not log credentials or payloads.
-3. Freeze the DB-neutral contract and data/transaction/watch semantics. Map existing Firestore indexes from firestore.indexes.json into query conformance cases. Define named operation/error types and stable value codecs.
-4. Add an import-boundary/static lint rule that blocks new Firestore SDK usage outside the adapter and legacy migration allowlist, without initially breaking the existing server.
+### M0 — contract and Postgres adapter foundation
 
-Exit: operation-to-module map, agreed contract semantics, baseline performance and executable conformance scenarios.
+- Update the existing Firestore call-site map across API, Jobs, MCP, native execution, event subscriptions and user/project services; capture exact behavior, indexes and data codecs.
+- Build the one `Storage` contract and real-PostgreSQL conformance tests. Implement full `@awfl-us/storage-postgres` behind an in-process package boundary (`pg`, migrations, parameterized SQL) rather than making Firestore the sole target. Use separate interface and adapter packages; an in-repo workspace is fine while iterating, with extracted/versioned packages after stable tests.
+- Keep the Firestore adapter as a compatibility reader/writer and test implementation until data cutover; do not invest in a full RTDB production driver.
 
-### Phase 1 — independent contract and Firestore adapter
+### M1 — first functional migration: native memory-root execution state
 
-1. Create the **awfl-us/storage** and **awfl-us/storage-firestore** packages/repositories and CI. The former must be importable without loading firebase-admin or any Google Cloud SDK. Include ESM exports, TypeScript declarations and pinned package releases.
-2. Implement the Firestore adapter at the **current** existing Firestore database, with codec support for stored timestamps and legacy records. Keep backwards-compatible record formats; *do not* normalize/rewrite every document on read.
-3. Implement the full conformance suite against the real Firestore emulator: create-vs-exists, missing/updates, merge, projection, count, group queries, cursors, nested collections, batch atomicity, transaction retries and conflicts, listener initial state and changes, cancellation and reconnect.
-4. Provide a small in-memory **test-only reference implementation** of the contract if helpful for deterministic unit tests; it is not a production database and does not justify dropping stronger Firestore semantics.
+- Upgrade the pilot native memory store into the real Jobs execution lifecycle (create, claim, progress, complete/fail, cancellation and readback) using PostgreSQL. Preserve user/project scope, owner/epoch/lease checks, single-root backend routing and nonblocking memory execution semantics.
+- Run real compiled Rust workflows and 16-way racing-claim/stale-owner/cancel/replay tests against the managed PostgreSQL instance. Only treat this slice as integrated when execution creation and all worker operations use the same provider, not just the synthetic benchmark.
 
-Exit: standalone adapter package passes the entire contract in emulator; no AWFL business code migrated yet.
+### M2 — durable/native child state and callbacks
 
-### Phase 2 — composition root and low-risk application migration
+- Port durable effects, journals, parent/child fork ancestry, restart/replay, parallel joins, callbacks and detached execution schedules. Keep multi-record checks within one SQL transaction. Do not reintroduce unnecessary synchronous journaling to memory mode.
+- Verify no missed callbacks, no duplicated external effects and no stale worker overriding a completion after cancellation or restart.
 
-1. Create a single server storage composition root in API, Jobs, and persistent GKE process startup. Inject Storage into routers/services/handlers; remove module-scope getFirestore/initializeApp only as each caller is migrated. Keep identity-provider creation separate.
-2. First migrate simpler bounded CRUD: agents, settings, projects, credentials, prompts, tool/type definitions, workspace metadata and tasks. Keep existing user/project scoping, API shapes and returned timestamps stable.
-3. Move Jobs generic firebaseDbApi and related operations behind Storage while keeping the existing /firebase/* compatibility endpoints for compiled workflows. Rename or version endpoints only in a separate protocol change, **not** as part of this refactor.
-4. Convert atomic counters and grouped usage queries via generic operators; verify accumulation under concurrent requests and not just a single-threaded unit test.
+### M3 — all remaining document CRUD, queries and subscriptions
 
-Exit: no regressions in normal CRUD, scoped project access and Jobs compatibility endpoints; no data migration.
+- Migrate projects, agents, tasks, credentials, context/history, pagination, usage counters, collection-group queries, Events/SSE, MCP/Agents MCP and Jobs compatibility endpoints via `Storage`, without changing public API/compiled-workflow protocols.
+- Implement `Storage.subscribe` with durable PostgreSQL change replay and `LISTEN/NOTIFY` wakeups; notifications alone are not persistence. Define commit-safe scoped cursors and test snapshot/replay/watch races across server processes. Add explicit indexes for real query shapes.
+- Remove Firestore SDK calls and vendor data types from domain/application modules; preserve Firebase Authentication as an independent concern.
 
-### Phase 3 — queries, subscriptions, events, MCP and callbacks
+### M4 — one-time data migration and cutover
 
-1. Migrate context/history/collapse indexer, pagination, cursor storage and the paired event project/session writes. Preserve batch size, index usage, ordering, SSE replay and realtime query semantics.
-2. Move document and query listeners in events/model.js and mcp/service.js to Storage.subscribe, with explicit initial snapshot/ready/cancel/error behavior. Validate consumer swaps and command-output wakeups when writes race with subscription startup.
-3. Move callbackEffects and other callback flows to the shared subscription/transaction semantics; verify callback expiration, authentication, concurrent delivery and no duplicate callbacks.
-4. Exercise realistic concurrency, callback timeouts, event replay and reconnects in the emulator with multiple server processes.
+- Inventory developer/test Firestore data and active executions. Snapshot/export anything still needed; migrate/verify relevant documents with consistent paths/IDs or explicitly archive/reset disposable test data. There are no paying customers, so avoid permanent dual-write and long-lived shadow migrations.
+- Move new execution roots to PostgreSQL consistently; drain or migrate any existing Firestore executions together with children, journals and callbacks. Finish backend selection at composition roots and check full Project Manager, session, SSE and MCP flows.
+- Review recovery/backups and Terraform ownership before the SQL instance stores important data. Keep `db-f1-micro`; the current bench Terraform stack must not be destroyed while its SQL instance becomes AWFL's database of record. Retire unused RTDB and Firebase document-storage resources deliberately after parity, not as part of a blind stack destroy.
 
-Exit: events SSE and MCP long polling are fully database-agnostic; no missed terminal notifications and no subscription leaks.
-
-### Phase 4 — native execution and concurrency safety
-
-1. Refactor NativeExecutionStore to receive the single Storage interface instead of a Firestore db handle. Preserve legacy persisted schemas, input/result JSON codec, release pinning, parent/child ancestry, leases, epochs and effect journal behavior.
-2. Run durable protocol-v2, memory-first parallel, fork failure, replay/restart, detached background scheduler and multi-level cancellation tests against the adapter with **real** compiled Rust artifacts and a Firestore emulator.
-3. Specifically test stale-worker fencing, two workers racing claim, multi-document ancestor validation and terminal cancel/complete. The memory executor must still have no per-effect journal and must not gain a new network hop.
-4. Benchmark representative runs using the same pinned artifacts and equivalent API launch path, separating DB calls, app endpoints, GCS loading, native process and OpenAI. The abstraction's in-process dispatch overhead should be negligible compared with Firestore network time; investigate a consistent >5% p95 regression before rollout.
-
-Exit: native state and MCP side effects retain at-least/exactly-once *as implemented today*; no new double-execution or unauthorized claims; memory-mode production remains enabled and verified after migration.
-
-### Phase 5 — eliminate direct Firestore SDK imports from server business code
-
-1. Remove remaining direct Firestore imports and provider-specific values from server workflows, Jobs handlers, agents MCP and standard MCP. Remove import-time Firebase initialization from storage-agnostic modules.
-2. Enforce zero Firestore Admin imports under application/domain directories, with allowlist only for the adapter's package and auth provider while auth has not yet been extracted.
-3. Update Dockerfiles/build packaging, dependency pinning, local dev bootstrap, GH Actions, Terraform deployment variables (if needed), runtime docs and project contributor instructions. Packaging a local dependency must not make the Docker build omit the external adapter.
-4. Start with existing production Firestore behind the adapter. Roll out module groups gradually; check real auth, Sessions, Events, MCP, Jobs, Project Manager and background continuation and revert independently if needed.
-
-Exit: all server document persistence flows through @awfl-us/storage. Existing Firestore remains the active provider; no production data copy or schema change.
-
-### Phase 6 — broader AWFL platform neutrality (separate follow-ups)
-
-The **database extraction is only the first dependency boundary**.
-
-- Extract Firebase Authentication and ID token validation into an auth-provider package/interface so the core API is not linked to firebase-admin; retain existing user IDs and tokens until an explicit auth migration. Web AuthProvider and the CLI login flow are separate client migrations.
-- Introduce small independent contracts for object/artifact storage (currently GCS), asynchronous task/queue dispatch (Cloud Tasks/Workflows), background compute/exec (GKE, Cloud Run), secrets and event transport (Pub/Sub). Keep them **outside** the one document Storage interface.
-- The Scala DSL and compiled Rust workflow protocol should remain ignorant of database, cloud, and identity provider details. The server owns effects, I/O boundaries and trusted execution context.
-- Only when there is a real database migration goal, build an alternative storage adapter (e.g. PostgreSQL using Kysely internally), implement subscriptions with durable notifications/change log, match the same contract and plan data migration/rollback separately. No unused second database integration now.
+**Done:** full server document persistence uses the provider-neutral contract backed by PostgreSQL, with Firebase Auth unaffected; effective query/subscription/transaction behavior is tested, no hidden Firestore writes remain, and infrastructure remains managed by Terraform. Fast local development and commits are preferred; no dedicated-core/p99 tuning milestone.
 
 ## Testing matrix and acceptance gates
 
@@ -202,17 +197,17 @@ The **database extraction is only the first dependency boundary**.
 | Queries | Filters including IN and range; ordered pagination/reverse; projection; collection-group; counts; same observable results as Firestore. |
 | Transactions | Atomic create/claim, conflict retry, concurrent leases, owner validation, stale-worker fencing and nested fork ancestor guarantees. |
 | Subscriptions | Initial replay, concurrent writes during subscribe, ordered changes, unsubscribe, reconnect and bounded resource usage; SSE/MCP completion not lost. |
-| Data compatibility | Existing Firestore records read/write unchanged; timestamps, nested maps, 64-bit-safe integer handling, JSON-encoded native slots and usage increments tested. |
+| Data compatibility | Firestore source documents are inventoried/snapshotted and relevant data copied into Postgres with verified paths/IDs, timestamps, nested maps, integer safety, cached native slots and usage counters; disposable test data reset explicitly only. |
 | Runtime | Real Project Manager memory and durable executions, callback wakeups, asynchronous continuation, recovery after worker restart, no unexpected journals. |
 | Security | Auth boundaries intact, no privilege escalation via guessed document paths, provider errors fail closed, secrets not logged. |
-| Performance | p50/p95 for same workflow and workload measured; per-call interceptor adds negligible local overhead and no new service network round trips. |
-| Deployment/rollback | Release install and env selection reproducible; old Firestore adapter path safe to restore without data conversion; Terraform stays source of infra changes. |
+| Performance | Compare full real workflow p50/p95 against the actual managed pilot baseline; monitor high-concurrency p99 but do not gate the migration on dedicated-core benchmarking or a size upgrade. No additional adapter network hop. |
+| Cutover and recovery | Backend chosen consistently per execution; no mixed-backend transaction, no lost running children; restore/rollback strategy accounts for Postgres-only writes and real backups. Terraform remains source of infra changes. |
 
 ## Risks and explicit non-goals
 
 - **Cannot treat Firebase Firestore semantics as universal.** SQL implementation must preserve transaction, query/index and subscribe guarantees or clearly negotiate a new storage contract version, never silently change behavior.
 - **Listener delivery is a correctness dependency.** MCP tool completion and SSE event availability are not just UI niceties; reconnect/catch-up and unsubscribe behavior must be specified.
-- **Storage abstraction is not an automatic latency fix.** A new in-process function call is cheap, but backend network I/O remains; do not add microservices or proxy Firestore through extra HTTP requests. The timing interface makes total Firestore SDK latency measurable.
-- **No data migration or second backend in this effort.** Avoid expanding scope to production database migration, new GKE storage services, rewriting the DSL, or eliminating Firebase Auth before its own migration plan is accepted.
+- **Storage abstraction alone is not a latency fix.** The actual managed Postgres pilot **does** establish lower database latency for this execution-state workload. Keep adapters in-process, with no extra app-level HTTP hop, and instrument the real compiled-workflow path rather than assuming the pilot covers every operation.
+- **Data migration is now in scope.** PostgreSQL is selected as the target; keep it simple with explicit inventory, verified finite copy/cutover and consistent root-execution routing. Do not add unrelated GKE services, rewrite the DSL or replace Firebase Authentication as part of this decision.
 - **Do not alter production execution mode.** The memory-first flag was intentionally enabled in production at the time of this audit; preserve it and test both memory and durable paths.
 - **Preserve test-first portability.** Do not call the server portable while any non-provider module still imports the vendor SDK or exposes Firestore-specific return types.

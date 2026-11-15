@@ -1,5 +1,7 @@
 Storage and Persistence (Shared GCS bucket)
 
+**Scope:** This document describes shared **object/filesystem storage in GCS**, not AWFL's document database. PostgreSQL on Cloud SQL `db-f1-micro` is now the [selected document database](postgres-storage-migration-plan.md); see the [platform-agnostic Storage interface plan](platform-agnostic-storage-implementation-plan.md). The running app has not yet switched from Firestore.
+
 Overview
 - Both the SSE consumer and the producer can persist per-project/workspace files under a shared Cloud Storage bucket mounted at WORK_ROOT (default /mnt/work).
 - Paths are derived from WORK_PREFIX_TEMPLATE (default {projectId}/{workspaceId}). Services create and use subdirectories within the mount; absolute paths and parent traversal are rejected.
