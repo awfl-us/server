@@ -23,6 +23,12 @@ async function createBackend() {
     return new FirestoreAtomicRecords({db:getFirestore(),collection:'nativeStorageBenchmark'});
   }
   if (backend === 'rtdb') {
+    const emulatorHost = process.env.RTDB_EMULATOR_HOST;
+    if (emulatorHost) return new RealtimeAtomicRecords({
+      databaseURL:`http://${emulatorHost}`,
+      databaseNamespace:process.env.RTDB_EMULATOR_NAMESPACE || 'demo-awfl-default-rtdb',
+      emulator:true,
+    });
     if (!process.env.RTDB_DATABASE_URL) throw new Error('RTDB_DATABASE_URL is required');
     const tokenFile = process.env.GOOGLE_ACCESS_TOKEN_FILE;
     let auth;
