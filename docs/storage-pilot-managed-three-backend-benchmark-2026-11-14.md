@@ -4,6 +4,12 @@
 
 This supersedes the earlier local/emulator-only evidence. The benchmark does **not** imply that the complete AWFL platform storage interface has been migrated or that every production native executor operation is equivalent to this scoped pilot.
 
+## Selection made after the benchmark — November 14, 2026 ET
+
+**PostgreSQL is selected as the AWFL document-storage destination.** Keep the tested **Cloud SQL `db-f1-micro` shared-core** tier and standard disk durability. The observed 488.21 ms p99 for 16 concurrent, independent execution completions is acknowledged but **not a migration blocker or a reason to benchmark/upgrade to a dedicated-core tier now**. Reassess from real workloads and business requirements rather than preemptively raising idle cost. The estimated base of roughly **$10–15/month** is a planning estimate, not an itemized invoice. See the [PostgreSQL implementation plan](postgres-storage-migration-plan.md) and [database-independent storage plan](platform-agnostic-storage-implementation-plan.md).
+
+This is a **backend decision, not a completed production cutover**: the existing Firestore-backed application remains active; the benchmark pilot covered a subset of execution-state operations. RTDB remains benchmark-only; there is no plan to build it into a complete production adapter.
+
 ## Executive results
 
 - **1,800 measured execution lifecycles succeeded**, zero failed: 3 databases × 2 concurrency settings × 300 cycles each, with 25 excluded warmup cycles per run.
@@ -57,7 +63,7 @@ The figures in both detailed tables are in **milliseconds** and each cell is **p
 1. **PostgreSQL wins on the central latency goal** for single-record execution-state mutations. The generic transactional design achieves about **5 ms median guarded completion** and about **2 ms median raw write** on a cheap, real managed instance, with normal synchronous commit enabled.
 2. **Realtime Database helps, but not enough.** RTDB is 21.20 ms for a plain write and 40.49 ms for guarded completion median, despite being regional. Its ETag-based atomic mutation consumes at least a read and conditional write, plus possible retries. A raw write comparison alone would understate AWFL's real cost.
 3. **Firestore's current design/region are expensive for this path.** The single document, transactional completion p50 is 45.06 ms; its ordinary write p50 is 30.49 ms. We should not infer that transaction/SDK restructuring can consistently get multi-region Firestore below 5 ms.
-4. **PostgreSQL p99 at concurrency 16 needs investigation.** The tiny shared-core tier has 25 maximum SQL connections, and 16 simultaneous execution lifecycles can produce isolated stalls. Potential causes include CPU, WAL fsync, proxy/network, connection pool scheduling, and shared infrastructure contention. Instrument pool wait/server latency and repeat on a modest dedicated tier before relying on p99.
+4. **PostgreSQL's high-concurrency p99 is accepted at present scale.** The tiny shared-core tier has 25 maximum SQL connections, and 16 simultaneous execution lifecycles can produce isolated stalls. Potential causes include CPU, WAL fsync, proxy/network, pool scheduling and shared infrastructure contention. Keep bounded pools and basic monitoring. **Do not make dedicated-core benchmarking or upgrading a prerequisite**; investigate only when actual traffic or service expectations require it.
 5. **No wholesale backend switch yet.** Full `Storage` requires queries, cross-record transactions and subscriptions. Postgres needs an implementation strategy for realtime subscriptions (e.g., `LISTEN` / `NOTIFY` with backfill and replay guarantees). Firestore and RTDB correctness tests for cancellation, conflicting claims, and replay were separate; these 16-worker performance runs use independent execution IDs and do not substitute for contention correctness tests.
 
 ## Source data / reproduction

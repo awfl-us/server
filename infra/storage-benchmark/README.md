@@ -1,4 +1,9 @@
-# Isolated AWFL storage pilot infrastructure
+# AWFL managed storage benchmark infrastructure (PostgreSQL selected)
+
+**November 14, 2026 decision:** keep the current **Cloud SQL PostgreSQL 15 `db-f1-micro` shared-core** configuration as the selected AWFL storage destination. [Managed benchmark evidence](../../docs/storage-pilot-managed-three-backend-benchmark-2026-11-14.md) and [implementation plan](../../docs/postgres-storage-migration-plan.md). The instance is already provisioned but production services have **not switched** from Firestore. The RTDB instance remains an unused benchmark resource.
+
+**Important:** `terraform destroy` on this whole stack would also delete the *selected PostgreSQL instance*. **Do not destroy the benchmark Terraform stack indiscriminately**. When PostgreSQL becomes the database of record, retain or deliberately move its Terraform resource/state ownership before removing RTDB or benchmark-only IAM; avoid an accidental database deletion. Keep `db-f1-micro` unless real usage proves more capacity is needed.
+
 
 Terraform owns a dedicated Firebase Realtime Database instance, an isolated
 Cloud SQL PostgreSQL 15 `db-f1-micro` zonal instance (10 GiB), IAM database login
@@ -12,7 +17,7 @@ State: `gs://tfstate-awfl-web/infra/storage-benchmark/default.tfstate`.
 Provision with `terraform init`, `terraform plan`, `terraform apply` from this
 directory with an account that can create SQL/Firebase instances and update IAM.
 Resources are billable even at zero traffic (Cloud SQL approx. $10–15/mo).
-To clean up, run `terraform destroy` for this stack after the investigation.
+For cleanup, target only obsolete benchmark resources through a reviewed Terraform plan; retain the PostgreSQL instance selected for migration. Do **not** run an unreviewed `terraform destroy` against this stack.
 
 Use the Cloud SQL Auth Proxy v2 with `--auto-iam-authn`, started using the
 `awfl-consumer` GKE identity, and `PGHOST=127.0.0.1`, `PGPORT=5432`, `PGDATABASE=awfl_bench`,
@@ -34,8 +39,7 @@ email address** when provisioning, to enable a Cloud SQL IAM database user;
 this is not needed for the existing `awfl-consumer` IAM login. Configure the
 Cloud SQL Auth Proxy for the same principal, and never commit credential values.
 
-See `docs/storage-pilot-managed-firestore-baseline-2026-11-14.md` for a
-read-only managed Firestore latency sample and the current provisioning status.
+See [the completed managed three-backend benchmark](../../docs/storage-pilot-managed-three-backend-benchmark-2026-11-14.md) for final measured results; the older read-only Firestore report is historical.
 
 ## Provisioned managed benchmark status (Nov 14 ET / Nov 15 UTC)
 

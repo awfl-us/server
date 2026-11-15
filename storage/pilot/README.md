@@ -1,5 +1,7 @@
 # AWFL execution-state storage pilot
 
+**Decision:** [PostgreSQL on Cloud SQL `db-f1-micro` is the selected AWFL document-store backend](../../docs/postgres-storage-migration-plan.md). The [real three-way managed benchmark](../../docs/storage-pilot-managed-three-backend-benchmark-2026-11-14.md) measured 1,800 successful execution cycles and supports this choice. The pilot below is **not** the complete production Storage implementation or an application cutover. Keep Firestore/RTDB adapters here for comparison and compatibility; develop PostgreSQL as the full provider implementation.
+
 This is the first, **single-record** slice of the SDK-independent storage
 interface proposed by `docs/platform-agnostic-storage-implementation-plan.md`.
 It is purposely not the complete Storage contract: it does not implement
@@ -46,11 +48,7 @@ clean up benchmark keys. Timings include provider SDK or HTTP client overhead
 and use the same state transitions for all backends. Compare durability
 semantics separately (RTDB's rules and replication are not Firestore-equivalent).
 
-**Observed attempt:** The real GKE Firestore pilot emitted `PERMISSION_DENIED`
-when creating synthetic records; those operations are invalid benchmark samples
-and are excluded from success latency distributions. A dedicated benchmark
-identity needs `roles/datastore.user` for the Firestore baseline. No live
-successful comparison has been recorded yet.
+**Historical auth troubleshooting (resolved):** An initial GKE Firestore SDK attempt using the consumer's workload identity returned `PERMISSION_DENIED`. The subsequent **successful managed-service** benchmark explicitly injected the Google user OAuth token into the Firestore SDK; no broad GKE consumer Firestore grant was needed. Failed attempts are excluded from latency samples.
 
 **Managed benchmark completed:** The dedicated RTDB and `db-f1-micro` Cloud SQL
 PostgreSQL instances are provisioned through the Terraform stack and its
