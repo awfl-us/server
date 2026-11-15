@@ -21,6 +21,8 @@ Implementation steps:
 
 **Exit:** all three adapters pass the shared pilot contract and have comparable measured distributions, or record an explicit blocker with completed measurements. Select the eventual full backend based on latency *and* semantics, not just fast unguarded writes. Retain the full-platform phased migration described below.
 
+**Managed-service verification:** [read-only Cloud Firestore latency and correct injected OAuth identity](storage-pilot-managed-firestore-baseline-2026-11-14.md) documents 55 warmed reads (p50 34.11 ms); RTDB and Cloud SQL instances are not yet provisioned.
+
 **Local measured baseline:** See [storage pilot local PostgreSQL results](storage-pilot-local-results-2026-11-14.md) for actual 400+400-cycle measurements; serial local PostgreSQL completion p50 1.93 ms and p95 2.96 ms, with 16-concurrent p50 14.88 ms and p95 83.83 ms. This is not a Cloud SQL nor three-backend comparison.
 
 **Implementation update (November 14, 2026):**

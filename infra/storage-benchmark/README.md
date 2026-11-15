@@ -18,3 +18,21 @@ Use the Cloud SQL Auth Proxy v2 with `--auto-iam-authn`, started using the
 `awfl-consumer` GKE identity, and `PGHOST=127.0.0.1`, `PGPORT=5432`, `PGDATABASE=awfl_bench`,
 `PGUSER=awfl-consumer@awfl-us.iam` (the Terraform output is authoritative).
 Set `RTDB_DATABASE_URL` using the Terraform output; never commit tokens.
+
+## Injected OAuth identity for direct managed benchmarks
+
+The AWFL cloud environment also injects a user OAuth bearer access token via
+`CLOUDSDK_AUTH_ACCESS_TOKEN_FILE`. The active `gcloud` account label may be a
+service account even when the actual OAuth token belongs to a Google user:
+check the token principal (without logging or printing token contents) before
+concluding that IAM blocks infrastructure operations. The Google Terraform
+provider and GCS backend require `GOOGLE_OAUTH_ACCESS_TOKEN` to use this
+injected user token instead of ambient application-default credentials.
+
+Optionally set `TF_VAR_benchmark_user_email` to the **token's actual Google user
+email address** when provisioning, to enable a Cloud SQL IAM database user;
+this is not needed for the existing `awfl-consumer` IAM login. Configure the
+Cloud SQL Auth Proxy for the same principal, and never commit credential values.
+
+See `docs/storage-pilot-managed-firestore-baseline-2026-11-14.md` for a
+read-only managed Firestore latency sample and the current provisioning status.
