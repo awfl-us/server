@@ -90,7 +90,7 @@ async function select(client,path,lock=false) {
  * application-wide production provider until its conformance suite passes.
  */
 export class PostgresStorage {
-  constructor({pool, ownPool=false, pollIntervalMs=5000}={}) {
+  constructor({pool, ownPool=false, pollIntervalMs=15000}={}) {
     if (!pool?.query || !pool?.connect) throw new TypeError('PostgresStorage requires pg.Pool');
     if (!Number.isInteger(pollIntervalMs) || pollIntervalMs < 50) throw new TypeError('invalid polling interval');
     this.pool=pool; this.ownPool=ownPool; this.pollIntervalMs=pollIntervalMs;
@@ -402,6 +402,8 @@ export class PostgresStorage {
         await client.query('LISTEN awfl_storage_change');
         await client.query('LISTEN awfl_storage_event');
         this.listenClient=client;
+        // A newly connected LISTEN socket may have missed commits in transit.
+        if (this.watchers.size || this.eventWatchers.size) void this.#reconcile();
         if (!this.pollTimer) {
           this.pollTimer=setInterval(()=>{void this.#reconcile();},this.pollIntervalMs);
           this.pollTimer.unref?.();
