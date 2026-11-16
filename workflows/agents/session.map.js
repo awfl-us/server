@@ -1,5 +1,6 @@
 import express from 'express';
-import { db, userScopedCollectionPath, sessionMapDocPath, DEFAULT_TOOLS, getFileDefinedAgentById, linkAgentSession } from './common.js';
+import { getDocumentStorage } from '../../storage/service.js';
+import { userScopedCollectionPath, sessionMapDocPath, DEFAULT_TOOLS, getFileDefinedAgentById, linkAgentSession } from './common.js';
 
 const router = express.Router();
 
@@ -16,7 +17,7 @@ router.put('/session/:sessionId', async (req, res) => {
 
     const trimmedId = agentId.trim();
 
-    const linked = await linkAgentSession(userId, req.projectId, sessionId, trimmedId, db);
+    const linked = await linkAgentSession(userId, req.projectId, sessionId, trimmedId);
     if (!linked) return res.status(404).json({ error: 'Agent not found' });
 
     return res.status(200).json({ sessionId, agentId: trimmedId });
@@ -32,11 +33,12 @@ router.get('/session/:sessionId', async (req, res) => {
   try {
     const userId = req.userId;
     const { sessionId } = req.params;
-    const docRef = db.doc(sessionMapDocPath(userId, req.projectId, sessionId));
-    const snap = await docRef.get();
-    if (!snap.exists) return res.status(404).json({ error: 'Session not linked to an agent' });
+    const storage = await getDocumentStorage();
+    const documentPath = sessionMapDocPath(userId, req.projectId, sessionId);
+    const snap = await storage.get(documentPath);
+    if (!snap) return res.status(404).json({ error: 'Session not linked to an agent' });
 
-    const { agentId } = snap.data();
+    const { agentId } = snap.data;
     return res.status(200).json({ sessionId, agentId });
   } catch (err) {
     console.error('[agents] get session mapping failed', err);
@@ -50,11 +52,12 @@ router.delete('/session/:sessionId', async (req, res) => {
   try {
     const userId = req.userId;
     const { sessionId } = req.params;
-    const docRef = db.doc(sessionMapDocPath(userId, req.projectId, sessionId));
-    const snap = await docRef.get();
-    if (!snap.exists) return res.status(404).json({ error: 'Session not linked to an agent' });
+    const storage = await getDocumentStorage();
+    const documentPath = sessionMapDocPath(userId, req.projectId, sessionId);
+    const snap = await storage.get(documentPath);
+    if (!snap) return res.status(404).json({ error: 'Session not linked to an agent' });
 
-    await docRef.delete();
+    await storage.delete(documentPath);
     return res.status(200).json({ ok: true });
   } catch (err) {
     console.error('[agents] delete session mapping failed', err);
@@ -69,19 +72,18 @@ router.get('/session/:sessionId/tools', async (req, res) => {
     const userId = req.userId;
     const { sessionId } = req.params;
 
-    const mapRef = db.doc(sessionMapDocPath(userId, req.projectId, sessionId));
-    const mapSnap = await mapRef.get();
-    if (!mapSnap.exists) return res.status(404).json({ error: 'Session not linked to an agent' });
+    const storage = await getDocumentStorage();
+    const mapSnap = await storage.get(sessionMapDocPath(userId, req.projectId, sessionId));
+    if (!mapSnap) return res.status(404).json({ error: 'Session not linked to an agent' });
 
-    const { agentId } = mapSnap.data();
+    const { agentId } = mapSnap.data;
 
     // Try DB first
-    const agentRef = db.doc(userScopedCollectionPath(userId, `agents/${agentId}`));
-    const agentSnap = await agentRef.get();
+    const agentSnap = await storage.get(userScopedCollectionPath(userId, `agents/${agentId}`));
 
     let tools;
-    if (agentSnap.exists) {
-      const data = agentSnap.data() || {};
+    if (agentSnap) {
+      const data = agentSnap.data || {};
       if (Object.prototype.hasOwnProperty.call(data, 'tools')) {
         tools = Array.isArray(data.tools) ? data.tools : [];
       } else {

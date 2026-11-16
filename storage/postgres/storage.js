@@ -51,29 +51,32 @@ function filterSql(spec, params) {
   }
   return conditions.join(' AND ');
 }
-function querySql(spec, {count=false}={}) {
-  const q=validateQuery(spec), params=[];
+function querySql(spec,{count=false}={}) {
+  const q=validateQuery(spec),params=[];
   let clause=filterSql(q,params);
-  if (q.startAfter!==undefined || q.endBefore!==undefined) {
-    if (q.orderBy.field!=='__name__') return fail('INVALID_QUERY','non-name cursors not yet implemented');
-    if (q.startAfter!==undefined) {
-      params.push(q.startAfter);clause+=` AND path ${q.orderBy.direction==='desc'?'<':'>'} $${params.length}`;
-    }
-    if (q.endBefore!==undefined) {
-      params.push(q.endBefore);clause+=` AND path ${q.orderBy.direction==='desc'?'>':'<'} $${params.length}`;
-    }
-  }
-  if (count) return {sql:`SELECT count(*)::text AS total FROM awfl_documents WHERE ${clause}`,params};
+  if(count)return {sql:`SELECT count(*)::text AS total FROM awfl_documents WHERE ${clause}`,params};
   const dir=q.orderBy.direction==='desc'?'DESC':'ASC';
-  let sort='path';
-  if (q.orderBy.field!=='__name__') {
+  const isName=q.orderBy.field==='__name__';
+  let sort='path',sortFieldIndex=null;
+  if(!isName){
     params.push(fieldPath(q.orderBy.field));
-    sort=`(data #> $${params.length}::text[])`;
+    sortFieldIndex=params.length;
+    sort=`(data #> $${sortFieldIndex}::text[])`;
+    clause+=` AND ${sort} IS NOT NULL`;
   }
-  // Null/missing are excluded when ordering by a JSON field. JSONB comparison
-  // supports basic homogeneous scalar values; precise Firestore type/index
-  // ordering remains an explicit migration conformance gate.
-  if (q.orderBy.field!=='__name__') clause+=` AND ${sort} IS NOT NULL`;
+  for(const [kind,path] of [['startAfter',q.startAfter],['endBefore',q.endBefore]]){
+    if(path===undefined)continue;
+    validatePath(path);
+    params.push(path);
+    const idx=params.length;
+    const forward=kind==='startAfter';
+    const op=q.orderBy.direction==='desc'?(forward?'<':'>'):(forward?'>':'<');
+    if(isName)clause+=` AND path ${op} $${idx}`;
+    else {
+      const cursorValue=`(SELECT data #> $${sortFieldIndex}::text[] FROM awfl_documents WHERE path=$${idx})`;
+      clause+=` AND (${sort}, path) ${op} (${cursorValue}, $${idx})`;
+    }
+  }
   params.push(q.limit);
   return {sql:`SELECT ${columns} FROM awfl_documents WHERE ${clause} ORDER BY ${sort} ${dir}, path ${dir} LIMIT $${params.length}`,params};
 }

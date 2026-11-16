@@ -1,189 +1,108 @@
 import express from 'express';
-import { getFirestore } from 'firebase-admin/firestore';
+import { randomUUID } from 'node:crypto';
+import { getDocumentStorage } from '../storage/service.js';
 import { projectScopedCollectionPath } from './utils.js';
 
 const VALID_STATUSES = ['Queued', 'In Progress', 'Done', 'Stuck'];
+const validateStatus = status => VALID_STATUSES.includes(status);
+const guardStatus = (status, res) => {
+  if (status && !validateStatus(status)) {
+    res.status(400).json({error:`Invalid status. Must be one of ${VALID_STATUSES.join(', ')}`});
+    return false;
+  }
+  return true;
+};
 
-function validateStatus(status) {
-  return VALID_STATUSES.includes(status);
-}
-
-// Creates a Tasks router. By default, requires upstream middleware to have set req.userId.
-export function createTasksRouter() {
-  const router = express.Router();
+export function createTasksRouter({getStorage=getDocumentStorage}={}) {
+  const router=express.Router();
   router.use(express.json());
-
-  const db = getFirestore();
-
-  // Pre-auth guard: ensure req.userId is present (set by clientAuth or workflowsUserInject upstream)
-  router.use((req, res, next) => {
-    const userId = req?.userId;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized: missing req.userId' });
+  const collection=req=>projectScopedCollectionPath(req.userId,req.projectId,'tasks');
+  const path=(req,id)=>collection(req)+'/'+id;
+  const get=()=>getStorage();
+  router.use((req,res,next)=>{
+    if(!req?.userId)return res.status(401).json({error:'Unauthorized: missing req.userId'});
     next();
   });
 
-  // Create task
-  router.post('/', async (req, res) => {
-    try {
-      const userId = req.userId;
-      const { sessionId, title, description, status } = req.body || {};
-      if (!sessionId) return res.status(400).json({ error: 'sessionId is required' });
-      if (status && !validateStatus(status)) return res.status(400).json({ error: `Invalid status. Must be one of ${VALID_STATUSES.join(', ')}` });
-
-      const colPath = projectScopedCollectionPath(userId, req.projectId, 'tasks');
-      const colRef = db.collection(colPath);
-      const now = Date.now();
-      const docRef = colRef.doc();
-      const data = {
-        id: docRef.id,
-        sessionId,
-        title: title || null,
-        description: description || null,
-        status: status || 'Queued',
-        created: now,
-        updated: now,
-      };
-      await docRef.set(data, { merge: true });
-      return res.status(201).json({ task: data });
-    } catch (err) {
-      console.error('[tasks] create failed', err);
-      return res.status(500).json({ error: 'Failed to create task' });
-    }
+  router.post('/',async(req,res)=>{
+    try{
+      const {sessionId,title,description,status}=req.body||{};
+      if(!sessionId)return res.status(400).json({error:'sessionId is required'});
+      if(!guardStatus(status,res))return;
+      const now=Date.now(),id=randomUUID().replaceAll('-','');
+      const task={id,sessionId,title:title||null,description:description||null,
+        status:status||'Queued',created:now,updated:now};
+      await (await get()).create(path(req,id),task);
+      return res.status(201).json({task});
+    }catch(error){console.error('[tasks] create failed',error);return res.status(500).json({error:'Failed to create task'});}
   });
 
-  // Read a task
-  router.get('/:id', async (req, res) => {
-    try {
-      const userId = req.userId;
-      const { id } = req.params;
-      const docRef = db.doc(projectScopedCollectionPath(userId, req.projectId, `tasks/${id}`));
-      const snap = await docRef.get();
-      if (!snap.exists) return res.status(404).json({ error: 'Task not found' });
-      return res.status(200).json({ task: snap.data() });
-    } catch (err) {
-      console.error('[tasks] get failed', err);
-      return res.status(500).json({ error: 'Failed to get task' });
-    }
+  router.get('/meta/statuses',(_req,res)=>res.status(200).json({statuses:VALID_STATUSES}));
+  router.get('/by-session/:sessionId',async(req,res)=>{
+    try{
+      const {sessionId}=req.params;
+      const {status,limit=50,order='desc'}=req.query||{};
+      if(!guardStatus(status,res))return;
+      const where=[{field:'sessionId',op:'==',value:sessionId}];
+      if(status)where.push({field:'status',op:'==',value:status});
+      const tasks=await (await get()).query({collection:collection(req),where,
+        orderBy:{field:'created',direction:order==='asc'?'asc':'desc'},
+        limit:Math.min(Math.max(Number(limit)||50,1),200)});
+      return res.status(200).json({tasks:tasks.map(item=>item.data)});
+    }catch(error){console.error('[tasks] list by session failed',error);return res.status(500).json({error:'Failed to list tasks by session'});}
   });
-
-  // Update a task
-  router.patch('/:id', async (req, res) => {
-    try {
-      const userId = req.userId;
-      const { id } = req.params;
-      const { sessionId, title, description, status } = req.body || {};
-
-      const has = (v) => v !== undefined && v !== null;
-      if (has(status) && !validateStatus(status)) {
-        return res.status(400).json({ error: `Invalid status. Must be one of ${VALID_STATUSES.join(', ')}` });
-      }
-
-      const docRef = db.doc(projectScopedCollectionPath(userId, req.projectId, `tasks/${id}`));
-      const snap = await docRef.get();
-      if (!snap.exists) return res.status(404).json({ error: 'Task not found' });
-
-      const updates = { updated: Date.now() };
-      if (has(sessionId)) updates.sessionId = sessionId;
-      if (has(title)) updates.title = title;
-      if (has(description)) updates.description = description;
-      if (has(status)) updates.status = status;
-      // Ignore extra fields and any null-valued fields to avoid accidental clearing
-
-      await docRef.set(updates, { merge: true });
-      const after = await docRef.get();
-      return res.status(200).json({ task: after.data() });
-    } catch (err) {
-      console.error('[tasks] update failed', err);
-      return res.status(500).json({ error: 'Failed to update task' });
-    }
+  router.get('/',async(req,res)=>{
+    try{
+      const {sessionId,status,limit=50,order='desc'}=req.query||{};
+      if(!guardStatus(status,res))return;
+      const where=[];
+      if(sessionId)where.push({field:'sessionId',op:'==',value:sessionId});
+      if(status)where.push({field:'status',op:'==',value:status});
+      const tasks=await (await get()).query({collection:collection(req),where,
+        orderBy:{field:'created',direction:order==='asc'?'asc':'desc'},
+        limit:Math.min(Math.max(Number(limit)||50,1),200)});
+      return res.status(200).json({tasks:tasks.map(item=>item.data)});
+    }catch(error){console.error('[tasks] list failed',error);return res.status(500).json({error:'Failed to list tasks'});}
   });
-
-  // Update task status (explicit endpoint)
-  router.post('/:id/status', async (req, res) => {
-    try {
-      const userId = req.userId;
-      const { id } = req.params;
-      const { status } = req.body || {};
-      if (!status) return res.status(400).json({ error: 'status is required' });
-      if (!validateStatus(status)) return res.status(400).json({ error: `Invalid status. Must be one of ${VALID_STATUSES.join(', ')}` });
-
-      const docRef = db.doc(projectScopedCollectionPath(userId, req.projectId, `tasks/${id}`));
-      const snap = await docRef.get();
-      if (!snap.exists) return res.status(404).json({ error: 'Task not found' });
-
-      await docRef.set({ status, updated: Date.now() }, { merge: true });
-      const after = await docRef.get();
-      return res.status(200).json({ task: after.data() });
-    } catch (err) {
-      console.error('[tasks] status update failed', err);
-      return res.status(500).json({ error: 'Failed to update status' });
-    }
+  router.get('/:id',async(req,res)=>{
+    try{
+      const doc=await (await get()).get(path(req,req.params.id));
+      if(!doc)return res.status(404).json({error:'Task not found'});
+      return res.status(200).json({task:doc.data});
+    }catch(error){console.error('[tasks] get failed',error);return res.status(500).json({error:'Failed to get task'});}
   });
-
-  // Delete a task
-  router.delete('/:id', async (req, res) => {
-    try {
-      const userId = req.userId;
-      const { id } = req.params;
-      const docRef = db.doc(projectScopedCollectionPath(userId, req.projectId, `tasks/${id}`));
-      const snap = await docRef.get();
-      if (!snap.exists) return res.status(404).json({ error: 'Task not found' });
-      await docRef.delete();
-      return res.status(200).json({ ok: true });
-    } catch (err) {
-      console.error('[tasks] delete failed', err);
-      return res.status(500).json({ error: 'Failed to delete task' });
-    }
+  const update=async(req,res,statusOnly=false)=>{
+    try{
+      const input=req.body||{};
+      if(statusOnly&&!input.status)return res.status(400).json({error:'status is required'});
+      if(!guardStatus(input.status,res))return;
+      const store=await get(),id=path(req,req.params.id);
+      let task=null;
+      await store.transaction(async tx=>{
+        const existing=await tx.get(id);
+        if(!existing)return;
+        const updates={updated:Date.now()};
+        for(const name of statusOnly?['status']:['sessionId','title','description','status']){
+          if(input[name]!==undefined&&input[name]!==null)updates[name]=input[name];
+        }
+        task={...existing.data,...updates};
+        await tx.put(id,task);
+      });
+      if(!task)return res.status(404).json({error:'Task not found'});
+      return res.status(200).json({task});
+    }catch(error){console.error('[tasks] update failed',error);
+      return res.status(500).json({error:statusOnly?'Failed to update status':'Failed to update task'});}
+  };
+  router.patch('/:id',(req,res)=>update(req,res));
+  router.post('/:id/status',(req,res)=>update(req,res,true));
+  router.delete('/:id',async(req,res)=>{
+    try{
+      const store=await get(),id=path(req,req.params.id);
+      const doc=await store.get(id);
+      if(!doc)return res.status(404).json({error:'Task not found'});
+      await store.delete(id);
+      return res.status(200).json({ok:true});
+    }catch(error){console.error('[tasks] delete failed',error);return res.status(500).json({error:'Failed to delete task'});}
   });
-
-  // List tasks for user (optionally by sessionId and/or status)
-  router.get('/', async (req, res) => {
-    try {
-      const userId = req.userId;
-      const { sessionId, status, limit = 50, order = 'desc' } = req.query || {};
-      if (status && !validateStatus(status)) return res.status(400).json({ error: `Invalid status. Must be one of ${VALID_STATUSES.join(', ')}` });
-
-      let q = db.collection(projectScopedCollectionPath(userId, req.projectId, 'tasks'));
-      if (sessionId) q = q.where('sessionId', '==', sessionId);
-      if (status) q = q.where('status', '==', status);
-      q = q.orderBy('created', order === 'asc' ? 'asc' : 'desc').limit(Math.min(Number(limit) || 50, 200));
-
-      const snap = await q.get();
-      const tasks = snap.docs.map(d => d.data());
-      return res.status(200).json({ tasks });
-    } catch (err) {
-      console.error('[tasks] list failed', err);
-      return res.status(500).json({ error: 'Failed to list tasks' });
-    }
-  });
-
-  // List by session explicitly
-  router.get('/by-session/:sessionId', async (req, res) => {
-    try {
-      const userId = req.userId;
-      const { sessionId } = req.params;
-      const { status, limit = 50, order = 'desc' } = req.query || {};
-      if (status && !validateStatus(status)) return res.status(400).json({ error: `Invalid status. Must be one of ${VALID_STATUSES.join(', ')}` });
-
-      let q = db.collection(projectScopedCollectionPath(userId, req.projectId, 'tasks'))
-        .where('sessionId', '==', sessionId)
-        .orderBy('created', order === 'asc' ? 'asc' : 'desc')
-        .limit(Math.min(Number(limit) || 50, 200));
-      if (status) q = q.where('status', '==', status);
-
-      const snap = await q.get();
-      const tasks = snap.docs.map(d => d.data());
-      return res.status(200).json({ tasks });
-    } catch (err) {
-      console.error('[tasks] list by session failed', err);
-      return res.status(500).json({ error: 'Failed to list tasks by session' });
-    }
-  });
-
-  // Metadata endpoint
-  router.get('/meta/statuses', (_req, res) => {
-    return res.status(200).json({ statuses: VALID_STATUSES });
-  });
-
   return router;
 }

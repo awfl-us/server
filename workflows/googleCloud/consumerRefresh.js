@@ -1,7 +1,8 @@
 import express from 'express';
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { getFirestore } from 'firebase-admin/firestore';
-import { projectDoc } from '../projects/util.js';
+import { credentialStorageDb } from '../../storage/legacyBridge.js';
+import { projectPath } from '../projects/util.js';
+import { getDocumentStorage } from '../../storage/service.js';
 import { resolveGoogleCloudAccessToken } from './service.js';
 import { resolveGithubAppCredential } from '../githubApp/service.js';
 import { mintWorkspaceToken } from '../workspace/storageTokens.js';
@@ -26,13 +27,13 @@ async function authenticateConsumer(req) {
   if (!userId || !projectId || !consumerId || !/^[a-f0-9]{64}$/.test(capability)) {
     return { status: 401 };
   }
-  const snap = await projectDoc(userId, projectId).get();
-  const data = snap.data();
+  const snap = await (await getDocumentStorage()).get(projectPath(userId,projectId));
+  const data = snap?.data;
   const lock = data?.consumerLock;
   const grant = data?.consumerCredentialRefresh;
   const actual = createHash('sha256').update(capability).digest();
   const expected = /^[a-f0-9]{64}$/.test(grant?.hash || '') ? Buffer.from(grant.hash, 'hex') : Buffer.alloc(32);
-  if (!snap.exists || !lock || lock.consumerId !== consumerId || lock.expiresAt <= Date.now() ||
+  if (!snap || !lock || lock.consumerId !== consumerId || lock.expiresAt <= Date.now() ||
       grant?.consumerId !== consumerId || !timingSafeEqual(actual, expected)) return { status: 403 };
   return { userId, projectId, consumerId };
 }
@@ -42,7 +43,7 @@ router.post('/refresh', async (req, res) => {
     const authenticated = await authenticateConsumer(req);
     if (authenticated.status) return res.sendStatus(authenticated.status);
     const { userId, projectId } = authenticated;
-    const db = getFirestore();
+    const db = await credentialStorageDb();
     const [google, github] = await Promise.all([
       resolveGoogleCloudAccessToken({ userId, projectId, db }),
       resolveGithubAppCredential({ userId, projectId, db }),

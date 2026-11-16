@@ -27,19 +27,14 @@ test('Google Workflows HTTP POST uses middleware-authenticated user after body i
       } };
     },
   };
-  const db = {
-    collection: name => ({
-      doc: id => ({ set: async (data) => writes.push({ name, id, data }) }),
-    }),
-    batch: () => ({
-      set: (ref, data) => writes.push({ kind: 'message', data }),
-      commit: async () => {},
-    }),
+  const documents = {
+    put: async(path,data) => writes.push({path,data}),
+    batch: async items => { for(const item of items)writes.push({kind:'message',...item}); },
   };
   const app = express();
   app.use(express.json());
   app.use(workflowsUserInject);
-  app.use('/convo-history', createLoadConvoHistoryRouter({ storage, db }));
+  app.use('/convo-history', createLoadConvoHistoryRouter({ storage, getStorage:async()=>documents }));
 
   const response = await request(app)
     .post('/convo-history/loadConvoHistory')
@@ -50,7 +45,7 @@ test('Google Workflows HTTP POST uses middleware-authenticated user after body i
   assert.deepEqual(response.body, {
     loaded: 1, sessions: 1, discarded_messages: 0,
   });
-  assert.equal(writes.find(w => w.id === 'synthetic-conversation-1')?.data.user_id,
+  assert.equal(writes.find(w => w.path === 'convo.sessions/synthetic-conversation-1')?.data.user_id,
     'synthetic-user');
   assert.equal(writes.filter(w => w.kind === 'message').length, 1);
 });
@@ -61,7 +56,7 @@ test('missing authenticated identity fails before accessing GCS', async () => {
   app.use(workflowsUserInject);
   app.use('/convo-history', createLoadConvoHistoryRouter({
     storage: { bucket: () => { throw new Error('must not be called'); } },
-    db: {},
+    getStorage: async () => { throw new Error('must not request storage'); },
   }));
   const response = await request(app)
     .post('/convo-history/loadConvoHistory')
@@ -78,7 +73,7 @@ test('empty synthetic conversation file completes without Firestore writes', asy
       assert.equal(name, 'awfl-native-canary-empty-20261112.json');
       return { download: async () => [Buffer.from('[]')] };
     } }) },
-    db: { collection: () => { throw new Error('must not write to Firestore'); } },
+    getStorage: async () => ({ put:()=>{throw new Error('must not write');} }),
   }));
   const response = await request(app)
     .post('/convo-history/loadConvoHistory')

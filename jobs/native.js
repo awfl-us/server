@@ -4,6 +4,7 @@
 import express from 'express';
 import { trace } from '@opentelemetry/api';
 import { getFirestore } from 'firebase-admin/firestore';
+import { getDocumentStorage } from '../storage/service.js';
 import { Storage } from '@google-cloud/storage';
 import { NativeExecutionStore } from '../workflows/native/executionStore.js';
 import { NativeGcsReleases } from '../workflows/native/gcsReleases.js';
@@ -55,7 +56,7 @@ export function createNativeJobsRouter({
       });
       const nativeHandlers = handlers || createJobsEffectHandlers({
         jobsOrigin: process.env.AWFL_NATIVE_JOBS_URL,
-        profiler, storage: new Storage(), callbackDb: getFirestore(),
+        profiler, storage: new Storage(), callbackStorage: await getDocumentStorage(),
       });
       const span = trace.getActiveSpan();
       if (span?.isRecording()) {
@@ -109,6 +110,8 @@ export function startNativeDetachedRecovery({ store, releases, handlers } = {}) 
     storage: new Storage(), bucket: process.env.AWFL_NATIVE_ARTIFACT_BUCKET,
     verifiedCache: verifiedNativeArtifacts,
   });
+  // Detached recovery remains the legacy Firestore-backed durable executor;
+  // a separate native-memory recovery protocol is required before its cutover.
   const nativeHandlers = handlers || createJobsEffectHandlers({
     jobsOrigin: process.env.AWFL_NATIVE_JOBS_URL,
     storage: new Storage(), callbackDb: getFirestore(),

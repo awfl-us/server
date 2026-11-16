@@ -32,12 +32,13 @@ export function nativeCallbackIdFromUrl(value, jobsOrigin) {
 }
 
 /** Look up a callback already registered by callback.create; no new record. */
-export async function registerNativeCallback({ db, callbackUrl, jobsOrigin, identity }) {
+export async function registerNativeCallback({ db, storage, callbackUrl, jobsOrigin, identity }) {
   const id = nativeCallbackIdFromUrl(callbackUrl, jobsOrigin);
   if (!id) return null;
-  const snap = await db.doc(scope(identity) + '/' + id).get();
-  const saved = snap.data();
-  if (!snap.exists || saved?.kind !== 'native_workflow' ||
+  const snap = storage ? await storage.get(scope(identity) + '/' + id)
+    : await db.doc(scope(identity) + '/' + id).get();
+  const saved = storage ? snap?.data : snap?.data();
+  if (!(storage ? snap : snap?.exists) || saved?.kind !== 'native_workflow' ||
       saved.created_by !== identity.userId ||
       saved.native_project_id !== identity.projectId ||
       saved.callback_url !== callbackUrl) {
@@ -47,11 +48,32 @@ export async function registerNativeCallback({ db, callbackUrl, jobsOrigin, iden
 }
 
 /** Commit a native delivery before acknowledging the existing callback route. */
-export async function recordNativeCallbackDelivery({ db, ref, body, identity }) {
+export async function recordNativeCallbackDelivery({ db, storage, ref, body, identity }) {
   scope(identity);
   const encoded = JSON.stringify(body);
   if (typeof encoded !== 'string' || Buffer.byteLength(encoded) > 128 * 1024) {
     throw new Error('Invalid native callback result');
+  }
+  if (storage) {
+    return storage.transaction(async tx => {
+      const path = typeof ref === 'string' ? ref : ref.path;
+      const current = await tx.get(path);
+      const data = current?.data;
+      if (!current || data.kind !== 'native_workflow' ||
+          data.native_project_id !== identity.projectId ||
+          data.created_by !== identity.userId) {
+        throw new Error('Callback inaccessible');
+      }
+      if (data.native_result_json != null) {
+        if (data.native_result_json !== encoded) throw new Error('Callback already delivered');
+        return 'duplicate';
+      }
+      await tx.update(path, {
+        called_at: Date.now(), last_status: 200, last_error: null,
+        native_result_json: encoded,
+      });
+      return 'recorded';
+    });
   }
   return db.runTransaction(async tx => {
     const current = await tx.get(ref);
@@ -73,7 +95,8 @@ export async function recordNativeCallbackDelivery({ db, ref, body, identity }) 
   });
 }
 
-export function createNativeCallbackEffects({ db, jobsOrigin }) {
+export function createNativeCallbackEffects({ db, storage, jobsOrigin }) {
+  if (storage) return createStorageNativeCallbackEffects({ storage, jobsOrigin });
   if (!db?.doc || !db?.runTransaction) {
     throw new Error('native callback Firestore required');
   }
@@ -169,6 +192,76 @@ export function createNativeCallbackEffects({ db, jobsOrigin }) {
           );
           if (done) unsubscribe();
         } catch (error) { finish(error); }
+      });
+    },
+  });
+}
+
+/** Provider-neutral callback effects for Jobs/native-memory executions. */
+function createStorageNativeCallbackEffects({storage,jobsOrigin}) {
+  if (typeof storage?.transaction!=='function' || typeof storage?.subscribe!=='function')
+    throw new Error('native callback Storage must support transactions and subscriptions');
+  const origin=new URL(jobsOrigin);
+  if (origin.protocol!=='https:' || origin.pathname!=='/' || origin.search || origin.hash ||
+      origin.username || origin.password) throw new Error('trusted Jobs HTTPS origin required for native callbacks');
+  const decode=(doc,identity)=>{
+    if(!doc)throw new Error('native callback not registered');
+    const data=doc.data;
+    if(data.kind!=='native_workflow' || data.native_project_id!==identity.projectId ||
+        data.created_by!==identity.userId)throw new Error('native callback owner mismatch');
+    if(data.called_at==null)return null;
+    if(typeof data.native_result_json!=='string')throw new Error('invalid native callback delivery');
+    return {http_request:{body:JSON.parse(data.native_result_json)}};
+  };
+  return Object.freeze({
+    'callback.create': async({args,identity,idempotencyKey})=>{
+      if(!args || Object.keys(args).length!==1 || args.http_callback_method!=='POST' ||
+          typeof idempotencyKey!=='string' || !EXECUTION.test(idempotencyKey.split(':')[0]))
+        throw new Error('invalid native callback create intent');
+      const id='n'+createHash('sha256').update(scope(identity)+':'+idempotencyKey).digest('hex').slice(0,32);
+      const url=origin.origin+CALLBACK_PATH+id,path=scope(identity)+'/'+id;
+      await storage.transaction(async tx=>{
+        const current=await tx.get(path);
+        if(current){
+          const data=current.data;
+          if(data.kind!=='native_workflow'||data.callback_url!==url||
+              data.native_project_id!==identity.projectId||
+              data.native_execution_id!==idempotencyKey.split(':')[0])
+            throw new Error('native callback identity collision');
+          return;
+        }
+        await tx.create(path,{
+          kind:'native_workflow',callback_url:url,
+          native_execution_id:idempotencyKey.split(':')[0],native_project_id:identity.projectId,
+          created_by:identity.userId,created_at:Date.now(),called_at:null,native_result_json:null,
+        });
+      });
+      return {url};
+    },
+    'callback.await': async({args,identity})=>{
+      const id=nativeCallbackIdFromUrl(args?.callback?.url,origin.origin);
+      if(!id||!Number.isSafeInteger(args.timeout)||args.timeout<1||args.timeout>3600)
+        throw new Error('invalid native callback await intent');
+      const path=scope(identity)+'/'+id;
+      const initial=decode(await storage.get(path),identity);
+      if(initial)return initial;
+      return new Promise((resolve,reject)=>{
+        let done=false,unsubscribe=()=>{};
+        const finish=(error,value)=>{
+          if(done)return;done=true;clearTimeout(timer);
+          Promise.resolve(unsubscribe()).catch(()=>{});
+          if(error)reject(error);else resolve(value);
+        };
+        const timer=setTimeout(()=>finish(new Error('native callback await exceeded Jobs deadline')),
+          Math.min(args.timeout*1000,MAX_WAIT_MS));
+        storage.subscribe(path,event=>{
+          try{
+            if(event.type==='error')throw event.error;
+            const outcome=decode(event.value,identity);
+            if(outcome)finish(null,outcome);
+          }catch(error){finish(error);}
+        }).then(stop=>{unsubscribe=stop;if(done)void Promise.resolve(stop()).catch(()=>{});},
+          error=>finish(error));
       });
     },
   });

@@ -3,7 +3,8 @@
 // - Idempotent per (userId, projectId): at most one active schedule per key
 // - Clears status_message at the end or on cancel/error
 
-import { projectDoc } from '../../workflows/projects/util.js';
+import { projectPath } from '../../workflows/projects/util.js';
+import { getDocumentStorage } from '../../storage/service.js';
 
 const DEFAULT_MESSAGES = [
   'Acquiring cloud compute..',
@@ -23,8 +24,8 @@ function keyOf(userId, projectId) {
 
 async function setStatusMessage({ userId, projectId, message }) {
   try {
-    const ref = projectDoc(userId, projectId);
-    await ref.set({ status_message: message ?? null, updated: Date.now() }, { merge: true });
+    await (await getDocumentStorage()).put(projectPath(userId,projectId),
+      {status_message:message??null,updated:Date.now()},{merge:true});
   } catch (e) {
     // Best-effort: log to console but do not throw
     console.warn('[progress] failed to set status_message', { userId, projectId, err: e?.message || String(e) });

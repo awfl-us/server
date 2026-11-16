@@ -31,7 +31,7 @@
 //   the original messages and annotate each message with { collapsedGroupId, collapsedGroup }
 //   so the UI can offer a re-collapse toggle and differentiate rendering.
 
-import { getFirestore } from 'firebase-admin/firestore';
+import { getDocumentStorage } from '../../../storage/service.js';
 import { projectScopedCollectionPath } from '../../userAuth.js';
 
 function isAlreadyCollapsedGroup(msg) {
@@ -69,96 +69,61 @@ function makeLogger(options = {}, ctx = {}) {
   };
 }
 
-function sessionRootRef(db, { userId, projectId, sessionId }) {
-  if (!sessionId) return null;
-  return db.collection(projectScopedCollectionPath(userId, projectId, 'convo.sessions')).doc(String(sessionId));
+function sessionRootPath({userId,projectId,sessionId}) {
+  if(!sessionId)return null;
+  return projectScopedCollectionPath(userId,projectId,'convo.sessions')+'/'+String(sessionId);
 }
 
-async function fetchMessageGroupMappings(userId, projectId, sessionId, docIds) {
-  if (!sessionId || !Array.isArray(docIds) || docIds.length === 0) return new Map();
-  const db = getFirestore();
-  const root = sessionRootRef(db, { userId, projectId, sessionId });
-  if (!root) return new Map();
-  const base = root
-    .collection('indexes')
-    .doc('collapsed')
-    .collection('messageToGroups');
-
-  // Fetch per-message mapping docs
-  const mappings = new Map(); // docId -> { groupName, responseId, updated_at }
-
-  // Firestore has no batch get by IDs API in admin SDK; perform parallel gets in chunks
-  const CHUNK = 300; // conservative parallelism
-  for (let i = 0; i < docIds.length; i += CHUNK) {
-    const chunk = docIds.slice(i, i + CHUNK);
-    const reads = chunk.map(id => base.doc(String(id)).get());
-    const snaps = await Promise.all(reads);
-    for (let idx = 0; idx < snaps.length; idx++) {
-      const snap = snaps[idx];
-      if (!snap.exists) continue;
-      const data = snap.data() || {};
-      const groupsMap = data.groups && typeof data.groups === 'object' ? data.groups : {};
-      // Choose the group entry with the most recent updated_at
-      let chosen = null;
-      for (const [gName, entry] of Object.entries(groupsMap)) {
-        if (!entry || !entry.responseId) continue;
-        const updated_at = typeof entry.updated_at === 'number' ? entry.updated_at : 0;
-        if (!chosen || updated_at > chosen.updated_at) {
-          chosen = { groupName: gName, responseId: entry.responseId, updated_at };
-        }
+async function fetchMessageGroupMappings(userId,projectId,sessionId,docIds) {
+  if(!sessionId||!Array.isArray(docIds)||!docIds.length)return new Map();
+  const store=await getDocumentStorage();
+  const root=sessionRootPath({userId,projectId,sessionId});
+  const base=root+'/indexes/collapsed/messageToGroups';
+  const mappings=new Map();
+  for(let i=0;i<docIds.length;i+=100){
+    const chunk=docIds.slice(i,i+100);
+    const docs=await Promise.all(chunk.map(id=>store.get(base+'/'+String(id))));
+    for(let n=0;n<docs.length;n++){
+      const data=docs[n]?.data||{};
+      const groups=data.groups&&typeof data.groups==='object'?data.groups:{};
+      let chosen=null;
+      for(const [groupName,entry] of Object.entries(groups)){
+        if(!entry?.responseId)continue;
+        const updated_at=typeof entry.updated_at==='number'?entry.updated_at:0;
+        if(!chosen||updated_at>chosen.updated_at)chosen={groupName,responseId:entry.responseId,updated_at};
       }
-      if (chosen) mappings.set(String(chunk[idx]), chosen);
+      if(chosen)mappings.set(String(chunk[n]),chosen);
     }
   }
   return mappings;
 }
 
-async function fetchResponseGroups(userId, projectId, sessionId, responseIds) {
-  if (!sessionId || responseIds.length === 0) return new Map();
-  const db = getFirestore();
-  const root = sessionRootRef(db, { userId, projectId, sessionId });
-  if (!root) return new Map();
-  const base = root.collection('collapsed');
-  const unique = Array.from(new Set(responseIds));
-  const CHUNK = 50;
-  const result = new Map(); // responseId -> CollapseResponse data
-  for (let i = 0; i < unique.length; i += CHUNK) {
-    const chunk = unique.slice(i, i + CHUNK);
-    const reads = chunk.map(id => base.doc(String(id)).get());
-    const snaps = await Promise.all(reads);
-    for (let j = 0; j < snaps.length; j++) {
-      const snap = snaps[j];
-      if (!snap.exists) continue;
-      const data = snap.data() || {};
-      result.set(String(chunk[j]), data);
-    }
+async function fetchResponseGroups(userId,projectId,sessionId,responseIds) {
+  if(!sessionId||!responseIds.length)return new Map();
+  const store=await getDocumentStorage(),root=sessionRootPath({userId,projectId,sessionId});
+  const unique=[...new Set(responseIds)],result=new Map();
+  for(let i=0;i<unique.length;i+=50){
+    const chunk=unique.slice(i,i+50);
+    const docs=await Promise.all(chunk.map(id=>store.get(root+'/collapsed/'+String(id))));
+    for(let n=0;n<docs.length;n++)if(docs[n])result.set(String(chunk[n]),docs[n].data||{});
   }
   return result;
 }
 
-async function fetchGroupStates(userId, projectId, sessionId, groupNames) {
-  // Read indexes/collapsed/groupState/{GROUP} for provided groupNames
-  if (!sessionId || !Array.isArray(groupNames) || groupNames.length === 0) return new Map();
-  const db = getFirestore();
-  const root = sessionRootRef(db, { userId, projectId, sessionId });
-  if (!root) return new Map();
-  const base = root
-    .collection('indexes')
-    .doc('collapsed')
-    .collection('groupState');
-
-  const unique = Array.from(new Set(groupNames));
-  const CHUNK = 200;
-  const states = new Map(); // groupName -> { expanded?: boolean, responseId?: string, updated_at?: number }
-  for (let i = 0; i < unique.length; i += CHUNK) {
-    const chunk = unique.slice(i, i + CHUNK);
-    const reads = chunk.map(name => base.doc(String(name)).get());
-    const snaps = await Promise.all(reads);
-    for (let j = 0; j < snaps.length; j++) {
-      const snap = snaps[j];
-      if (!snap.exists) continue;
-      const data = snap.data() || {};
-      states.set(String(chunk[j]), { expanded: !!data.expanded, responseId: data.responseId ? String(data.responseId) : undefined, updated_at: typeof data.updated_at === 'number' ? data.updated_at : undefined });
+async function fetchGroupStates(userId,projectId,sessionId,groupNames) {
+  if(!sessionId||!Array.isArray(groupNames)||!groupNames.length)return new Map();
+  const store=await getDocumentStorage(),root=sessionRootPath({userId,projectId,sessionId});
+  const unique=[...new Set(groupNames)],states=new Map();
+  const base=root+'/indexes/collapsed/groupState';
+  for(let i=0;i<unique.length;i+=100){
+    const chunk=unique.slice(i,i+100);
+    const docs=await Promise.all(chunk.map(name=>store.get(base+'/'+String(name))));
+    for(let n=0;n<docs.length;n++){
+      if(!docs[n])continue;
+      const data=docs[n].data||{};
+      states.set(String(chunk[n]),{expanded:!!data.expanded,
+        responseId:data.responseId?String(data.responseId):undefined,
+        updated_at:typeof data.updated_at==='number'?data.updated_at:undefined});
     }
   }
   return states;

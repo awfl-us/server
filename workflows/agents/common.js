@@ -1,11 +1,9 @@
-import { getFirestore } from 'firebase-admin/firestore';
+import { getDocumentStorage } from '../../storage/service.js';
+import { randomUUID } from 'node:crypto';
 import { projectScopedCollectionPath, userScopedCollectionPath } from '../utils.js';
 import fs from 'node:fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-
-// Shared Firestore handle
-export const db = getFirestore();
 
 // Ensure req.userId is present (set by clientAuth upstream in workflows/index.js)
 export function ensureUserAuth(req, res, next) {
@@ -90,28 +88,27 @@ export async function getFileDefinedAgentById(id) {
 
 // Same persisted agent records and session mapping used by the web client.
 // Centralize these operations so MCP does not add its own agent/session store.
-export async function resolveAgent(userId, agentId, store = db) {
-  const ref = store.doc(userScopedCollectionPath(userId, `agents/${agentId}`));
-  const snapshot = await ref.get();
-  return snapshot.exists ? snapshot.data() : getFileDefinedAgentById(agentId);
+export async function resolveAgent(userId, agentId, store) {
+  const storage=store||await getDocumentStorage();
+  const doc=await storage.get(userScopedCollectionPath(userId,`agents/${agentId}`));
+  return doc ? doc.data : getFileDefinedAgentById(agentId);
 }
 
-export async function createAgentRecord(userId, { name, workflowName, description = '', tools = DEFAULT_TOOLS }, store = db) {
-  const ref = store.collection(userScopedCollectionPath(userId, 'agents')).doc();
-  const now = Date.now();
-  const agent = { id: ref.id, name: name.trim(), description, workflowName: workflowName.trim(),
-    tools, created: now, updated: now };
-  await ref.set(agent, { merge: true });
+export async function createAgentRecord(userId, { name, workflowName, description='', tools=DEFAULT_TOOLS }, store) {
+  const storage=store||await getDocumentStorage();
+  const id=randomUUID().replaceAll('-',''),now=Date.now();
+  const agent={id,name:name.trim(),description,workflowName:workflowName.trim(),
+    tools,created:now,updated:now};
+  await storage.create(userScopedCollectionPath(userId,`agents/${id}`),agent);
   return agent;
 }
 
-export async function linkAgentSession(userId, projectId, sessionId, agentId, store = db) {
-  const agent = await resolveAgent(userId, agentId, store);
-  if (!agent) return null;
-  const ref = store.doc(sessionMapDocPath(userId, projectId, sessionId));
-  const now = Date.now();
-  await ref.set({ sessionId, agentId, updated: now, created: now }, { merge: true });
-  return { sessionId, agentId };
+export async function linkAgentSession(userId, projectId, sessionId, agentId, store) {
+  const storage=store||await getDocumentStorage();
+  const agent=await resolveAgent(userId,agentId,storage);
+  if(!agent)return null;
+  const id=sessionMapDocPath(userId,projectId,sessionId),now=Date.now();
+  await storage.put(id,{sessionId,agentId,updated:now,created:now},{merge:true});
+  return {sessionId,agentId};
 }
-
 export { userScopedCollectionPath };

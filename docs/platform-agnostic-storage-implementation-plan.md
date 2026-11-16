@@ -2,7 +2,9 @@
 
 **Decision (November 14, 2026 ET): PostgreSQL is the selected destination for AWFL document storage.** Use the existing Cloud SQL PostgreSQL 15 **`db-f1-micro` shared-core** configuration in `us-central1`; do **not** upgrade to dedicated-core or make high-concurrency p99 tuning a prerequisite. Target an in-process, SDK-independent `Storage` interface, a separate PostgreSQL adapter, and an incremental migration from Firestore. See the [actionable PostgreSQL migration plan](postgres-storage-migration-plan.md).
 
-**Status:** Decision and managed-service benchmark complete; the full provider-independent contract, PostgreSQL application integration, data migration, and production switch are **not yet implemented**. The actual running application still uses Firestore. The initial single-record pilot is not the full Storage implementation.
+**November 16 implementation update:** Jobs and its shared workflow routes have been migrated to the provider-neutral Storage entrypoint and exercised on both managed backends; the remaining data, deployment and legacy-durable/MCP cutover work is tracked in [Jobs document Storage migration](jobs-document-storage-migration.md). This work is not yet a production backend switch.
+
+**Status (historical November 14 baseline):** Decision and managed-service benchmark complete; the full provider-independent contract, PostgreSQL application integration, data migration, and production switch are **not yet implemented**. The actual running application still uses Firestore. The initial single-record pilot is not the full Storage implementation.
 
 **Scope:** Keep Firebase Auth/ID-token verification for now; the database decision does not require replacing authentication. Retain the existing Firestore adapter/compatibility path until migration finishes. Realtime Database remains a *tested alternative*, not the selected platform backend; no further RTDB work is needed absent a concrete requirement.
 

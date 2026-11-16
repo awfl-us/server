@@ -1,9 +1,9 @@
 import express from 'express';
-import { getFirestore } from 'firebase-admin/firestore';
+import { randomUUID } from 'node:crypto';
+import { getDocumentStorage } from '../../storage/service.js';
 import { userScopedCollectionPath } from '../../workflows/utils.js';
 import { nativeCallbackIdFromUrl, registerNativeCallback } from '../../workflows/native/callbackEffects.js';
 
-const db = getFirestore();
 const router = express.Router();
 router.use(express.json());
 
@@ -30,7 +30,7 @@ router.post('/', async (req, res) => {
     }
 
     const colPath = userScopedCollectionPath(userId, 'callbacks');
-    const colRef = db.collection(colPath);
+    const documents = await getDocumentStorage();
 
     // Native creates its callback in the SAME user-scoped collection first.
     // The traditional saveCallback step registers that already-existing ID,
@@ -40,7 +40,7 @@ router.post('/', async (req, res) => {
     if (nativeId) {
       try {
         const existing = await registerNativeCallback({
-          db, callbackUrl: callback_url,
+          storage: documents, callbackUrl: callback_url,
           jobsOrigin: process.env.AWFL_NATIVE_JOBS_URL,
           identity: { userId, projectId: req.projectId },
         });
@@ -50,7 +50,8 @@ router.post('/', async (req, res) => {
       }
     }
 
-    const doc = await colRef.add({
+    const id = randomUUID().replaceAll('-', '');
+    await documents.create(`${colPath}/${id}`, {
       callback_url: String(callback_url),
       name: name ? String(name) : null,
       description: description ? String(description) : null,
@@ -62,7 +63,7 @@ router.post('/', async (req, res) => {
       last_error: null,
     });
 
-    res.status(201).json({ id: doc.id, callback_url });
+    res.status(201).json({ id, callback_url });
   } catch (err) {
     console.error('[jobs/callbacks:create] error', err);
     res.status(500).json({ error: String(err?.message || err) });

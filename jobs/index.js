@@ -1,3 +1,4 @@
+import './initFirebaseAdmin.js';
 import express from 'express';
 
 // import businessReportWorkerRoutes from './businessReport/index.js';

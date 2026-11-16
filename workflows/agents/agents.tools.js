@@ -1,5 +1,6 @@
 import express from 'express';
-import { db, userScopedCollectionPath, normalizeToolsInput, uniqueMerge, removeFromList, DEFAULT_TOOLS, getFileDefinedAgentById } from './common.js';
+import { getDocumentStorage } from '../../storage/service.js';
+import { userScopedCollectionPath, normalizeToolsInput, uniqueMerge, removeFromList, DEFAULT_TOOLS, getFileDefinedAgentById } from './common.js';
 
 const router = express.Router();
 
@@ -12,10 +13,11 @@ router.post('/:id/tools', async (req, res) => {
     const toAdd = normalizeToolsInput(req.body?.tools);
     if (!toAdd.length) return res.status(400).json({ error: 'tools is required (string or array of strings)' });
 
-    const docRef = db.doc(userScopedCollectionPath(userId, `agents/${id}`));
-    const snap = await docRef.get();
+    const storage = await getDocumentStorage();
+    const documentPath = userScopedCollectionPath(userId, `agents/${id}`);
+    const snap = await storage.get(documentPath);
 
-    if (!snap.exists) {
+    if (!snap) {
       // If this is a file-defined agent, we currently treat mutation as unsupported
       const fileAgent = await getFileDefinedAgentById(id);
       if (fileAgent) {
@@ -24,10 +26,10 @@ router.post('/:id/tools', async (req, res) => {
       return res.status(404).json({ error: 'Agent not found' });
     }
 
-    const current = snap.data()?.tools || [];
+    const current = snap.data?.tools || [];
     const tools = uniqueMerge(current, toAdd);
 
-    await docRef.set({ tools, updated: Date.now() }, { merge: true });
+    await storage.put(documentPath, { tools, updated: Date.now() }, { merge: true });
     return res.status(200).json({ tools });
   } catch (err) {
     console.error('[agents] add tools failed', err);
@@ -44,10 +46,11 @@ router.delete('/:id/tools', async (req, res) => {
     const toRemove = normalizeToolsInput(req.body?.tools);
     if (!toRemove.length) return res.status(400).json({ error: 'tools is required (string or array of strings)' });
 
-    const docRef = db.doc(userScopedCollectionPath(userId, `agents/${id}`));
-    const snap = await docRef.get();
+    const storage = await getDocumentStorage();
+    const documentPath = userScopedCollectionPath(userId, `agents/${id}`);
+    const snap = await storage.get(documentPath);
 
-    if (!snap.exists) {
+    if (!snap) {
       // If this is a file-defined agent, we currently treat mutation as unsupported
       const fileAgent = await getFileDefinedAgentById(id);
       if (fileAgent) {
@@ -56,10 +59,10 @@ router.delete('/:id/tools', async (req, res) => {
       return res.status(404).json({ error: 'Agent not found' });
     }
 
-    const current = snap.data()?.tools || [];
+    const current = snap.data?.tools || [];
     const tools = removeFromList(current, toRemove);
 
-    await docRef.set({ tools, updated: Date.now() }, { merge: true });
+    await storage.put(documentPath, { tools, updated: Date.now() }, { merge: true });
     return res.status(200).json({ tools });
   } catch (err) {
     console.error('[agents] remove tools failed', err);
@@ -78,11 +81,12 @@ router.get('/:id/tools', async (req, res) => {
       return res.status(200).json({ tools: DEFAULT_TOOLS });
     }
 
-    const docRef = db.doc(userScopedCollectionPath(userId, `agents/${id}`));
-    const snap = await docRef.get();
+    const storage = await getDocumentStorage();
+    const documentPath = userScopedCollectionPath(userId, `agents/${id}`);
+    const snap = await storage.get(documentPath);
 
-    if (snap.exists) {
-      const data = snap.data() || {};
+    if (snap) {
+      const data = snap.data || {};
 
       let tools;
       if (Object.prototype.hasOwnProperty.call(data, 'tools')) {

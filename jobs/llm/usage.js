@@ -1,9 +1,9 @@
 import express from 'express';
-import { getFirestore, FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { getDocumentStorage, readDocuments } from '../../storage/service.js';
+import { patch, applyPatch } from '../../storage/document/contract.js';
 import { projectScopedCollectionPath } from '../userAuth.js';
 
 const router = express.Router();
-const db = getFirestore();
 
 const LLM_USAGE_DEBUG = process.env.LLM_USAGE_DEBUG === '1';
 const DEFAULT_WORKFLOW_NAME = process.env.LLM_USAGE_DEFAULT_WORKFLOW || 'default';
@@ -50,7 +50,7 @@ function hourBucket(dateLike) {
   return {
     date: d,
     hourKey,
-    ts: Timestamp.fromDate(d)
+    ts: d.toISOString()
   };
 }
 
@@ -66,7 +66,7 @@ function buildUsageIncrements(usage = {}) {
   const add = (path, val) => {
     const n = toNumber(val);
     if (!n) return;
-    inc[path] = FieldValue.increment(n);
+    inc[path] = patch.increment(n);
   };
   // Top-level known fields (nested under usage.*)
   add('usage.total_tokens', u.total_tokens);
@@ -103,7 +103,7 @@ export async function incrementUsage({ userId, projectId, sessionId, workflowNam
 
     const basePath = projectScopedCollectionPath(userId, projectId, `convo.sessions/${sessionId}/llm.usage`);
     const docId = `${wf}__${hourKey}`;
-    const ref = db.collection(basePath).doc(docId);
+    const path = `${basePath}/${docId}`;
 
     const updates = {
       workflow_name: wf,
@@ -112,19 +112,25 @@ export async function incrementUsage({ userId, projectId, sessionId, workflowNam
       sessionId,
       hour_start: ts,
       hour_key: hourKey,
-      last_updated: FieldValue.serverTimestamp(),
-      requests: FieldValue.increment(1)
+      last_updated: patch.serverTimestamp(),
+      requests: patch.increment(1)
     };
 
     const usageIncs = buildUsageIncrements(usage);
     Object.assign(updates, usageIncs);
 
     if (typeof totalCost === 'number' && isFinite(totalCost)) {
-      updates.total_cost = FieldValue.increment(totalCost);
+      updates.total_cost = patch.increment(totalCost);
     }
 
     dbg('writing usage increment', { basePath, docId, hourKey, hasUsage: !!usage, hasCost: typeof totalCost === 'number' });
-    await ref.set(updates, { merge: true });
+    const store = await getDocumentStorage();
+    await store.transaction(async tx => {
+      const prev = await tx.get(path);
+      const next = applyPatch(prev?.data ?? {}, updates);
+      if (prev) await tx.put(path, next);
+      else await tx.create(path, next);
+    });
   } catch (err) {
     console.error('[llm.usage] incrementUsage failed:', err?.message || err);
   }
@@ -183,13 +189,13 @@ function addUsageAgg(target, u = {}) {
 export async function getSessionTotals({ userId, projectId, sessionId }) {
   if (!userId || !projectId || !sessionId) throw new Error('userId, projectId, sessionId are required');
   const basePath = projectScopedCollectionPath(userId, projectId, `convo.sessions/${sessionId}/llm.usage`);
-  const snap = await db.collection(basePath).get();
+  const snap = await readDocuments(await getDocumentStorage(), { collection: basePath });
 
   const totals = {};
   const overall = { requests: 0, total_cost: 0, usage: undefined };
 
-  for (const doc of snap.docs) {
-    const data = doc.data() || {};
+  for (const doc of snap) {
+    const data = doc.data || {};
     // overall
     addUsageAgg(overall, data);
     // per-workflow
@@ -211,7 +217,7 @@ export async function getProjectHourly({ userId, projectId, start, end }) {
       // Make end inclusive of the provided hour by advancing to the next hour (exclusive upper bound)
       const endHour = hourBucket(end).date;
       const endExclusive = new Date(endHour.getTime() + 60 * 60 * 1000);
-      endTs = Timestamp.fromDate(endExclusive);
+      endTs = endExclusive.toISOString();
     } else {
       endTs = hourBucket(end).ts;
     }
@@ -220,22 +226,26 @@ export async function getProjectHourly({ userId, projectId, start, end }) {
   }
 
   // Query collection group across all session usage docs; filter by projectId/userId and hour range
-  const q = db.collectionGroup('llm.usage')
-    .where('userId', '==', userId)
-    .where('projectId', '==', projectId)
-    .where('hour_start', '>=', startTs)
-    .where('hour_start', '<', endTs);
-
-  const snap = await q.get();
+  const snap = await readDocuments(await getDocumentStorage(), {
+    collectionGroup: 'llm.usage', where: [
+      { field: 'userId', op: '==', value: userId },
+      { field: 'projectId', op: '==', value: projectId },
+    ],
+  });
 
   const buckets = {}; // { [hour_key]: { [workflow_name]: agg } }
 
   if (LLM_USAGE_DEBUG) {
-    dbg('project/hourly docs matched:', snap.size, { start, end, startTs: startTs.toDate().toISOString(), endTs: endTs.toDate().toISOString() });
+    dbg('project/hourly docs matched:', snap.length, { start, end, startTs, endTs });
   }
 
-  for (const doc of snap.docs) {
-    const data = doc.data() || {};
+  for (const doc of snap) {
+    const data = doc.data || {};
+    const value = data.hour_start;
+    const time = typeof value === 'string' ? Date.parse(value) :
+      typeof value === 'number' ? value :
+      (value?.seconds ?? value?._seconds ?? 0) * 1000;
+    if (!(time >= Date.parse(startTs) && time < Date.parse(endTs))) continue;
     if (LLM_USAGE_DEBUG) {
       const usageShape = {
         hasUsageObj: !!(data && data.usage && typeof data.usage === 'object'),

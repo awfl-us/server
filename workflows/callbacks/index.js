@@ -1,13 +1,14 @@
 import express from 'express';
 import axios from 'axios';
 import { getFirestore } from 'firebase-admin/firestore';
+import { getDocumentStorage } from '../../storage/service.js';
+import { selectedStorageBackend } from '../../storage/factory.js';
 import { userScopedCollectionPath } from '../utils.js';
 import { GoogleAuth } from 'google-auth-library';
 import { ExecutionService } from '../../mcp/service.js';
 import { recordNativeCallbackDelivery } from '../native/callbackEffects.js';
 
 const router = express.Router();
-const db = getFirestore();
 router.use(express.json({ limit: process.env.CALLBACK_MAX_BYTES || '1mb' }));
 
 function isHttpUrl(u) {
@@ -53,11 +54,19 @@ router.post('/:id', async (req, res) => {
   try {
     // Store and read callbacks under user-scoped collection only
     const docPath = userScopedCollectionPath(userId, `callbacks/${id}`);
-    const ref = db.doc(docPath);
-    const snap = await ref.get();
-    if (!snap.exists) return res.status(404).json({ error: 'Callback not found' });
+    const store = await getDocumentStorage();
+    let snap = await store.get(docPath);
+    // The MCP control plane still persists its workspace callbacks in the
+    // original Firestore store; preserve them until its own migration finishes.
+    if (!snap && selectedStorageBackend() === 'postgres') {
+      const legacy = await getFirestore().doc(docPath).get();
+      if (legacy.exists && legacy.data()?.kind === 'mcp_request') {
+        snap = { data: legacy.data() };
+      }
+    }
+    if (!snap) return res.status(404).json({ error: 'Callback not found' });
 
-    const data = snap.data() || {};
+    const data = snap.data || {};
     // Native callbacks use the existing delivery URL and the SAME user-scoped
     // callback document; their result is recorded before acknowledgement.
     // The waiting native worker observes this record's Firestore change.
@@ -68,7 +77,7 @@ router.post('/:id', async (req, res) => {
       }
       try {
         const result = await recordNativeCallbackDelivery({
-          db, ref, body: req.body,
+          storage: store, ref: docPath, body: req.body,
           identity: { userId, projectId: req.projectId },
         });
         return res.status(200).json({ ok: true, recorded: result === 'recorded' });
@@ -95,7 +104,7 @@ router.post('/:id', async (req, res) => {
         return res.status(400).json({ error: 'Invalid result' });
       }
       try {
-        const service = new ExecutionService({ db });
+        const service = new ExecutionService({ db: getFirestore() });
         const kind = req.body._awfl_mcp_event;
         const result = kind === 'claim'
           ? await service.claim(userId, req.projectId, mcp.workspaceId, mcp.requestId, req.body.consumer_id)
@@ -137,11 +146,8 @@ router.post('/:id', async (req, res) => {
 
     const now = Date.now();
     try {
-      await ref.update({
-        called_at: now,
-        last_status: status,
-        last_error: lastError,
-      });
+      await store.put(docPath, { called_at: now,
+        last_status: status, last_error: lastError }, {merge:true});
     } catch (e) {
       // log and continue
       console.warn('[callbacks invoke] failed to persist call metadata', String(e?.message || e));

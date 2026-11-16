@@ -1,12 +1,7 @@
 // loadConvoHistory.js: Endpoint to load and ingest all conversation trees from a JSON array file in Google Cloud Storage into Firestore under convo.sessions
-import { initializeApp, getApps } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
+import { getDocumentStorage } from '../storage/service.js';
 import express from 'express';
 import { Storage } from '@google-cloud/storage';
-
-if (!getApps().length) {
-  initializeApp();
-}
 
 function getLatestBranchIds(mapping) {
   let rootNode = null;
@@ -31,7 +26,7 @@ function getLatestBranchIds(mapping) {
 // req.userId and removes body.userId. Never depend on the stripped body field.
 // The arguments are injected for deterministic test runs (no GCS/Firestore).
 export function createLoadConvoHistoryRouter({
-  db = getFirestore(), storage = new Storage(),
+  getStorage = getDocumentStorage, storage = new Storage(),
 } = {}) {
 const router = express.Router();
 router.post('/loadConvoHistory', async (req, res) => {
@@ -52,6 +47,7 @@ router.post('/loadConvoHistory', async (req, res) => {
     if (!Array.isArray(convosArray)) {
       return res.status(400).json({ error: 'Expected an array of conversations in the file' });
     }
+    const documents = await getStorage();
     let totalLoaded = 0;
     let totalDiscardedMessages = 0;
     for (const convoJson of convosArray) {
@@ -94,20 +90,16 @@ router.post('/loadConvoHistory', async (req, res) => {
         is_archived: convoJson.is_archived,
         user_id: userId
       };
-      await db.collection('convo.sessions').doc(sessionId).set(sessionDoc, { merge: true });
+      await documents.put(`convo.sessions/${sessionId}`, sessionDoc, { merge: true });
       // Write messages on latest branch
       const collectionPath = `convo.sessions/${sessionId}/messages`;
-      const batch = db.batch();
-      messages.forEach((msg, idx) => {
-        let docId;
-        if (msg.id) {
-          docId = msg.id;
-        } else {
-          docId = String(idx);
-        }
-        batch.set(db.collection(collectionPath).doc(docId), { create_time: msg.create_time, value: msg }, { merge: true });
-      });
-      await batch.commit();
+      const writes = messages.map((msg,idx)=>({
+        op:'put', path:`${collectionPath}/${msg.id || String(idx)}`,
+        data:{create_time:msg.create_time ?? null,value:msg}, options:{merge:true},
+      }));
+      for(let start=0;start<writes.length;start+=500){
+        await documents.batch(writes.slice(start,start+500));
+      }
       totalLoaded++;
     }
     res.status(200).json({ loaded: totalLoaded, sessions: convosArray.length, discarded_messages: totalDiscardedMessages });
