@@ -18,6 +18,11 @@ export function createMemoryDetachedLauncher({
   }
 
   return async ({ name, args, path, effectId }) => {
+    // NativeDocumentStore M1 does not yet implement durable detached-root
+    // recovery after worker restart; reject before creating a child record.
+    if (process.env.AWFL_NATIVE_DOCUMENT_STORE_ENABLED === '1') {
+      throw new Error('detached children require durable storage support');
+    }
     if (typeof path !== 'string' || !path ||
         !/^[A-Za-z0-9_-]{1,120}$/.test(effectId || '') ||
         !args || !Object.hasOwn(args, 'argument')) {

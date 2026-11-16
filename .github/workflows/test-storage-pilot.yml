@@ -45,7 +45,7 @@ jobs:
       - name: Test execution-state contract and mocked adapters plus real PostgreSQL concurrency
         env:
           PGTEST_URL: postgres://benchmark-ci:benchmark-ci@127.0.0.1:5432/benchmark_ci
-        run: node --test test/storage/*.test.mjs
+        run: node --test --test-concurrency=1 test/storage/*.test.mjs
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: '1.13.5'

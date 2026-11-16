@@ -135,3 +135,41 @@ test('opt-in native timing leaves HTTP payload unchanged and uses scoped IDs onl
     else process.env.AWFL_NATIVE_PROFILE_ENABLED = original;
   }
 });
+
+test('experimental document-store Jobs route rejects durable tasks without fallback', async () => {
+  const prev = process.env.AWFL_NATIVE_DOCUMENT_STORE_ENABLED;
+  process.env.AWFL_NATIVE_DOCUMENT_STORE_ENABLED = '1';
+  let called = 0;
+  try {
+    const app = appFor({ store: { name: 'legacy' }, releases: {}, handlers: {},
+      execute: async () => { called++; return { done: true }; },
+    });
+    const res = await request(app).post('/native/execute')
+      .send({ executionId: 'native_' + 'a'.repeat(32) });
+    assert.equal(res.status, 503);
+    assert.equal(called, 0);
+  } finally {
+    if (prev === undefined) delete process.env.AWFL_NATIVE_DOCUMENT_STORE_ENABLED;
+    else process.env.AWFL_NATIVE_DOCUMENT_STORE_ENABLED = prev;
+  }
+});
+
+test('experimental document-store Jobs executes memory task on injected store only', async () => {
+  const prev = process.env.AWFL_NATIVE_DOCUMENT_STORE_ENABLED;
+  process.env.AWFL_NATIVE_DOCUMENT_STORE_ENABLED = '1';
+  const docStore = { name: 'document-storage' }, legacy = { name: 'legacy' };
+  let observed;
+  try {
+    const app = appFor({ store: legacy, memoryStore: docStore, releases: {}, handlers: {},
+      execute: async () => { throw new Error('durable runner must not run'); },
+      executeMemory: async ({store}) => { observed=store; return {ok:true}; },
+    });
+    const res = await request(app).post('/native/execute')
+      .send({ executionId: 'native_'+'c'.repeat(32), executionMode: 'memory' });
+    assert.equal(res.status, 200);
+    assert.equal(observed, docStore);
+  } finally {
+    if (prev === undefined) delete process.env.AWFL_NATIVE_DOCUMENT_STORE_ENABLED;
+    else process.env.AWFL_NATIVE_DOCUMENT_STORE_ENABLED = prev;
+  }
+});
