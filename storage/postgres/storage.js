@@ -200,8 +200,8 @@ export class PostgresStorage {
           },
         };
         const value=await fn(Object.freeze(tx));
-        // A PostgreSQL AFTER trigger persists ordered change events and
-        // publishes NOTIFY in the SAME transaction, without N extra queries.
+        // The AFTER trigger sends scoped document wakeups at commit; it does
+        // not append history or acquire a globally shared cursor lock.
         await client.query('COMMIT');
         if (this.watchers.size) for (const path of changedPaths) this.#notifyDocument(path);
         return value;
