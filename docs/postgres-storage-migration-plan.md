@@ -1,6 +1,6 @@
 # PostgreSQL storage migration — implementation plan
 
-**Decision:** November 14, 2026 ET. **Selected provider:** PostgreSQL 15 on the existing Cloud SQL **`db-f1-micro` shared-core**, `us-central1`, 10 GiB SSD. **State:** plan approved by backend choice; implementation not started beyond the isolated single-record storage pilot. The production AWFL server continues to use Firestore.
+**Decision:** November 14, 2026 ET. **Selected provider:** PostgreSQL 15 on the existing Cloud SQL **`db-f1-micro` shared-core**, `us-central1`, 10 GiB SSD. **State:** M0 adapter foundation has started (provider-neutral document contract, PostgreSQL JSONB implementation, transactions, change log/subscriptions and real managed integration tests); application routing and Firestore data migration remain pending. The production AWFL server continues to use Firestore.
 
 This is the executable next-step plan under [platform-agnostic storage](platform-agnostic-storage-implementation-plan.md). Keep code moving through small local-test/commit increments; do not spend another cycle comparing database tiers or waiting for deployments. No paying customers currently, but developer/user-owned state can still exist and should not be destroyed without inspection.
 
@@ -46,13 +46,15 @@ These are **design sketches, not deployed DDL**. Path hierarchy, collection-grou
 
 ## Implementation order
 
-### M0 — inventory and contract foundation
+### M0 — inventory and contract foundation (in progress)
 
 1. Refresh the server's direct and injected Firestore-call inventory (native store, jobs, callbacks, sessions, context/history, projects/tasks, usage, events/SSE, MCP/Agents MCP, background recovery). Mark transactions, listener/query semantics, exact indexes and request scoping by path. Keep the inventory checked in.
 2. Stabilize the SDK-independent `Storage` contract and executable test suite. Start with `storage/pilot/` semantics; extend to query, atomic batch, transaction and document/query subscriptions. Define API errors and value codecs before translating endpoints.
 3. Establish the **Postgres implementation package boundary**. During fast iteration this can be an in-repo workspace package, with extraction/publishing to `awfl-us/storage` and `awfl-us/storage-postgres` when stable; preserve separate dependencies and import rules from day one. Do not add a new HTTP hop or make package publishing a blocker.
 
-**Exit:** common tests pass with a real PostgreSQL database; code outside the adapter can import the contract without importing Firebase/SQL SDKs.
+**Current checkpoint:** `storage/document/{contract,atomicRecords}.js`, `storage/postgres/{storage.js,schema.sql,README.md}` and `test/storage/{documentContract,postgresDocuments.integration}.test.mjs` now provide a provider-neutral interface with **real managed PostgreSQL** tests for single-record CRUD, queries, atomic batch, concurrent counters, subscription replay and native memory ownership fencing. The adapter is not wired into production. Remaining M0 gate: exhaustive Firestore call-site inventory and full production query/watch/codec conformance. See [adapter limitations and test commands](../storage/postgres/README.md).
+
+**Exit:** common tests pass with a real PostgreSQL database; code outside the adapter can import the contract without importing Firebase/SQL SDKs. Do not call M0 complete until all required application semantics have been inventoried.
 
 ### M1 — native memory-root execution state (first functional integration)
 

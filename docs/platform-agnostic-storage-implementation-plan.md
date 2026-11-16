@@ -22,7 +22,7 @@ PostgreSQL has **~8.7× lower median** guarded-completion latency than Firestore
 
 **Cost assumption:** `db-f1-micro` plus 10 GiB SSD is approximately **$10–15/month fixed** at the tested configuration, excluding additional storage, backup, networking, other AWFL services and variable usage. This is a planning estimate, **not an audited GCP invoice**. Keep resource spend lean; upgrade only from observed constraints. Use connection pooling sparingly with PostgreSQL's measured 25-connection limit.
 
-**Follow-up priority:** Complete [the PostgreSQL storage migration](postgres-storage-migration-plan.md), beginning with the real native **memory execution-state** integration and then the full shared Storage contract. Do not keep benchmarking new database tiers instead of implementing the chosen backend.
+**Follow-up priority:** Complete [the PostgreSQL storage migration](postgres-storage-migration-plan.md). The initial shared document interface/PostgreSQL JSONB adapter is in `storage/document/` and `storage/postgres/` (real managed-DB tests, not yet production-integrated). Next: finish the M0 call-site conformance inventory and wire the first real native **memory execution-state** lifecycle consistently across creation, worker, status and cancellation. Do not keep benchmarking new database tiers instead of implementing the chosen backend.
 
 ## Historical Phase 0A — completed database investigation (November 14, 2026)
 
