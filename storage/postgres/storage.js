@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { isDeepStrictEqual } from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { applyPatch, assertStorage, fail, objectValue, partsOf,
   validatePath, validateQuery, StorageError } from '../document/contract.js';
@@ -93,8 +94,9 @@ export class PostgresStorage {
     if (!pool?.query || !pool?.connect) throw new TypeError('PostgresStorage requires pg.Pool');
     if (!Number.isInteger(pollIntervalMs) || pollIntervalMs < 50) throw new TypeError('invalid polling interval');
     this.pool=pool; this.ownPool=ownPool; this.pollIntervalMs=pollIntervalMs;
-    this.watchers=new Set(); this.listening=null; this.pollTimer=null;
-    this.draining=false; this.closed=false;
+    this.watchers=new Set(); this.eventWatchers=new Set();
+    this.listening=null; this.pollTimer=null;
+    this.closed=false;
     assertStorage(this);
   }
   // Only for setup/tests. Production migrations must be explicit and managed.
@@ -107,7 +109,7 @@ export class PostgresStorage {
     try {
       await this.pool.query(`INSERT INTO awfl_documents(path,collection_path,collection_id,document_id,data)
         VALUES ($1,$2,$3,$4,$5::jsonb)`,[p.path,p.collectionPath,p.collectionId,p.documentId,json(data)]);
-      if(this.watchers.size) void this.#drain().catch(()=>{});
+      if(this.watchers.size) this.#notifyDocument(p.path);
     }catch(error){throw sqlError(error);}
   }
   async put(path,value,{merge=false}={}) {
@@ -119,7 +121,7 @@ export class PostgresStorage {
         SET data=${merge?'awfl_documents.data || EXCLUDED.data':'EXCLUDED.data'},
         revision=awfl_documents.revision+1,updated_at=clock_timestamp()`,
         [p.path,p.collectionPath,p.collectionId,p.documentId,json(data)]);
-      if(this.watchers.size) void this.#drain().catch(()=>{});
+      if(this.watchers.size) this.#notifyDocument(path);
     }catch(error){throw sqlError(error);}
   }
   async update(path,changes) { return this.transaction(tx=>tx.update(path,changes)); }
@@ -201,7 +203,7 @@ export class PostgresStorage {
         // A PostgreSQL AFTER trigger persists ordered change events and
         // publishes NOTIFY in the SAME transaction, without N extra queries.
         await client.query('COMMIT');
-        if (changed) void this.#drain().catch(()=>{});
+        if (changed) await this.#reconcile();
         return value;
       } catch (err) {
         await client.query('ROLLBACK').catch(()=>{});
@@ -213,88 +215,234 @@ export class PostgresStorage {
       } finally { client.release(); }
     }
   }
+  // Document/query subscriptions expose current state, not a transaction log.
+  // A notification merely requests a refresh; periodic reads cover missed NOTIFY.
   async subscribe(target,listener,{afterCursor}={}) {
     if (typeof listener!=='function') throw new TypeError('listener required');
+    if (afterCursor!==undefined) return fail('UNSUPPORTED',
+      'document subscriptions have no durable cursor; use subscribeEvents for ordered streams');
     const query=typeof target==='string'?null:validateQuery(target);
     const path=typeof target==='string'?validatePath(target):null;
     if (this.closed) return fail('UNAVAILABLE','storage closed');
-    // Cursor is captured before snapshot: duplicate changes are tolerable,
-    // but a committed event between snapshot and registration cannot be lost.
-    const first=await this.pool.query(`SELECT position FROM awfl_storage_cursor WHERE name='all'`);
-    if (!first.rows.length) return fail('UNAVAILABLE','storage cursor missing');
-    const currentPosition=BigInt(first.rows[0].position);
-    let startPosition=currentPosition;
-    if (afterCursor!==undefined) {
-      if (typeof afterCursor!=='string' || !/^(0|[1-9][0-9]*)$/.test(afterCursor))
-        return fail('INVALID_QUERY','invalid subscription cursor');
-      startPosition=BigInt(afterCursor);
-      if (startPosition>currentPosition) return fail('INVALID_QUERY','future subscription cursor');
-    }
-    const watcher={path,query,listener,position:startPosition,active:false};
+    await this.#ensureListening();
+    const watcher={path,query,listener,active:false,dirty:false,busy:false,
+      value:null,sequence:0};
     this.watchers.add(watcher);
     try {
-      await this.#ensureListening();
-      const initial=path?await this.get(path):await this.query(query);
-      await listener({type:'snapshot',cursor:String(watcher.position),value:initial});
+      // Listener is already installed. Any concurrent notification sets dirty
+      // while the snapshot is being loaded or delivered.
+      const initial=await this.#readTarget(watcher);
+      watcher.value=initial;
+      await listener({type:'snapshot',cursor:'0',value:initial});
       watcher.active=true;
-      await this.#drain();
-      return async()=>{this.watchers.delete(watcher);this.#stopIfIdle();};
-    } catch(error) {this.watchers.delete(watcher);this.#stopIfIdle();throw error;}
+      if (watcher.dirty) await this.#refreshWatcher(watcher);
+      return async()=>{this.watchers.delete(watcher);watcher.active=false;this.#stopIfIdle();};
+    } catch(error) {
+      this.watchers.delete(watcher);watcher.active=false;this.#stopIfIdle();throw error;
+    }
   }
+  async #readTarget(w) { return w.path?this.get(w.path):this.query(w.query); }
+  #matches(w,path) {
+    if (w.path) return w.path===path;
+    const components=path.split('/');
+    return w.query.collection
+      ? components.slice(0,-1).join('/')===w.query.collection
+      : components.at(-2)===w.query.collectionGroup;
+  }
+  #notifyDocument(path) {
+    for (const watcher of this.watchers) {
+      if (!this.#matches(watcher,path)) continue;
+      watcher.dirty=true;
+      if (watcher.active) void this.#refreshWatcher(watcher);
+    }
+  }
+  async #refreshWatcher(w) {
+    w.dirty=true;
+    if (!w.active || w.busy || !this.watchers.has(w)) return;
+    w.busy=true;
+    try {
+      do {
+        w.dirty=false;
+        const value=await this.#readTarget(w);
+        if (!isDeepStrictEqual(value,w.value)) {
+          const before=w.value;
+          w.value=value;
+          ++w.sequence;
+          const action=w.path?(value===null?'delete':before===null?'create':'update'):'update';
+          await w.listener({type:'change',cursor:String(w.sequence),
+            path:w.path,action,value});
+        }
+      } while(w.dirty && w.active && this.watchers.has(w));
+    } catch(error) {
+      try {await w.listener({type:'error',error});} catch { /* subscriber isolation */ }
+    } finally {
+      w.busy=false;
+      if (w.dirty && w.active && this.watchers.has(w)) void this.#refreshWatcher(w);
+    }
+  }
+
+  // Streams are separate from generic Storage documents. Only appendEvent
+  // allocates a transactional cursor, and only within the specified stream.
+  #stream(scope,streamId) {
+    if (!['session','project'].includes(scope) || typeof streamId!=='string' ||
+      !streamId || streamId.length>512 || /[\\/\\u0000-\\u001f]/.test(streamId))
+      return fail('INVALID_PATH','invalid event stream');
+    return scope+':'+streamId;
+  }
+  async appendEvent({scope,streamId,eventId,payload}) {
+    const key=this.#stream(scope,streamId);
+    if (typeof eventId!=='string' || !eventId || eventId.length>256 ||
+      /[\\u0000-\\u001f]/.test(eventId)) return fail('INVALID_DATA','invalid event id');
+    const body=objectValue(payload);
+    const client=await this.pool.connect();
+    let position,duplicate=false;
+    try {
+      await client.query('BEGIN');
+      // Acquires a row lock only for this stream; the lock is held to COMMIT.
+      const cursor=await client.query(`INSERT INTO awfl_storage_stream_cursors(scope,stream_id,position)
+        VALUES ($1,$2,1) ON CONFLICT (scope,stream_id) DO UPDATE
+        SET position=awfl_storage_stream_cursors.position+1 RETURNING position`,[scope,streamId]);
+      position=String(cursor.rows[0].position);
+      const previous=await client.query(`SELECT position FROM awfl_storage_stream_events
+        WHERE scope=$1 AND stream_id=$2 AND event_id=$3`,[scope,streamId,eventId]);
+      if (previous.rows.length) {
+        position=String(previous.rows[0].position);
+        // Undo the provisional increment; an idempotent append creates no gap.
+        await client.query('ROLLBACK');
+        duplicate=true;
+      } else {
+        await client.query(`INSERT INTO awfl_storage_stream_events
+          (scope,stream_id,position,event_id,payload)
+          VALUES ($1,$2,$3,$4,$5::jsonb)`,[scope,streamId,position,eventId,json(body)]);
+        await client.query("SELECT pg_notify('awfl_storage_event',$1)",[key]);
+        await client.query('COMMIT');
+      }
+    } catch(error) {await client.query('ROLLBACK').catch(()=>{});throw sqlError(error);}
+    finally {client.release();}
+    if (!duplicate) this.#notifyStream(key);
+    return {cursor:position,duplicate};
+  }
+  async replayEvents({scope,streamId,afterCursor='0',limit=200}) {
+    this.#stream(scope,streamId);
+    if (typeof afterCursor!=='string' || !/^(0|[1-9][0-9]*)$/.test(afterCursor))
+      return fail('INVALID_QUERY','invalid event cursor');
+    if (!Number.isSafeInteger(limit)||limit<1||limit>500)
+      return fail('INVALID_QUERY','invalid replay limit');
+    const result=await this.pool.query(`SELECT position,event_id,payload,created_at
+      FROM awfl_storage_stream_events WHERE scope=$1 AND stream_id=$2
+      AND position>$3 ORDER BY position LIMIT $4`,[scope,streamId,afterCursor,limit]);
+    return result.rows.map(row=>({type:'event',scope,streamId,
+      cursor:String(row.position),id:row.event_id,payload:clone(row.payload),
+      createdAt:row.created_at.toISOString()}));
+  }
+  async subscribeEvents({scope,streamId},listener,{afterCursor}={}) {
+    const key=this.#stream(scope,streamId);
+    if (typeof listener!=='function') throw new TypeError('listener required');
+    if (this.closed) return fail('UNAVAILABLE','storage closed');
+    if (afterCursor!==undefined &&
+      (typeof afterCursor!=='string' || !/^(0|[1-9][0-9]*)$/.test(afterCursor)))
+      return fail('INVALID_QUERY','invalid event cursor');
+    await this.#ensureListening();
+    const current=afterCursor===undefined
+      ? await this.pool.query(`SELECT position FROM awfl_storage_stream_cursors
+        WHERE scope=$1 AND stream_id=$2`,[scope,streamId]):null;
+    const position=afterCursor??String(current?.rows[0]?.position??'0');
+    const watcher={scope,streamId,key,listener,position:BigInt(position),
+      draining:false,dirty:false,active:true};
+    this.eventWatchers.add(watcher);
+    try {
+      await this.#drainEventWatcher(watcher);
+      return async()=>{watcher.active=false;this.eventWatchers.delete(watcher);this.#stopIfIdle();};
+    } catch(error) {
+      watcher.active=false;this.eventWatchers.delete(watcher);this.#stopIfIdle();throw error;
+    }
+  }
+  #notifyStream(key) {
+    for (const w of this.eventWatchers) {
+      if (w.key===key) {w.dirty=true;void this.#drainEventWatcher(w);}
+    }
+  }
+  async #drainEventWatcher(w) {
+    w.dirty=true;
+    if (!w.active || w.draining || !this.eventWatchers.has(w)) return;
+    w.draining=true;
+    try {
+      do {
+        w.dirty=false;
+        const page=await this.replayEvents({scope:w.scope,streamId:w.streamId,
+          afterCursor:String(w.position),limit:200});
+        for (const event of page) {
+          if (!w.active) break;
+          await w.listener(event);
+          w.position=BigInt(event.cursor);
+        }
+        if (page.length===200) w.dirty=true;
+      } while (w.active && w.dirty);
+    } catch(error) {
+      try {await w.listener({type:'error',error});} catch { /* subscriber isolation */ }
+    } finally {
+      w.draining=false;
+      if(w.dirty && w.active) void this.#drainEventWatcher(w);
+    }
+  }
+
   async #ensureListening() {
     if (this.listening) return this.listening;
     this.listening=(async()=>{
       const client=await this.pool.connect();
       try {
+        client.on('notification',message=>{
+          if(message.channel==='awfl_storage_change')
+            this.#notifyDocument(message.payload);
+          else if(message.channel==='awfl_storage_event')
+            this.#notifyStream(message.payload);
+        });
+        client.on('error',()=>this.#listenerFailed(client));
+        client.on('end',()=>this.#listenerFailed(client));
         await client.query('LISTEN awfl_storage_change');
-        client.on('notification',()=>{void this.#drain().catch(()=>{});});
-        client.on('error',()=>{void this.#drain().catch(()=>{});});
+        await client.query('LISTEN awfl_storage_event');
         this.listenClient=client;
-        this.pollTimer=setInterval(()=>{void this.#drain().catch(()=>{});},this.pollIntervalMs);
-        this.pollTimer.unref?.();
-      } catch(error){client.release();this.listening=null;throw error;}
-    })();
-    return this.listening;
-  }
-  async #drain() {
-    if (this.draining || !this.watchers.size || this.closed) return;
-    this.draining=true;
-    try {
-      for (;;) {
-        const active=[...this.watchers].filter(x=>x.active);
-        if (!active.length) break;
-        const lowest=active.reduce((a,b)=>a<b.position?a:b.position,active[0].position);
-        const changes=(await this.pool.query(`SELECT position,path,action,state FROM awfl_storage_changes
-          WHERE position>$1 ORDER BY position LIMIT 200`,[String(lowest)])).rows;
-        if (!changes.length) break;
-        for (const entry of changes) {
-          const position=BigInt(entry.position);
-          for (const watcher of active) {
-            if (!this.watchers.has(watcher) || !watcher.active || watcher.position>=position) continue;
-            watcher.position=position;
-            const relevant=watcher.path===entry.path || (watcher.query && (
-              watcher.query.collection?entry.path.split('/').slice(0,-1).join('/')===watcher.query.collection:
-                entry.path.split('/').at(-2)===watcher.query.collectionGroup));
-            if (!relevant) continue;
-            try {const value=watcher.path?entry.state:await this.query(watcher.query);
-              await watcher.listener({type:'change',cursor:String(position),path:entry.path,action:entry.action,value});
-            } catch(error) {try {await watcher.listener({type:'error',error});} catch { /* isolate subscribers */ }}
-          }
+        if (!this.pollTimer) {
+          this.pollTimer=setInterval(()=>{void this.#reconcile();},this.pollIntervalMs);
+          this.pollTimer.unref?.();
         }
-        if (changes.length<200) break;
-      }
-    } finally {this.draining=false;}
+      } catch(error) {client.release(true);throw error;}
+    })();
+    try {await this.listening;}
+    catch(error){this.listening=null;throw error;}
+  }
+  #listenerFailed(client) {
+    if (this.listenClient!==client) return;
+    this.listenClient=null;
+    this.listening=null;
+    try {client.release(true);} catch {}
+    if ((this.watchers.size || this.eventWatchers.size) && !this.closed) {
+      const t=setTimeout(()=>{void this.#ensureListening().catch(()=>{});},1000);
+      t.unref?.();
+    }
+  }
+  async #reconcile() {
+    // Low-frequency repair for missed NOTIFY, independent of event subscriptions.
+    await Promise.allSettled([
+      ...[...this.watchers].filter(w=>w.active).map(w=>this.#refreshWatcher(w)),
+      ...[...this.eventWatchers].filter(w=>w.active).map(w=>this.#drainEventWatcher(w)),
+    ]);
   }
   #stopIfIdle() {
-    if (this.watchers.size) return;
+    if (this.watchers.size || this.eventWatchers.size) return;
     if (this.pollTimer) clearInterval(this.pollTimer);
     this.pollTimer=null;
-    const client=this.listenClient;this.listenClient=null;
+    const client=this.listenClient;
+    this.listenClient=null;
     this.listening=null;
-    if (client) {void client.query('UNLISTEN awfl_storage_change').catch(()=>{}).finally(()=>client.release());}
+    if (client) {
+      void client.query('UNLISTEN *').catch(()=>{}).finally(()=>client.release());
+    }
   }
   async close() {
-    this.closed=true;this.watchers.clear();this.#stopIfIdle();
+    this.closed=true;
+    this.watchers.clear();this.eventWatchers.clear();
+    this.#stopIfIdle();
     if (this.ownPool) await this.pool.end();
   }
 }
