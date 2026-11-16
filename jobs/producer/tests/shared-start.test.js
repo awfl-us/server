@@ -73,6 +73,17 @@ test('failed project startup propagates and does not create an orphan MCP attach
   }), /GKE unavailable/);
 });
 
+test('failed project startup preserves status for safe MCP error classification', async () => {
+  await assert.rejects(ensureProjectConsumer({ userId: 'owner', projectId: 'repo', imageProfile: 'scala' }, {
+    getLock: async () => ({ lock: null }),
+    start: async () => ({ status: 400, body: { error: 'Unknown image profile: scala' } }),
+  }), error => error.statusCode === 400);
+  await assert.rejects(ensureProjectConsumer({ userId: 'owner', projectId: 'repo', imageProfile: 'scala' }, {
+    getLock: async () => ({ lock: null }),
+    start: async () => ({ status: 500, body: { error: 'Transport error creating consumer K8s Job' } }),
+  }), error => error.statusCode === 500);
+});
+
 test('MCP passes a selected Scala profile through the existing project startup path', async () => {
   const calls = [];
   const result = await ensureProjectConsumer({ userId: 'owner', projectId: 'repo', imageProfile: 'scala' }, {
