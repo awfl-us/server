@@ -18,7 +18,7 @@ terraform state list
 ```
 
 Pod/CPU/memory limits are configured in `limits.tf`: 20 active Pods,
-10 vCPU, 40Gi RAM, 20Gi ephemeral storage, and 25 Job objects. At the
+10 vCPU, 40Gi RAM, 24Gi ephemeral storage, and 25 Job objects. At the
 default 0.5 vCPU/2Gi/1Gi request per environment, all 20 fit the quota. Terraform is
 separate from the CI deployment workflow; changes to this directory
 must be applied using the existing remote state.
@@ -26,3 +26,8 @@ must be applied using the existing remote state.
 Existing Pods are NOT evicted when you lower the quota; new Pods will be
 rejected until consumption drops below the caps. Kubernetes quotas
 cannot guarantee a limit in dollars or protect other namespaces/services.
+
+The ephemeral-storage cap was raised from 20Gi to 24Gi for concurrent
+Scala cloud consumers used in AutomationBench: with 17Gi already reserved,
+a new 4Gi native-build consumer could not start under the prior 20Gi quota.
+The maximum number of pods (20), CPU (10), and memory (40Gi) remain unchanged.

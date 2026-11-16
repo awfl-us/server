@@ -78,9 +78,9 @@ variable "gke_max_requested_memory" {
 }
 
 variable "gke_max_requested_ephemeral_storage" {
-  description = "Maximum aggregate requested ephemeral storage."
+  description = "Aggregate requested ephemeral storage, including concurrent Scala/native-build consumers."
   type        = string
-  default     = "20Gi"
+  default     = "24Gi"
 }
 
 variable "gke_max_container_cpu" {
