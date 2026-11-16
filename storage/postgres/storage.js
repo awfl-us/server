@@ -128,7 +128,7 @@ export class PostgresStorage {
   async delete(path) {
     validatePath(path);
     await this.pool.query('DELETE FROM awfl_documents WHERE path=$1',[path]);
-    if(this.watchers.size) void this.#drain().catch(()=>{});
+    if(this.watchers.size) this.#notifyDocument(path);
   }
   async query(spec) {
     const {sql,params}=querySql(spec);
@@ -203,7 +203,7 @@ export class PostgresStorage {
         // A PostgreSQL AFTER trigger persists ordered change events and
         // publishes NOTIFY in the SAME transaction, without N extra queries.
         await client.query('COMMIT');
-        if (changed) await this.#reconcile();
+        if (changed && (this.watchers.size || this.eventWatchers.size)) await this.#reconcile();
         return value;
       } catch (err) {
         await client.query('ROLLBACK').catch(()=>{});
