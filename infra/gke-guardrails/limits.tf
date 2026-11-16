@@ -54,35 +54,35 @@ resource "kubernetes_limit_range_v1" "awfl_container_ceiling" {
 variable "gke_max_pods" {
   description = "Maximum non-terminal Pods in the AWFL namespace."
   type        = number
-  default     = 20
+  default     = 100
   validation {
-    condition     = var.gke_max_pods >= 1 && var.gke_max_pods <= 20
-    error_message = "gke_max_pods must be between 1 and 20."
+    condition     = var.gke_max_pods >= 1 && var.gke_max_pods <= 100
+    error_message = "gke_max_pods must be between 1 and 100."
   }
 }
 
 variable "gke_max_jobs" {
   description = "Maximum Job objects, including completed Jobs awaiting cleanup."
   type        = number
-  default     = 25
+  default     = 100
 }
 
 variable "gke_max_requested_cpu" {
   description = "Maximum aggregate requested vCPU in the namespace."
   type        = string
-  default     = "10"
+  default     = "100"
 }
 
 variable "gke_max_requested_memory" {
   description = "Maximum aggregate requested memory."
   type        = string
-  default     = "40Gi"
+  default     = "256Gi"
 }
 
 variable "gke_max_requested_ephemeral_storage" {
-  description = "Maximum aggregate requested ephemeral storage."
+  description = "Aggregate requested ephemeral storage, including concurrent Scala/native-build consumers."
   type        = string
-  default     = "20Gi"
+  default     = "512Gi"
 }
 
 variable "gke_max_container_cpu" {
