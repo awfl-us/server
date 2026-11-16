@@ -3,6 +3,7 @@ import { consumerNames } from './tools.js';
 import { consumerImageCatalog } from '../jobs/producer/imageProfiles.js';
 import { MAX_IMAGE_BYTES, normalizeImageResult } from './image.js';
 import { commandTimingsMs } from './timing.js';
+import { workspaceStartError } from './startupErrors.js';
 // Defer loading the producer API modules until startup. The same project
 // lifecycle is used by both MCP and regular /producer/start requests.
 const ensureProjectConsumer = async args => (await import('../jobs/producer/start.js')).ensureProjectConsumer(args);
@@ -635,11 +636,16 @@ export class ExecutionService {
     if (!projectId) fail('project_id is required');
     const project = await this.db.collection('users').doc(userId).collection('projects').doc(projectId).get();
     if (!project.exists) fail('Project not found');
-    const consumer = await this.startConsumer({
-      userId, projectId,
-      ...(args.idle_timeout_seconds !== undefined ? { idleTimeoutSeconds: args.idle_timeout_seconds } : {}),
-      ...(args.image_profile !== undefined ? { imageProfile: args.image_profile } : {}),
-    });
+    let consumer;
+    try {
+      consumer = await this.startConsumer({
+        userId, projectId,
+        ...(args.idle_timeout_seconds !== undefined ? { idleTimeoutSeconds: args.idle_timeout_seconds } : {}),
+        ...(args.image_profile !== undefined ? { imageProfile: args.image_profile } : {}),
+      });
+    } catch (error) {
+      throw workspaceStartError(error, { imageProfile: args.image_profile });
+    }
     const id = randomBytes(16).toString('hex');
     const sessionId = (typeof args.session_id === 'string' && args.session_id.trim()) || 'mcp-' + id;
     await this.ref(id).set({
