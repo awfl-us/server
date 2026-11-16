@@ -13,8 +13,12 @@ MCP resources/list and resources/read methods.
 
 For actual environment facts, use the following tools:
 
-1. projects_list then workspace_create with project_id. The workspace ID is a
-   durable attachment; new workspaces do not have a one-hour expiration.
+1. Call projects_list to find the project **ID**, then image_profiles_list. To
+   start a new consumer, call workspace_create with both project_id and an
+   explicit image_profile (lightweight, browser, or scala). Example:
+   workspace_create({project_id: "<id>", image_profile: "scala"}). Omit
+   image_profile only when attaching to an existing running consumer.
+   The workspace ID is a durable attachment; new workspaces do not have a one-hour expiration.
    Existing legacy workspace records are not migrated. Only explicit
    workspace_stop retires a new attachment. The consumer's one-hour *idle*
    shutdown is separate, and an existing attachment can start it again.
@@ -25,6 +29,29 @@ For actual environment facts, use the following tools:
    not credentials absent.
 4. run_command, command_output, read_file, apply_patch, search_files and
    list_directory work through the same project consumer.
+
+### Diagnosing workspace_create failures
+
+An MCP tool error is returned with a stable category and a suggested action,
+not a generic `Execution service unavailable` response:
+
+- `IMAGE_PROFILE_REQUIRED`: pass `image_profile` for a **new** consumer.
+- `IMAGE_PROFILE_CONFLICT`: attach to the running image (omit the image
+  parameter or specify the active one); switching requires stopping the
+  shared consumer and may interrupt other clients.
+- `IMAGE_NOT_CONFIGURED`: select an `available` image from
+  `image_profiles_list` or publish the missing image.
+- `CONSUMER_CONFIGURATION_REJECTED`: check startup parameters.
+- `KUBERNETES_JOB_START_FAILED`, `SERVER_GCP_NOT_CONFIGURED`, or
+  `CONSUMER_START_FAILED`: backend startup failure. These are **not**
+  shell-command failures; inspect server producer/GKE logs with the
+  diagnostic reference returned to the client. Retrying the same request
+  blindly is not a workaround.
+
+No MCP workspace record is created if startup fails. A `starting` response
+is successful attachment/launch but is **not** proof that the consumer is
+ready: use `environment_status({workspace_id})` to inspect heartbeat
+readiness before running commands.
 
 The consumer publishes an allowlisted inventory on the existing
 Firebase-authenticated heartbeat. The server checks the project lock

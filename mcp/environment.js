@@ -3,7 +3,7 @@ export const ENVIRONMENT_GUIDE_URI = 'awfl://environment/guide';
 
 export const ENVIRONMENT_INSTRUCTIONS = [
   'AWFL attaches to one existing project-scoped shared GKE consumer, not a separate execution backend.',
-  'Call image_profiles_list to discover available images. Call projects_list, workspace_create({project_id}), and then environment_status({workspace_id}) to discover readiness, credentials and tools.',
+  'Call projects_list for a project ID (not its display name), then image_profiles_list. To start a new consumer use workspace_create({project_id: "<id>", image_profile: "scala"}) (or browser/lightweight), then environment_status({workspace_id}) to check readiness.',
   'New consumers require an explicit image_profile: lightweight, browser (Chromium/Playwright), or scala (Java/sbt/Rust and 4Gi ephemeral storage). Attaching to an existing shared consumer may omit it; switching the image requires first stopping the consumer.',
   'Environment details come from the current consumer heartbeat. Missing or stale heartbeat means unknown, not credentials absent.',
   'Google Cloud normally uses CLOUDSDK_AUTH_ACCESS_TOKEN_FILE (/tmp/awfl-google-access-token) and CLOUDSDK_CORE_PROJECT. Do not print token contents.',
@@ -19,11 +19,12 @@ export const ENVIRONMENT_GUIDE = [
   '',
   '## Discover the environment',
   '',
-  '1. Call projects_list, workspace_create({project_id}), then environment_status({workspace_id}).',
+  '1. Call projects_list to obtain a project ID (not name), then image_profiles_list to select an available image. For a new consumer call workspace_create({project_id: "<id>", image_profile: "scala"}), or select browser/lightweight. Use the returned workspace_id in environment_status({workspace_id}).',
   '   Starting a new consumer requires image_profile: "scala" (Java 21/sbt, Rust, 4Gi), "lightweight" (1Gi) or "browser" (Chromium/Playwright, 2Gi). Existing running consumers can be attached without choosing an image. Image changes require stopping the existing project consumer first.',
   '2. Consumer readiness is not the same as an active Kubernetes Job; wait until the consumer heartbeat says ready.',
   '3. The environment object reflects the latest fresh consumer heartbeat, not the MCP server process. Null means unknown/not ready, not missing credentials.',
   '4. Use run_command and command_output for shell execution, read_file and apply_patch for edits, and search_files/list_directory for inspection.',
+  '5. workspace_create errors are explicit: IMAGE_PROFILE_REQUIRED (supply one for new consumers), IMAGE_PROFILE_CONFLICT (attach without changing image or intentionally stop), IMAGE_NOT_CONFIGURED (choose an available profile), CONSUMER_CONFIGURATION_REJECTED (check arguments), or CONSUMER_START_FAILED/KUBERNETES_JOB_START_FAILED (server-side; inspect producer/GKE logs using diagnostic reference). An error does not create a workspace.',
   '',
   '## Google Cloud',
   '',

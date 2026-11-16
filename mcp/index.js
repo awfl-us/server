@@ -5,6 +5,7 @@ import { privateMcpMiddleware } from './privateAuth.js';
 import { MCP_RESOURCES, OAUTH_SCOPE } from '../workflows/oauth/core.js';
 import { tools } from './tools.js';
 import { formatToolResult } from './image.js';
+import { unexpectedToolError } from './startupErrors.js';
 import { ENVIRONMENT_INSTRUCTIONS, ENVIRONMENT_GUIDE, ENVIRONMENT_GUIDE_URI } from './environment.js';
 
 export function createMcpRouter(service, authenticate) {
@@ -32,8 +33,8 @@ export function createMcpRouter(service, authenticate) {
           const result = await service.invoke(req.userId, name, args);
           return formatToolResult(result);
         } catch (error) {
-          // Only known public errors cross the trust boundary. Never emit SDK/GCP error bodies.
-          return { isError: true, content: [{ type: 'text', text: error.publicMessage || 'Execution service unavailable; retry or inspect deployment health' }] };
+          // Categorize public failures; never expose raw SDK/GCP/Firebase exception bodies.
+          return { isError: true, content: [{ type: 'text', text: unexpectedToolError(error, name) }] };
         }
       });
     }

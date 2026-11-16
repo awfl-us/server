@@ -290,7 +290,11 @@ export async function ensureProjectConsumer({ userId, projectId, idleTimeoutSeco
     return { state: 'attached', consumerId: result.body.details?.holder?.consumerId };
   }
   if (result.status !== 202 || !result.body?.ok) {
-    throw new Error(result.body?.error || 'Could not start project consumer');
+    // Preserve the HTTP status for MCP's safe public classification. The raw
+    // producer error is kept for server diagnostics but is never sent directly.
+    const error = new Error(result.body?.error || 'Could not start project consumer');
+    error.statusCode = result.status;
+    throw error;
   }
   return { state: 'starting', consumerId: result.body.consumerId,
     ...(result.body.imageProfile ? { imageProfile: result.body.imageProfile } : {}) };
