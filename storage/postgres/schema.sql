@@ -12,50 +12,34 @@ CREATE TABLE IF NOT EXISTS awfl_documents (
 );
 CREATE INDEX IF NOT EXISTS awfl_documents_collection ON awfl_documents(collection_path, document_id);
 CREATE INDEX IF NOT EXISTS awfl_documents_group ON awfl_documents(collection_id, path);
--- Single transactional cursor: the row lock guarantees committed event ordering,
--- unlike unconstrained BIGSERIAL values or notifications alone.
-CREATE TABLE IF NOT EXISTS awfl_storage_cursor (name text PRIMARY KEY, position bigint NOT NULL);
-INSERT INTO awfl_storage_cursor(name, position) VALUES ('all',0) ON CONFLICT DO NOTHING;
-CREATE TABLE IF NOT EXISTS awfl_storage_changes (
-  position bigint PRIMARY KEY,
-  path text NOT NULL,
-  action text NOT NULL,
-  state jsonb,
-  changed_at timestamptz NOT NULL DEFAULT clock_timestamp()
+-- Durable ordering applies only to actual event streams, never document writes.
+-- Concurrent streams do not contend for a global cursor row.
+CREATE TABLE IF NOT EXISTS awfl_storage_stream_cursors (
+  scope text NOT NULL CHECK (scope IN ('session','project')),
+  stream_id text NOT NULL,
+  position bigint NOT NULL DEFAULT 0,
+  PRIMARY KEY (scope, stream_id)
 );
-ALTER TABLE awfl_storage_changes ADD COLUMN IF NOT EXISTS state jsonb;
-CREATE INDEX IF NOT EXISTS awfl_storage_changes_path ON awfl_storage_changes(path,position);
--- The trigger runs in the document transaction, so an insert/update/delete,
--- its ordered change record and LISTEN/NOTIFY are atomic without extra client
--- round trips. The cursor lock serializes commits as well as events.
+CREATE TABLE IF NOT EXISTS awfl_storage_stream_events (
+  scope text NOT NULL CHECK (scope IN ('session','project')),
+  stream_id text NOT NULL,
+  position bigint NOT NULL,
+  event_id text NOT NULL,
+  payload jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (scope, stream_id, position),
+  UNIQUE (scope, stream_id, event_id)
+);
+-- Legacy global cursor/change tables are left intact by upgrades, but are no
+-- longer touched. Migrate old consumers before retiring those tables.
+-- NOTIFY is a commit-delivered wakeup hint, not a durable replay cursor.
+-- Subscribers re-read state; no shared row lock is acquired by ordinary writes.
 CREATE OR REPLACE FUNCTION awfl_document_change_trigger() RETURNS trigger
 LANGUAGE plpgsql AS $$
-DECLARE next_position bigint;
 DECLARE changed_path text;
-DECLARE action_name text;
-DECLARE snapshot jsonb;
 BEGIN
   changed_path := CASE WHEN TG_OP = 'DELETE' THEN OLD.path ELSE NEW.path END;
-  action_name := CASE WHEN TG_OP = 'INSERT' THEN 'create'
-    WHEN TG_OP = 'UPDATE' THEN 'update' ELSE 'delete' END;
-  IF TG_OP = 'DELETE' THEN
-    snapshot := NULL;
-  ELSE
-    snapshot := jsonb_build_object(
-      'id', NEW.document_id, 'path', NEW.path, 'data', NEW.data,
-      'revision', NEW.revision,
-      'createdAt', to_char(NEW.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
-      'updatedAt', to_char(NEW.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
-    );
-  END IF;
-  UPDATE awfl_storage_cursor SET position=position+1
-    WHERE name='all' RETURNING position INTO next_position;
-  IF next_position IS NULL THEN
-    RAISE EXCEPTION 'AWFL storage cursor missing';
-  END IF;
-  INSERT INTO awfl_storage_changes(position,path,action,state)
-    VALUES (next_position,changed_path,action_name,snapshot);
-  PERFORM pg_notify('awfl_storage_change',next_position::text);
+  PERFORM pg_notify('awfl_storage_change', changed_path);
   RETURN NULL; -- AFTER trigger ignores the return value
 END;
 $$;
