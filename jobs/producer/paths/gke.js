@@ -211,6 +211,11 @@ export async function startGke({
       namespace, jobName: consumerJobName, image: consumerImage,
       serviceAccountName: consumerKsa, envPairs: consumerEnv,
       containerName: 'consumer', resources,
+      // GKE Autopilot may evict a pod during node scale-down even while the
+      // consumer is healthy. The previous backoffLimit=0 made that single
+      // disruption permanently fail the project Job. Kubernetes retries the
+      // same Job/consumer identity; the existing external lock fences it.
+      backoffLimit: 3,
       ...(directCommand ? { command: directCommand } : { shCommand: effectiveStartup }),
     });
   } catch (e) {
