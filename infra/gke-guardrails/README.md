@@ -17,11 +17,12 @@ terraform apply quota.tfplan
 terraform state list
 ```
 
-Pod/CPU/memory limits are configured in `limits.tf`: 20 active Pods,
-100 vCPU, 256Gi RAM, 512Gi ephemeral storage, and 25 Job objects. At the
-default 0.5 vCPU/2Gi/1Gi request per environment, all 20 fit the quota. Terraform is
-separate from the CI deployment workflow; changes to this directory
-must be applied using the existing remote state.
+Pod/CPU/memory limits are configured in `limits.tf`: 100 active Pods,
+100 vCPU, 256Gi RAM, 512Gi ephemeral storage, and 100 Job objects.
+Actual consumer density also depends on requested resources and available
+Autopilot cluster capacity. Terraform is separate from the CI deployment
+workflow; changes to this directory must be applied using the existing
+remote state.
 
 Existing Pods are NOT evicted when you lower the quota; new Pods will be
 rejected until consumption drops below the caps. Kubernetes quotas
@@ -31,7 +32,8 @@ The ephemeral-storage cap was raised from 20Gi to 24Gi for concurrent
 Scala cloud consumers used in AutomationBench: with 17Gi already reserved,
 a new 4Gi native-build consumer could not start under the prior 20Gi quota.
 That intermediate change is superseded by the current namespace quotas
-of 100 vCPU, 256Gi memory and 512Gi ephemeral storage. The pod limit
-(20) and Job limit (25) remain unchanged; they continue to limit concurrency.
+of 100 vCPU, 256Gi memory and 512Gi ephemeral storage. The pod and Job
+limits have now been raised from 20/25 to 100/100. These are namespace
+admission ceilings, not reservations for 100 running pods.
 A larger ResourceQuota alone does not provision resources or incur charges,
 but additional Autopilot pods admitted by the quota are billable.
