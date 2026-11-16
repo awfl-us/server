@@ -33,7 +33,7 @@ export function workspaceStartError(error, { imageProfile } = {}) {
       'This project already runs the ' + conflict[1] + ' image. Attach with that profile or omit image_profile. Switching to ' + conflict[2] + ' requires stopping the shared consumer first; workspace_stop interrupts other sessions.',
       { cause: error });
   }
-  const missing = new RegExp('^The ' + profileNames + ' image is not published/configured \\(CONSUMER_[A-Z_]+\\)$').exec(reason);
+  const missing = new RegExp('^The ' + profileNames + ' image is not published/configured \\(CONSUMER_[A-Z0-9_]+\\)$').exec(reason);
   if (missing) {
     return publicError('IMAGE_NOT_CONFIGURED',
       'The ' + missing[1] + ' consumer image is not configured on the server. Choose an available image using image_profiles_list or publish that image before starting a new consumer.',
