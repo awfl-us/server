@@ -1,0 +1,50 @@
+/**
+ * A Kubernetes Job pod can be recreated hours after it was scheduled.
+ * Fetch a new Firebase custom token from the lock-bound server broker at
+ * every container start, never reuse a one-hour token from the Job PodSpec.
+ */
+export function firebaseBootstrapShell() {
+  return [
+    'if [ -n "$AWFL_CREDENTIAL_REFRESH_CAPABILITY" ]; then',
+    '  AWFL_BOOTSTRAP_OK=',
+    '  for attempt in 1 2 3 4 5; do',
+    '    FIREBASE_CUSTOM_TOKEN="$(python - <<\'PY\'',
+    'import json, os, sys, urllib.request',
+    'try:',
+    '    origin = os.environ["AWFL_CREDENTIAL_REFRESH_ORIGIN"].rstrip("/")',
+    '    if not origin.startswith("https://"):',
+    '        raise ValueError("Firebase bootstrap requires HTTPS")',
+    '    payload = {k: os.environ[v] for k, v in (',
+    '        ("userId", "AWFL_USER_ID"),',
+    '        ("projectId", "AWFL_PROJECT_ID"),',
+    '        ("consumerId", "AWFL_CONSUMER_ID"),',
+    '    )}',
+    '    request = urllib.request.Request(',
+    '        origin + "/consumer-credentials/firebase",',
+    '        data=json.dumps(payload).encode("utf-8"),',
+    '        headers={"Content-Type": "application/json",',
+    '                 "x-awfl-consumer-credential": os.environ["AWFL_CREDENTIAL_REFRESH_CAPABILITY"]},',
+    '        method="POST",',
+    '    )',
+    '    with urllib.request.urlopen(request, timeout=12) as response:',
+    '        token = json.load(response).get("customToken")',
+    '    if not isinstance(token, str) or not token:',
+    '        raise ValueError("Firebase bootstrap returned no token")',
+    '    sys.stdout.write(token)',
+    'except Exception as error:',
+    '    print("[awfl] Firebase bootstrap unavailable:", type(error).__name__, file=sys.stderr)',
+    '    sys.exit(1)',
+    'PY',
+    '    )" && [ -n "$FIREBASE_CUSTOM_TOKEN" ] && { AWFL_BOOTSTRAP_OK=1; break; }',
+    '    echo "[awfl] Retrying Firebase bootstrap" >&2',
+    '    sleep 2',
+    '  done',
+    '  if [ -z "$AWFL_BOOTSTRAP_OK" ]; then',
+    '    echo "[awfl] Refusing to start with stale Firebase credentials" >&2',
+    '    exit 1',
+    '  fi',
+    '  export FIREBASE_CUSTOM_TOKEN',
+    '  unset FIREBASE_ID_TOKEN AWFL_BOOTSTRAP_OK',
+    'fi',
+  ].join('\n');
+}

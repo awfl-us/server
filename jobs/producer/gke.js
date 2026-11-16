@@ -217,8 +217,11 @@ export async function inspectK8sJob({ namespace, jobName }) {
     const response = await batch.readNamespacedJob(jobName, namespace);
     const status = response?.body?.status || {};
     const conditions = Array.isArray(status.conditions) ? status.conditions : [];
+    // Deletion is asynchronous. A terminating Job must not qualify for
+    // re-bootstrap even when it still reports an active pod.
     return {
-      state: status.succeeded ? 'completed' : status.failed ? 'failed' : status.active ? 'active' : 'pending',
+      state: response?.body?.metadata?.deletionTimestamp ? 'terminating' :
+        status.succeeded ? 'completed' : status.failed ? 'failed' : status.active ? 'active' : 'pending',
       active: Number(status.active || 0),
       failed: Number(status.failed || 0),
       succeeded: Number(status.succeeded || 0),
