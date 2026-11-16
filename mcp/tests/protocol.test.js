@@ -106,6 +106,24 @@ test('MCP SDK exposes native parity tool surface and enforces owner auth', async
     }
     const invalid = await client.callTool({ name: 'workspace_create', arguments: {} });
     assert.equal(invalid.isError, true);
+
+    // The same MCP transport must expose categorized safe errors to clients.
+    service.invoke = async () => {
+      const error = new Error('This project already runs the browser image');
+      error.publicMessage = 'IMAGE_PROFILE_CONFLICT: Attach with the running image';
+      throw error;
+    };
+    const known = await client.callTool({ name: 'workspace_create',
+      arguments: { project_id: 'project-1', image_profile: 'scala' } });
+    assert.equal(known.isError, true);
+    assert.match(known.content[0].text, /IMAGE_PROFILE_CONFLICT/);
+    service.invoke = async () => { throw new Error('Authorization: Bearer private-token'); };
+    const hidden = await client.callTool({ name: 'workspace_create',
+      arguments: { project_id: 'project-1', image_profile: 'scala' } });
+    assert.equal(hidden.isError, true);
+    assert.match(hidden.content[0].text, /MCP_INTERNAL_ERROR/);
+    assert.match(hidden.content[0].text, /diagnostic reference/);
+    assert.doesNotMatch(hidden.content[0].text, /private-token|Authorization/);
   } finally {
     await client.close();
     await new Promise(resolve => server.close(resolve));
