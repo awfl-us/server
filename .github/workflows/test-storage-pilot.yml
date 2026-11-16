@@ -5,7 +5,6 @@ on:
     paths:
       - 'storage/pilot/**'
       - 'storage/postgres/**'
-      - 'storage/postgres/**'
       - 'test/storage/**'
       - 'scripts/benchmarks/**'
       - 'infra/storage-benchmark/**'
@@ -13,6 +12,7 @@ on:
   pull_request:
     paths:
       - 'storage/pilot/**'
+      - 'storage/postgres/**'
       - 'test/storage/**'
       - 'scripts/benchmarks/**'
       - 'infra/storage-benchmark/**'
