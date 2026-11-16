@@ -292,7 +292,7 @@ export class PostgresStorage {
   async appendEvent({scope,streamId,eventId,payload}) {
     const key=this.#stream(scope,streamId);
     if (typeof eventId!=='string' || !eventId || eventId.length>256 ||
-      /[\\u0000-\\u001f]/.test(eventId)) return fail('INVALID_DATA','invalid event id');
+      [...eventId].some(c=>c.charCodeAt(0)<32)) return fail('INVALID_DATA','invalid event id');
     const body=objectValue(payload);
     const client=await this.pool.connect();
     let position,duplicate=false;
