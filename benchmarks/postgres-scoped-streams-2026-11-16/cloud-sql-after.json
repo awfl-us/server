@@ -1,0 +1,41 @@
+{
+  "at": "2026-11-16T17:13:57.653Z",
+  "label": "managed-after",
+  "concurrency": 16,
+  "perWorker": 24,
+  "results": {
+    "put": {
+      "success": 384,
+      "errors": 0,
+      "concurrency": 16,
+      "perWorker": 24,
+      "p50": 11.61,
+      "p95": 22.52,
+      "p99": 110.12,
+      "throughputOpsSec": 1029.46,
+      "elapsedMs": 373.01
+    },
+    "update": {
+      "success": 384,
+      "errors": 0,
+      "concurrency": 16,
+      "perWorker": 24,
+      "p50": 16.09,
+      "p95": 93.37,
+      "p99": 101.03,
+      "throughputOpsSec": 616.61,
+      "elapsedMs": 622.76
+    },
+    "create": {
+      "success": 384,
+      "errors": 0,
+      "concurrency": 16,
+      "perWorker": 24,
+      "p50": 11.93,
+      "p95": 16.13,
+      "p99": 84.1,
+      "throughputOpsSec": 1063.48,
+      "elapsedMs": 361.08
+    }
+  }
+}
