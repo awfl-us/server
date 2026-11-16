@@ -4,6 +4,7 @@ on:
     branches: [main]
     paths:
       - 'storage/pilot/**'
+      - 'storage/postgres/**'
       - 'test/storage/**'
       - 'scripts/benchmarks/**'
       - 'infra/storage-benchmark/**'
@@ -11,6 +12,7 @@ on:
   pull_request:
     paths:
       - 'storage/pilot/**'
+      - 'storage/postgres/**'
       - 'test/storage/**'
       - 'scripts/benchmarks/**'
       - 'infra/storage-benchmark/**'
@@ -46,6 +48,15 @@ jobs:
         env:
           PGTEST_URL: postgres://benchmark-ci:benchmark-ci@127.0.0.1:5432/benchmark_ci
         run: node --test --test-concurrency=1 test/storage/*.test.mjs
+      - name: Benchmark old global-cursor vs scoped-streams on same PostgreSQL service
+        env:
+          PGTEST_URL: postgres://benchmark-ci:benchmark-ci@127.0.0.1:5432/benchmark_ci
+          PG_BENCH_PER_WORKER: '24'
+        run: |
+          psql "$PGTEST_URL" -v ON_ERROR_STOP=1 -f test/storage/fixtures/postgres-global-cursor.sql
+          PG_BENCH_ALLOW_ERRORS=1 PG_BENCH_LABEL=legacy-global-cursor node scripts/benchmarks/postgresDocumentContention.mjs
+          psql "$PGTEST_URL" -v ON_ERROR_STOP=1 -f storage/postgres/migrations/001_scoped_event_streams.sql
+          PG_BENCH_LABEL=scoped-streams node scripts/benchmarks/postgresDocumentContention.mjs
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: '1.13.5'
