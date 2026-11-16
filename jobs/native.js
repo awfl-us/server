@@ -11,6 +11,7 @@ import { createJobsEffectHandlers } from '../workflows/native/jobsEffects.js';
 import { runNativeWorkflow, nativeAsyncSchedulerFor } from '../workflows/native/worker.js';
 import { runNativeMemoryWorkflow } from '../workflows/native/memoryWorker.js';
 import { createNativeProfiler } from '../workflows/native/profiler.js';
+import { configuredNativeMemoryStore, nativeDocumentStoreEnabled } from '../storage/nativeMemory.js';
 
 // Shared only by requests executing in the same trusted Jobs process.
 // GCS mappings remain authoritative and digest verification is repeated.
@@ -41,8 +42,13 @@ export function createNativeJobsRouter({
       });
       // The pilot memory-root execution store can be injected for isolated tests.
       // Production keeps using NativeExecutionStore unless explicitly composed.
-      const nativeStore = req.body.executionMode === 'memory' && memoryStore
-        ? memoryStore : (store || new NativeExecutionStore({ db: getFirestore() }));
+      if (nativeDocumentStoreEnabled() && req.body.executionMode !== 'memory') {
+        throw new Error('document Storage supports memory-mode executions only');
+      }
+      const resolvedMemoryStore = req.body.executionMode === 'memory'
+        ? (memoryStore || await configuredNativeMemoryStore()) : null;
+      const nativeStore = resolvedMemoryStore ||
+        (store || new NativeExecutionStore({ db: getFirestore() }));
       const nativeReleases = releases || new NativeGcsReleases({
         storage: new Storage(), bucket: process.env.AWFL_NATIVE_ARTIFACT_BUCKET,
         verifiedCache: verifiedNativeArtifacts,
@@ -93,6 +99,11 @@ export function startNativeDetachedRecovery({ store, releases, handlers } = {}) 
   if (process.env.AWFL_NATIVE_EXECUTION_ENABLED !== '1' ||
       process.env.AWFL_NATIVE_DETACHED_GKE_ENABLED !== '1' ||
       process.env.AWFL_NATIVE_PERSISTENT_WORKER !== '1') return null;
+  // The pilot document store has no detached recovery scan. Never scan
+  // Firestore when new roots are configured in another backend.
+  if (nativeDocumentStoreEnabled()) {
+    throw new Error('detached recovery is not supported with experimental document Storage');
+  }
   const nativeStore = store || new NativeExecutionStore({ db: getFirestore() });
   const nativeReleases = releases || new NativeGcsReleases({
     storage: new Storage(), bucket: process.env.AWFL_NATIVE_ARTIFACT_BUCKET,

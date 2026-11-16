@@ -1,6 +1,7 @@
 // Native execution read/cancel adapters for the EXISTING Workflows API.
 // No direct user-facing native execution or deployment endpoint.
 import { NativeExecutionStore } from './executionStore.js';
+import { configuredNativeMemoryStore } from '../../storage/nativeMemory.js';
 
 const ID = /^native_[a-f0-9]{32}$/;
 
@@ -13,9 +14,9 @@ function assertOwner(state, { userId, projectId }) {
   }
 }
 
-export async function nativeExecutionStatus({ db, execId, userId, projectId }) {
+export async function nativeExecutionStatus({ db, execId, userId, projectId, memoryStore }) {
   if (!isNativeExecutionId(execId)) throw new Error('invalid native execution ID');
-  const store = new NativeExecutionStore({ db });
+  const store = memoryStore || await configuredNativeMemoryStore() || new NativeExecutionStore({ db });
   const state = await store.get(execId);
   assertOwner(state, { userId, projectId });
   const status = state.status === 'completed' ? 'Succeeded'
@@ -32,9 +33,9 @@ export async function nativeExecutionStatus({ db, execId, userId, projectId }) {
   };
 }
 
-export async function cancelNativeExecution({ db, execId, userId, projectId }) {
+export async function cancelNativeExecution({ db, execId, userId, projectId, memoryStore }) {
   if (!isNativeExecutionId(execId)) throw new Error('invalid native execution ID');
-  const store = new NativeExecutionStore({ db });
+  const store = memoryStore || await configuredNativeMemoryStore() || new NativeExecutionStore({ db });
   const state = await store.get(execId);
   assertOwner(state, { userId, projectId });
   await store.cancel({ executionId: execId, userId, projectId });

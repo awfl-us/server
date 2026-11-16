@@ -12,7 +12,7 @@ const STATUS = {
 };
 
 export class NativeWorkflowBackend {
-  constructor({ releases, store, tasksClient, gcpProject, region,
+  constructor({ releases, store, memoryStore = null, tasksClient, gcpProject, region,
                 queue, jobsUrl, taskTargetUrl, taskServiceAccount, uuid = randomUUID }) {
     if (!releases?.active || !store?.create || !store?.get ||
         !tasksClient?.createTask || !tasksClient?.queuePath ||
@@ -47,6 +47,7 @@ export class NativeWorkflowBackend {
     }
     this.releases = releases;
     this.store = store;
+    this.memoryStore = memoryStore;
     this.tasksClient = tasksClient;
     this.queuePath = tasksClient.queuePath(gcpProject, region, queue);
     this.jobsOrigin = target.origin;
@@ -64,7 +65,14 @@ export class NativeWorkflowBackend {
       active.protocolVersion === 2 &&
       (active.parallelVersion === 1) ===
         active.allowedOperations.includes('native.parallel');
-    await this.store.create({
+    // An explicitly selected document backend is supported for memory roots
+    // only. Reject incompatible releases rather than silently writing them
+    // through the legacy Firestore execution store.
+    if (this.memoryStore && !memoryMode) {
+      throw new Error('document Storage currently supports native memory executions only');
+    }
+    const executionStore = this.memoryStore || this.store;
+    await executionStore.create({
       executionId, userId, projectId, input: argument,
       workflowName: deployedName, artifactSha256: active.sha256,
       protocolVersion: active.protocolVersion,
@@ -104,14 +112,14 @@ export class NativeWorkflowBackend {
     } catch (error) {
       // A task may have been accepted despite a network error. Fencing the
       // execution prevents an uncertain enqueue from running inadvertently.
-      await this.store.cancel({ executionId, userId, projectId }).catch(() => {});
+      await executionStore.cancel({ executionId, userId, projectId }).catch(() => {});
       throw error;
     }
     const executionName = 'native/' + executionId;
     const client = {
       getExecution: async ({ name }) => {
         if (name !== executionName) throw new Error('native execution name mismatch');
-        const state = await this.store.get(executionId);
+        const state = await executionStore.get(executionId);
         if (!state || state.userId !== userId || state.projectId !== projectId) {
           throw new Error('native execution not found for authenticated owner');
         }
@@ -135,12 +143,15 @@ export function configuredNativeBackend() {
     const { Storage } = await import('@google-cloud/storage');
     const { CloudTasksClient } = await import('@google-cloud/tasks');
     const { getFirestore } = await import('firebase-admin/firestore');
+    const { configuredNativeMemoryStore } = await import('../../storage/nativeMemory.js');
+    const memoryStore = await configuredNativeMemoryStore();
     const gcpProject = process.env.GCP_PROJECT || process.env.GCLOUD_PROJECT;
     return new NativeWorkflowBackend({
       releases: new NativeGcsReleases({
         storage: new Storage(), bucket: process.env.AWFL_NATIVE_ARTIFACT_BUCKET,
       }),
       store: new NativeExecutionStore({ db: getFirestore() }),
+      memoryStore,
       tasksClient: new CloudTasksClient(),
       gcpProject,
       region: process.env.WORKFLOWS_LOCATION || 'us-central1',
