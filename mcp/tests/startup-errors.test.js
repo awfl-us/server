@@ -85,3 +85,12 @@ test('workspace startup failure does not allocate an MCP workspace', async () =>
   }), error => error.code === 'KUBERNETES_JOB_START_FAILED' && error.retryable === true);
   assert.equal([...data.keys()].filter(key => key.startsWith('mcpWorkspaces/')).length, 0);
 });
+
+test('control-plane guidance identifies the required image profile for fresh consumers', async () => {
+  const service = new ExecutionService({ db: {}, ownerId: 'owner' });
+  const status = await service.invoke('owner', 'environment_status', {});
+  assert.equal(status.state, 'control_plane_ready');
+  assert.match(status.next_step, /image_profiles_list/);
+  assert.match(status.next_step, /image_profile: "scala"/);
+  assert.match(status.next_step, /existing running consumer/);
+});
