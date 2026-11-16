@@ -285,7 +285,7 @@ export class PostgresStorage {
   // allocates a transactional cursor, and only within the specified stream.
   #stream(scope,streamId) {
     if (!['session','project'].includes(scope) || typeof streamId!=='string' ||
-      !streamId || streamId.length>512 || /[\\/\\u0000-\\u001f]/.test(streamId))
+      !streamId || streamId.length>512 || [...streamId].some(c=>c==='/' || c.charCodeAt(0)<32))
       return fail('INVALID_PATH','invalid event stream');
     return scope+':'+streamId;
   }
