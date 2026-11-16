@@ -163,7 +163,7 @@ export class PostgresStorage {
     if (typeof fn!=='function') throw new TypeError('transaction callback required');
     for (let attempt=0;attempt<24;attempt++) {
       const client=await this.pool.connect();
-      let changed=false;
+      const changedPaths=new Set();
       try {
         await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
         const tx={
@@ -173,7 +173,7 @@ export class PostgresStorage {
             const p=partsOf(path),data=objectValue(value);
             await client.query(`INSERT INTO awfl_documents(path,collection_path,collection_id,document_id,data)
               VALUES ($1,$2,$3,$4,$5::jsonb)`,[p.path,p.collectionPath,p.collectionId,p.documentId,json(data)]);
-            changed=true;
+            changedPaths.add(path);
           },
           put:async(path,value,{merge=false}={})=>{
             const p=partsOf(path),data=objectValue(value);
@@ -183,7 +183,7 @@ export class PostgresStorage {
               SET data=${merge? 'awfl_documents.data || EXCLUDED.data':'EXCLUDED.data'},
               revision=awfl_documents.revision+1,updated_at=clock_timestamp()`,
               [p.path,p.collectionPath,p.collectionId,p.documentId,json(data)]);
-            changed=true;
+            changedPaths.add(path);
           },
           update:async(path,changes)=>{
             const before=await select(client,path,true);
@@ -191,19 +191,19 @@ export class PostgresStorage {
             const data=applyPatch(before.data,changes);
             await client.query(`UPDATE awfl_documents SET data=$2::jsonb,
               revision=revision+1,updated_at=clock_timestamp() WHERE path=$1`,[path,json(data)]);
-            changed=true;
+            changedPaths.add(path);
           },
           delete:async path=>{
             validatePath(path);
             const r=await client.query('DELETE FROM awfl_documents WHERE path=$1',[path]);
-            if (r.rowCount) changed=true;
+            if (r.rowCount) changedPaths.add(path);
           },
         };
         const value=await fn(Object.freeze(tx));
         // A PostgreSQL AFTER trigger persists ordered change events and
         // publishes NOTIFY in the SAME transaction, without N extra queries.
         await client.query('COMMIT');
-        if (changed && (this.watchers.size || this.eventWatchers.size)) void this.#reconcile();
+        if (this.watchers.size) for (const path of changedPaths) this.#notifyDocument(path);
         return value;
       } catch (err) {
         await client.query('ROLLBACK').catch(()=>{});
