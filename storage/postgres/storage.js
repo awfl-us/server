@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { isDeepStrictEqual } from 'node:assert/strict';
+import { isDeepStrictEqual } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { applyPatch, assertStorage, fail, objectValue, partsOf,
   validatePath, validateQuery, StorageError } from '../document/contract.js';
@@ -90,7 +90,7 @@ async function select(client,path,lock=false) {
  * application-wide production provider until its conformance suite passes.
  */
 export class PostgresStorage {
-  constructor({pool, ownPool=false, pollIntervalMs=1000}={}) {
+  constructor({pool, ownPool=false, pollIntervalMs=5000}={}) {
     if (!pool?.query || !pool?.connect) throw new TypeError('PostgresStorage requires pg.Pool');
     if (!Number.isInteger(pollIntervalMs) || pollIntervalMs < 50) throw new TypeError('invalid polling interval');
     this.pool=pool; this.ownPool=ownPool; this.pollIntervalMs=pollIntervalMs;
@@ -422,6 +422,8 @@ export class PostgresStorage {
     }
   }
   async #reconcile() {
+    if (!this.listenClient && (this.watchers.size || this.eventWatchers.size) && !this.closed)
+      void this.#ensureListening().catch(()=>{});
     // Low-frequency repair for missed NOTIFY, independent of event subscriptions.
     await Promise.allSettled([
       ...[...this.watchers].filter(w=>w.active).map(w=>this.#refreshWatcher(w)),
