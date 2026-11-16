@@ -19,8 +19,9 @@ async function makeFirestore() {
   const auth=new GoogleAuth({projectId:'awfl-us'});auth.getClient=async()=>oauth;
   return firestore=new Firestore({projectId:'awfl-us',auth});
 }
-async function exercise({env,firestoreDb,postgresPool}) {
+async function exercise({env,firestoreDb,postgresPool,initializeSchema=false}) {
   const {store,storage,backend}=await createNativeMemoryStore({env,firestoreDb,postgresPool});
+  if(initializeSchema) await storage.initialize(); // integration test fixture only; never at application startup
   const executionId='native_'+randomUUID().replaceAll('-','');
   const project='p',userId='u';
   try {
@@ -56,7 +57,7 @@ test('native memory composition uses same PostgreSQL backend for lifecycle',{
 },async()=>{
   const pool=new pg.Pool({connectionString:process.env.PGTEST_URL,max:4});
   try {
-    const backend=await exercise({env:{AWFL_DOCUMENT_STORAGE_BACKEND:'postgres'},postgresPool:pool});
+    const backend=await exercise({env:{AWFL_DOCUMENT_STORAGE_BACKEND:'postgres'},postgresPool:pool,initializeSchema:true});
     assert.equal(backend,'postgres');
   }finally{await pool.end();}
 });
