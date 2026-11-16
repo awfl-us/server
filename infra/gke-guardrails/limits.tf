@@ -68,19 +68,19 @@ variable "gke_max_jobs" {
 variable "gke_max_requested_cpu" {
   description = "Maximum aggregate requested vCPU in the namespace."
   type        = string
-  default     = "10"
+  default     = "100"
 }
 
 variable "gke_max_requested_memory" {
   description = "Maximum aggregate requested memory."
   type        = string
-  default     = "40Gi"
+  default     = "256Gi"
 }
 
 variable "gke_max_requested_ephemeral_storage" {
   description = "Aggregate requested ephemeral storage, including concurrent Scala/native-build consumers."
   type        = string
-  default     = "24Gi"
+  default     = "512Gi"
 }
 
 variable "gke_max_container_cpu" {
