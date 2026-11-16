@@ -2,15 +2,17 @@ import { runK8sJob } from '../gke.js';
 import { setConsumerRuntimeInfo } from '../../../workflows/projects/lock.js';
 import { scheduleStartupProgress } from '../progress.js';
 import { resolveConsumerImage } from '../imageProfiles.js';
+import { firebaseBootstrapShell } from './firebaseBootstrap.js';
 import { consumerResourcesForProfile } from '../resourceProfiles.js';
 
 // Launch the consumer with the credentials supplied by the producer immediately.
 // Refresh happens asynchronously and can fail without preventing awfl run.
 // Seed the files first so gcloud and Git keep working even if refresh is unavailable.
-export function consumerStartupCommand({ startupSh = 'awfl run', refreshEnabled = false } = {}) {
-  if (!refreshEnabled || startupSh !== 'awfl run') return startupSh;
+export function consumerStartupCommand({ startupSh = 'awfl run', refreshEnabled = false, firebaseBootstrapEnabled = false } = {}) {
+  if (startupSh !== 'awfl run' || (!refreshEnabled && !firebaseBootstrapEnabled)) return startupSh;
   return [
-    'if python -c "import awfl.consumer_credentials" 2>/dev/null; then',
+    ...(firebaseBootstrapEnabled ? [firebaseBootstrapShell()] : []),
+    ...(refreshEnabled ? ['if python -c "import awfl.consumer_credentials" 2>/dev/null; then',
     '  if [ -n "${CLOUDSDK_AUTH_ACCESS_TOKEN_FILE:-}" ] && [ -n "${CLOUDSDK_AUTH_ACCESS_TOKEN:-}" ]; then',
     '    if (umask 077; printf "%s\\n" "$CLOUDSDK_AUTH_ACCESS_TOKEN" > "$CLOUDSDK_AUTH_ACCESS_TOKEN_FILE"); then',
     '      unset CLOUDSDK_AUTH_ACCESS_TOKEN',
@@ -34,7 +36,7 @@ export function consumerStartupCommand({ startupSh = 'awfl run', refreshEnabled 
     'else',
     '  echo "[awfl] consumer image lacks credential refresher; using startup credentials" >&2',
     '  unset CLOUDSDK_AUTH_ACCESS_TOKEN_FILE AWFL_GITHUB_TOKEN_FILE',
-    'fi',
+    'fi'] : []),
     'exec awfl run',
   ].join('\n');
 }
@@ -90,8 +92,11 @@ export async function startGke({
   // The former MCP path launched the same image directly (no intermediate shell).
   // Apply that small optimization to every standard project consumer as well.
   const refreshEnabled = Boolean(credentialRefreshToken && (googleCloud?.accessToken || githubToken));
-  const directCommand = startupSh === defaultStartup && !refreshEnabled ? ['awfl', 'run'] : undefined;
-  const effectiveStartup = consumerStartupCommand({ startupSh, refreshEnabled });
+  // The same Job may be rescheduled after its one-hour Firebase token expires.
+  // Bootstrap Firebase even when no optional Google/GitHub integration exists.
+  const firebaseBootstrapEnabled = Boolean(credentialRefreshToken);
+  const directCommand = startupSh === defaultStartup && !refreshEnabled && !firebaseBootstrapEnabled ? ['awfl', 'run'] : undefined;
+  const effectiveStartup = consumerStartupCommand({ startupSh, refreshEnabled, firebaseBootstrapEnabled });
 
   if (!consumerImage) {
     await bestEffortRelease({ userId, projectId });
@@ -180,14 +185,19 @@ export async function startGke({
     if (process.env[name]) consumerEnv.push({ name, value: String(process.env[name]) });
   }
 
-  // Auth/env overrides for the consumer-only Job
-  if (firebaseIdToken) {
-    consumerEnv.push({ name: 'FIREBASE_ID_TOKEN', value: String(firebaseIdToken) });
-  } else if (firebaseCustomToken) {
-    consumerEnv.push({ name: 'FIREBASE_CUSTOM_TOKEN', value: String(firebaseCustomToken) });
-  } else {
-    if (process.env.FIREBASE_ID_TOKEN) consumerEnv.push({ name: 'FIREBASE_ID_TOKEN', value: String(process.env.FIREBASE_ID_TOKEN) });
-    if (process.env.FIREBASE_CUSTOM_TOKEN) consumerEnv.push({ name: 'FIREBASE_CUSTOM_TOKEN', value: String(process.env.FIREBASE_CUSTOM_TOKEN) });
+  // Firebase credentials must not be baked into an immutable Kubernetes Job
+  // template: GKE can recreate that pod long after the original tokens expire.
+  // Broker-backed Jobs bootstrap a fresh Firebase token before running AWFL.
+  // Retain the legacy injection only for callers without a broker capability.
+  if (!firebaseBootstrapEnabled) {
+    if (firebaseIdToken) {
+      consumerEnv.push({ name: 'FIREBASE_ID_TOKEN', value: String(firebaseIdToken) });
+    } else if (firebaseCustomToken) {
+      consumerEnv.push({ name: 'FIREBASE_CUSTOM_TOKEN', value: String(firebaseCustomToken) });
+    } else {
+      if (process.env.FIREBASE_ID_TOKEN) consumerEnv.push({ name: 'FIREBASE_ID_TOKEN', value: String(process.env.FIREBASE_ID_TOKEN) });
+      if (process.env.FIREBASE_CUSTOM_TOKEN) consumerEnv.push({ name: 'FIREBASE_CUSTOM_TOKEN', value: String(process.env.FIREBASE_CUSTOM_TOKEN) });
+    }
   }
 
   // Allow selected passthroughs (auth/debug) when explicitly set on the server
