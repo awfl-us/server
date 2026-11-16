@@ -142,7 +142,7 @@ export class ExecutionService {
       execution: 'Existing project-scoped consumer; one GKE Job/lock per project',
       configured: true,
       environment_guide: 'awfl://environment/guide',
-      next_step: 'Use projects_list, workspace_create, then environment_status(workspace_id) to inspect live credentials and tools.',
+      next_step: 'Use projects_list for an exact project ID and image_profiles_list for published images. To START a new consumer call workspace_create({project_id: "<id>", image_profile: "scala"}) (or browser/lightweight). To ATTACH to an existing running consumer you may omit image_profile. Then call environment_status({workspace_id}) to inspect readiness, credentials and tools.',
     };
     if (name === 'image_profiles_list') return consumerImageCatalog();
     if (name === 'projects_list') return this.listProjects(userId, args);
