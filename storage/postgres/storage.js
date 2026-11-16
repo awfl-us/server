@@ -203,7 +203,7 @@ export class PostgresStorage {
         // A PostgreSQL AFTER trigger persists ordered change events and
         // publishes NOTIFY in the SAME transaction, without N extra queries.
         await client.query('COMMIT');
-        if (changed && (this.watchers.size || this.eventWatchers.size)) await this.#reconcile();
+        if (changed && (this.watchers.size || this.eventWatchers.size)) void this.#reconcile();
         return value;
       } catch (err) {
         await client.query('ROLLBACK').catch(()=>{});
