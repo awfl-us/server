@@ -59,7 +59,7 @@ try{
     concurrency,perWorker,results};
   if(process.env.PG_BENCH_OUTPUT) await writeFile(process.env.PG_BENCH_OUTPUT,JSON.stringify(result,null,2)+'\n');
   console.log('RESULT',JSON.stringify(result));
-  if(Object.values(results).some(x=>x.errors))process.exitCode=1;
+  if(Object.values(results).some(x=>x.errors) && process.env.PG_BENCH_ALLOW_ERRORS!=='1')process.exitCode=1;
 }finally{
   await Promise.allSettled([...created].map(p=>storage.delete(p)));
   await storage.close();
