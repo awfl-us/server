@@ -58,27 +58,32 @@ test('PostgreSQL: concurrent counters serialize correctly', {skip:!enabled,timeo
   } finally { await storage.delete(doc);await storage.close(); }
 });
 
-test('PostgreSQL: subscribe replays committed changes and deletion without polling gaps', {skip:!enabled,timeout:30_000},async()=>{
+async function until(predicate,timeoutMs=7000) {
+  const deadline=Date.now()+timeoutMs;
+  while (!predicate() && Date.now()<deadline) await new Promise(r=>setTimeout(r,25));
+  assert.ok(predicate(),'timed out waiting for subscription');
+}
+
+test('PostgreSQL: document subscriptions observe current state without global cursors',
+  {skip:!enabled,timeout:30_000},async()=>{
   const {storage,collection}=await setup();
-  const doc=`${collection}/watched`;
-  const events=[];
+  const path=`${collection}/watched`,events=[];
   let unsubscribe;
   try {
-    unsubscribe=await storage.subscribe(doc,event=>events.push(event));
-    assert.equal(events[0].type,'snapshot'); assert.equal(events[0].value,null);
-    await storage.create(doc,{status:'ready'});
-    await storage.update(doc,{status:'finished'});
-    await storage.delete(doc);
-    const deadline=Date.now()+7000;
-    while (events.filter(x=>x.type==='change').length<3 && Date.now()<deadline) {
-      await new Promise(resolve=>setTimeout(resolve,50));
-    }
-    const changes=events.filter(x=>x.type==='change');
-    assert.deepEqual(changes.map(x=>x.action),['create','update','delete']);
-    assert.deepEqual(changes.map(x=>x.value?.data?.status),['ready','finished',undefined]);
-    assert.equal(changes.at(-1).value,null);
-    assert.ok(changes.every((x,i)=>i===0 || BigInt(x.cursor)>BigInt(changes[i-1].cursor)));
-  } finally { await unsubscribe?.(); await storage.delete(doc);await storage.close(); }
+    unsubscribe=await storage.subscribe(path,e=>events.push(e));
+    assert.equal(events[0].type,'snapshot');
+    assert.equal(events[0].value,null);
+    await storage.create(path,{status:'ready'});
+    await until(()=>events.some(e=>e.type==='change' && e.value?.data?.status==='ready'));
+    await storage.update(path,{status:'finished'});
+    await until(()=>events.some(e=>e.type==='change' && e.value?.data?.status==='finished'));
+    await storage.delete(path);
+    await until(()=>events.some(e=>e.type==='change' && e.value===null));
+    assert.deepEqual(events.filter(e=>e.type==='change').map(e=>e.action),
+      ['create','update','delete']);
+    await assert.rejects(()=>storage.subscribe(path,()=>{},{afterCursor:'0'}),
+      e=>e.code==='UNSUPPORTED');
+  }finally{await unsubscribe?.();await storage.delete(path);await storage.close();}
 });
 
 test('PostgreSQL: one shared document store backs native memory-state fencing', {skip:!enabled,timeout:30_000},async()=>{
@@ -106,51 +111,73 @@ test('PostgreSQL: one shared document store backs native memory-state fencing', 
   } finally {await records.delete(id);await storage.close();}
 });
 
-test('PostgreSQL: another process can wake document and query listeners', {skip:!enabled,timeout:30_000},async()=>{
+test('PostgreSQL: cross-process notifications refresh document and query watches',
+  {skip:!enabled,timeout:30_000},async()=>{
   const {storage:watcher,collection}=await setup();
   const {default:pg}=await import('pg');
-  const otherPool=new pg.Pool({connectionString:process.env.PGTEST_URL,max:2});
-  const writer=new PostgresStorage({pool:otherPool,ownPool:true});
-  const doc=`${collection}/crossProcess`, documentEvents=[],queryEvents=[];
+  const writer=new PostgresStorage({pool:new pg.Pool({connectionString:process.env.PGTEST_URL,max:2}),ownPool:true});
+  const path=`${collection}/crossProcess`,documentEvents=[],queryEvents=[];
   let unsubscribeDoc,unsubscribeQuery;
   try {
-    unsubscribeDoc=await watcher.subscribe(doc,e=>documentEvents.push(e));
+    unsubscribeDoc=await watcher.subscribe(path,e=>documentEvents.push(e));
     unsubscribeQuery=await watcher.subscribe({collection},e=>queryEvents.push(e));
-    await writer.create(doc,{status:'waiting'});
-    await writer.update(doc,{status:'done'});
-    const deadline=Date.now()+8000;
-    while ((documentEvents.filter(x=>x.type==='change').length<2 ||
-      queryEvents.filter(x=>x.type==='change').length<2) && Date.now()<deadline) {
-      await new Promise(resolve=>setTimeout(resolve,40));
-    }
-    const docChanges=documentEvents.filter(x=>x.type==='change');
-    assert.deepEqual(docChanges.map(x=>x.value?.data?.status),['waiting','done']);
-    assert.equal(queryEvents.filter(x=>x.type==='change').length,2);
+    await writer.create(path,{status:'waiting'});
+    await until(()=>documentEvents.some(e=>e.value?.data?.status==='waiting'));
+    await writer.update(path,{status:'done'});
+    await until(()=>documentEvents.some(e=>e.value?.data?.status==='done'));
+    await until(()=>queryEvents.some(e=>e.type==='change' &&
+      e.value?.some(doc=>doc.data.status==='done')));
     assert.equal((await watcher.query({collection}))[0].data.status,'done');
-  } finally {
+  }finally {
     await unsubscribeDoc?.();await unsubscribeQuery?.();
-    await writer.delete(doc);await writer.close();await watcher.close();
+    await writer.delete(path);await writer.close();await watcher.close();
   }
 });
 
-test('PostgreSQL: subscription can replay downtime events by committed cursor', {skip:!enabled,timeout:30_000},async()=>{
-  const {storage,collection}=await setup();
-  const path=`${collection}/resumable`;
-  let unsub;
+test('PostgreSQL: session event streams replay disconnects and deduplicate append IDs',
+  {skip:!enabled,timeout:30_000},async()=>{
+  const {storage,root}=await setup();
+  const target={scope:'session',streamId:root};
+  const first=[];
+  let unsubscribe;
   try {
-    const first=[];
-    unsub=await storage.subscribe(path,e=>first.push(e));
-    const position=first[0].cursor;
-    await unsub();unsub=null;
-    await storage.create(path,{value:1});
-    await storage.update(path,{value:2});
+    unsubscribe=await storage.subscribeEvents(target,e=>first.push(e),{afterCursor:'0'});
+    const one=await storage.appendEvent({...target,eventId:'one',payload:{message:'one'}});
+    await until(()=>first.filter(e=>e.type==='event').length===1);
+    assert.equal(one.cursor,'1');
+    assert.equal(one.duplicate,false);
+    const duplicate=await storage.appendEvent({...target,eventId:'one',payload:{message:'one'}});
+    assert.deepEqual(duplicate,{cursor:'1',duplicate:true});
+    await unsubscribe();unsubscribe=null;
+    await storage.appendEvent({...target,eventId:'two',payload:{message:'two'}});
+    await storage.appendEvent({...target,eventId:'three',payload:{message:'three'}});
     const replay=[];
-    unsub=await storage.subscribe(path,e=>replay.push(e),{afterCursor:position});
-    const deadline=Date.now()+5000;
-    while(replay.filter(e=>e.type==='change').length<2 && Date.now()<deadline) {
-      await new Promise(resolve=>setTimeout(resolve,30));
+    unsubscribe=await storage.subscribeEvents(target,e=>replay.push(e),{afterCursor:one.cursor});
+    await until(()=>replay.filter(e=>e.type==='event').length===2);
+    assert.deepEqual(replay.map(e=>e.id),['two','three']);
+    assert.deepEqual(replay.map(e=>e.cursor),['2','3']);
+  }finally{await unsubscribe?.();await storage.close();}
+});
+
+test('PostgreSQL: concurrent session and project event cursors are independent',
+  {skip:!enabled,timeout:30_000},async()=>{
+  const {storage,root}=await setup();
+  const scopes=[{scope:'session',streamId:root+'/sessionA'},
+    {scope:'session',streamId:root+'/sessionB'},
+    {scope:'project',streamId:root+'/project'}];
+  try {
+    const results=await Promise.all(scopes.map(async target=>
+      Promise.all(Array.from({length:12},(_,i)=>
+        storage.appendEvent({...target,eventId:String(i),payload:{i}})))));
+    // Ordering of concurrent appends is unspecified across callers, but
+    // every individual stream allocates a gap-free, 1-based position.
+    for(let i=0;i<scopes.length;i++){
+      assert.deepEqual(results[i].map(e=>BigInt(e.cursor)).sort((a,b)=>Number(a-b)),
+        Array.from({length:12},(_,n)=>BigInt(n+1)));
+      const replay=await storage.replayEvents({...scopes[i],afterCursor:'0'});
+      assert.equal(replay.length,12);
+      assert.deepEqual(replay.map(e=>e.cursor),
+        Array.from({length:12},(_,n)=>String(n+1)));
     }
-    assert.deepEqual(replay.filter(e=>e.type==='change').map(e=>e.value.data.value),[1,2]);
-    assert.equal(replay[0].type,'snapshot');
-  }finally{await unsub?.();await storage.delete(path);await storage.close();}
+  }finally{await storage.close();}
 });
