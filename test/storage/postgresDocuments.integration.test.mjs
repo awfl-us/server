@@ -137,7 +137,7 @@ test('PostgreSQL: cross-process notifications refresh document and query watches
 test('PostgreSQL: session event streams replay disconnects and deduplicate append IDs',
   {skip:!enabled,timeout:30_000},async()=>{
   const {storage,root}=await setup();
-  const target={scope:'session',streamId:root};
+  const target={scope:'session',streamId:root.replaceAll('/','_')};
   const first=[];
   let unsubscribe;
   try {
@@ -162,9 +162,9 @@ test('PostgreSQL: session event streams replay disconnects and deduplicate appen
 test('PostgreSQL: concurrent session and project event cursors are independent',
   {skip:!enabled,timeout:30_000},async()=>{
   const {storage,root}=await setup();
-  const scopes=[{scope:'session',streamId:root+'/sessionA'},
-    {scope:'session',streamId:root+'/sessionB'},
-    {scope:'project',streamId:root+'/project'}];
+  const scopes=[{scope:'session',streamId:root.replaceAll('/','_')+'_sessionA'},
+    {scope:'session',streamId:root.replaceAll('/','_')+'_sessionB'},
+    {scope:'project',streamId:root.replaceAll('/','_')+'_project'}];
   try {
     const results=await Promise.all(scopes.map(async target=>
       Promise.all(Array.from({length:12},(_,i)=>
