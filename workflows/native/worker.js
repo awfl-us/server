@@ -165,8 +165,16 @@ export async function runNativeWorkflow({
     };
     const dispatcher = new NativeEffectDispatcher({
       handlers: forkHandlers,
-      reconcile: initial.parallelVersion === 1 ?
-        { 'native.parallel': runFork } : {},
+      reconcile: {
+        ...(initial.parallelVersion === 1 && { 'native.parallel': runFork }),
+        // The local log handler uses a stable insertId and has no business
+        // side effects. Re-emitting an interrupted log is safe, whereas
+        // treating it as an unknown remote mutation strands detached runs
+        // after any rolling restart between logging and journaling.
+        ...(initial.allowedOperations.includes('log.write') &&
+          typeof forkHandlers['log.write'] === 'function' &&
+          { 'log.write': forkHandlers['log.write'] }),
+      },
       authorizeExecution: async ({ userId: storedUser, projectId: storedProject }) => ({
         allowed: storedUser === userId && storedProject === projectId,
         userId: storedUser, projectId: storedProject,

@@ -86,8 +86,15 @@ resource "kubernetes_deployment_v1" "native_scheduler" {
 
   spec {
     replicas = 1
+    # Keep a ready Jobs worker while the replacement image is pulled.
+    # Detached execution ownership is fenced by the durable store, so the
+    # old and new workers may overlap safely during a rolling deployment.
     strategy {
-      type = "Recreate"
+      type = "RollingUpdate"
+      rolling_update {
+        max_surge       = "1"
+        max_unavailable = "0"
+      }
     }
     selector {
       match_labels = {
