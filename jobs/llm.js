@@ -11,6 +11,7 @@ import grokAdapter from './providers/grok.js';
 import deepseekAdapter from './providers/deepseek.js';
 import { stripNullsDeep } from './providers/utils.js';
 import { incrementUsage } from './llm/usage.js';
+import { calculateOpenAiCost } from './llm/cost.js';
 
 const router = express.Router();
 const db = getFirestore();
@@ -38,6 +39,9 @@ const PRICING = {
 
   'gpt-5.5': { prompt: 5.00, cached: 0.50, completion: 30.00 },
   'gpt-5.5-pro': { prompt: 30.00, cached: 0.00, completion: 180.00 },
+
+  // GPT-6 Sol standard API pricing: input, cached input, output per 1M tokens.
+  'gpt-6-sol': { prompt: 2.00, cached: 0.20, completion: 10.00 },
 
   // Reasoning
   'o4-mini': { prompt: 0.55, cached: 0.14, completion: 2.20 },
@@ -93,13 +97,8 @@ function fixed_temperature(model, temperature) {
 }
 
 function estimateCost(model, usage) {
-  const m = PRICING[model] || PRICING['gpt-4'];
-  if (!usage) return null;
-  return (
-    ((usage.prompt_tokens || 0) / 1_000_000) * (m.prompt || 0) +
-    ((usage.prompt_tokens_details?.cached_tokens || 0) / 1_000_000) * (m.cached || 0) +
-    ((usage.completion_tokens || 0) / 1_000_000) * (m.completion || 0)
-  );
+  // OpenAI prompt_tokens includes cached_tokens; they are not additive.
+  return calculateOpenAiCost(PRICING[model] || PRICING['gpt-4'], usage);
 }
 
 function resolveMaxTokens(model, fallback = 16384) {
