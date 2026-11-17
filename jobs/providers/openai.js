@@ -4,27 +4,29 @@ import { stripNullsDeep } from './utils.js';
 // OpenAI adapter wrapping chat.completions
 // Input: { apiKey, model, messages, temperature, max_tokens, response_format, tools, tool_choice }
 // Returns: { message, usage, raw }
-export async function chat(params) {
-  const { apiKey, model, messages, temperature, max_tokens, response_format, tools, tool_choice } = params;
-  // The v4 SDK defaults to node-fetch 2.x. Its chunked-response close
-  // detection can falsely terminate compressed replies in GKE, producing
-  // ERR_STREAM_PREMATURE_CLOSE. Native fetch (Node 20+) handles both gzip
-  // and Brotli without disabling response compression.
-  const client = new OpenAI({ apiKey, fetch: globalThis.fetch });
-
-  // Build request payload and defensively strip null/undefined values
-  const payload = stripNullsDeep({
+export function buildChatPayload(params) {
+  const { model, messages, temperature, max_tokens, response_format, tools, tool_choice } = params;
+  // Chat Completions rejects GPT-6 Sol function calls with reasoning
+  // enabled. Use the supported no-reasoning mode for this legacy adapter;
+  // Responses API is required to use reasoning-enabled function tools.
+  const isSol = model === 'gpt-6-sol';
+  const hasFunctionTools = Array.isArray(tools) && tools.some(t => t?.type === 'function');
+  return stripNullsDeep({
     model,
     messages,
-    temperature,
-    // OpenAI SDK prefers max_completion_tokens in newer models; accept max_tokens and map
+    temperature: isSol ? undefined : temperature,
     max_completion_tokens: typeof max_tokens === 'number' ? max_tokens : undefined,
     response_format,
     tools,
-    tool_choice
+    tool_choice,
+    reasoning_effort: isSol && hasFunctionTools ? 'none' : undefined
   });
+}
 
-  const resp = await client.chat.completions.create(payload);
+export async function chat(params) {
+  // Retain native fetch: node-fetch prematurely closes compressed GKE replies.
+  const client = new OpenAI({ apiKey: params.apiKey, fetch: globalThis.fetch });
+  const resp = await client.chat.completions.create(buildChatPayload(params));
 
   const choice = resp.choices?.[0];
   const message = choice?.message || null;

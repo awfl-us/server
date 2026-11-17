@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chat } from './openai.js';
+import { chat, buildChatPayload } from './openai.js';
 
 test('OpenAI adapter uses native fetch and preserves chat completion payload and result', async () => {
   const originalFetch = globalThis.fetch;
@@ -29,4 +29,45 @@ test('OpenAI adapter uses native fetch and preserves chat completion payload and
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+
+const functionTools = [{
+  type: 'function', function: {
+    name: 'list_directories', description: 'List directories',
+    parameters: { type: 'object', properties: {} }
+  }
+}];
+
+test('GPT-6 Sol function calls use no reasoning on Chat Completions', () => {
+  const payload = buildChatPayload({
+    model: 'gpt-6-sol', messages: [{ role: 'user', content: 'Inspect' }],
+    tools: functionTools, tool_choice: 'auto', temperature: 0.7,
+    max_tokens: 1000
+  });
+  assert.equal(payload.reasoning_effort, 'none');
+  assert.equal(payload.temperature, undefined);
+  assert.deepEqual(payload.tools, functionTools);
+  assert.equal(payload.tool_choice, 'auto');
+  assert.equal(payload.max_completion_tokens, 1000);
+});
+
+test('other models preserve their parameters', () => {
+  const payload = buildChatPayload({
+    model: 'gpt-5.5', messages: [], tools: functionTools,
+    temperature: 1, max_tokens: 500,
+    response_format: { type: 'json_object' }
+  });
+  assert.equal(payload.reasoning_effort, undefined);
+  assert.equal(payload.temperature, 1);
+  assert.deepEqual(payload.response_format, { type: 'json_object' });
+  assert.equal(payload.max_completion_tokens, 500);
+});
+
+test('Sol without tools has no forced reasoning effort', () => {
+  const payload = buildChatPayload({
+    model: 'gpt-6-sol', messages: [], tools: [], temperature: 0.5
+  });
+  assert.equal(payload.reasoning_effort, undefined);
+  assert.equal(payload.temperature, undefined);
 });
