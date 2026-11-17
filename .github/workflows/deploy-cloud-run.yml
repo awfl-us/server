@@ -403,6 +403,8 @@ jobs:
             --region="${GCP_REGION}" \
             --image="${{ steps.image.outputs.IMAGE_URI }}" \
             --service-account="${CLOUD_RUN_RUNTIME_SA}" \
+            --command="" \
+            --args="" \
             --max-instances=3 \
             --allow-unauthenticated \
             --timeout=3600 \
@@ -435,6 +437,8 @@ jobs:
             --region="${GCP_REGION}" \
             --image="${{ steps.image.outputs.IMAGE_URI }}" \
             --service-account="${CLOUD_RUN_RUNTIME_SA}" \
+            --command="" \
+            --args="" \
             --max-instances=3 \
             --no-allow-unauthenticated \
             --timeout=3600 \
@@ -477,6 +481,16 @@ jobs:
                 any(.status.traffic[]; .revisionName == $latest and .percent == 100)
               ' >/dev/null || {
                 echo "Service ${service} is not serving the latest revision at 100%" >&2
+                exit 1
+              }
+            # Fail the deploy if a temporary maintenance command has been inherited.
+            gcloud run services describe "${service}" --region="${GCP_REGION}" --format=json |
+              jq -e '
+                .spec.template.spec.containers[0] as $c |
+                (($c.command // []) | length) == 0 and
+                (($c.args // []) | length) == 0
+              ' >/dev/null || {
+                echo "Service ${service} unexpectedly overrides the image startup command" >&2
                 exit 1
               }
             echo "Service ${service} serves its latest revision at 100%"
