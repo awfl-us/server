@@ -1,4 +1,5 @@
 import { KubeConfig, BatchV1Api } from '@kubernetes/client-node';
+import { classifyK8sJob } from './jobStatus.js';
 
 function buildServerUrl(input) {
   if (!input) return '';
@@ -220,8 +221,7 @@ export async function inspectK8sJob({ namespace, jobName }) {
     // Deletion is asynchronous. A terminating Job must not qualify for
     // re-bootstrap even when it still reports an active pod.
     return {
-      state: response?.body?.metadata?.deletionTimestamp ? 'terminating' :
-        status.succeeded ? 'completed' : status.failed ? 'failed' : status.active ? 'active' : 'pending',
+      state: classifyK8sJob(response?.body),
       active: Number(status.active || 0),
       failed: Number(status.failed || 0),
       succeeded: Number(status.succeeded || 0),
