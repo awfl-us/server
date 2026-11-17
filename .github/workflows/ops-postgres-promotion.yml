@@ -1,0 +1,153 @@
+name: Promote AWFL PostgreSQL API Jobs and GKE
+on:
+  push:
+    branches:
+      - ops/postgres-prod-retry-20261117
+    paths:
+      - .github/workflows/ops-postgres-promotion.yml
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/323709301334/locations/global/workloadIdentityPools/github-oidc/providers/github
+          service_account: github-deployer@awfl-us.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: awfl-us
+          install_components: gke-gcloud-auth-plugin,kubectl
+
+      - name: Inspect live Firestore revisions and PostgreSQL previews
+        shell: bash
+        run: |
+          set -euo pipefail
+          for svc in api jobs; do
+            gcloud run services describe "$svc" --project=awfl-us --region=us-central1 --format=json > "/tmp/awfl-$svc.json"
+            old="$(jq -r '[.status.traffic[] | select(.percent == 100) | .revisionName][0] // empty' "/tmp/awfl-$svc.json")"
+            test -n "$old" || { echo "No single live revision for $svc"; exit 1; }
+            tag=pgverify
+            if [[ "$svc" == jobs ]]; then tag=pgverifyjobs; fi
+            if ! jq -e --arg tag "$tag" 'any(.status.traffic[]; .tag == $tag)' "/tmp/awfl-$svc.json" >/dev/null; then
+              echo "Creating zero-traffic $svc PostgreSQL preview"
+              gcloud run services update "$svc" --project=awfl-us --region=us-central1 \
+                --update-env-vars=AWFL_DOCUMENT_STORAGE_BACKEND=postgres \
+                --no-traffic --tag="$tag" --quiet
+              gcloud run services describe "$svc" --project=awfl-us --region=us-central1 --format=json > "/tmp/awfl-$svc.json"
+            fi
+            pg="$(jq -r --arg tag "$tag" '[.status.traffic[] | select(.tag == $tag) | .revisionName][0] // empty' "/tmp/awfl-$svc.json")"
+            test -n "$pg"
+            gcloud run revisions describe "$old" --project=awfl-us --region=us-central1 --format=json > "/tmp/awfl-$svc-old.json"
+            gcloud run revisions describe "$pg" --project=awfl-us --region=us-central1 --format=json > "/tmp/awfl-$svc-pg.json"
+            jq -e '
+              (.spec.containers[0].env | any(.name == "AWFL_DOCUMENT_STORAGE_BACKEND" and .value == "firestore")) and
+              ((.spec.containers[0].command // []) | length == 0) and
+              ((.spec.containers[0].args // []) | length == 0)
+            ' "/tmp/awfl-$svc-old.json" >/dev/null
+            jq -e '
+              (.spec.containers[0].env | any(.name == "AWFL_DOCUMENT_STORAGE_BACKEND" and .value == "postgres")) and
+              (.spec.containers[0].env | any(.name == "AWFL_NATIVE_DOCUMENT_STORE_ENABLED" and .value == "0")) and
+              ((.spec.containers[0].command // []) | length == 0) and
+              ((.spec.containers[0].args // []) | length == 0) and
+              ([.status.conditions[]? | select(.type == "Ready" and .status == "True")] | length > 0)
+            ' "/tmp/awfl-$svc-pg.json" >/dev/null
+            old_image="$(jq -r '.spec.containers[0].image' "/tmp/awfl-$svc-old.json")"
+            pg_image="$(jq -r '.spec.containers[0].image' "/tmp/awfl-$svc-pg.json")"
+            test "$old_image" = "$pg_image" || {
+              echo "$svc preview image differs from current production image"; exit 1;
+            }
+            if [[ "$svc" == api ]]; then
+              echo "OLD_API=$old" >> "$GITHUB_ENV"
+              echo "PG_API=$pg" >> "$GITHUB_ENV"
+            else
+              echo "OLD_JOBS=$old" >> "$GITHUB_ENV"
+              echo "PG_JOBS=$pg" >> "$GITHUB_ENV"
+            fi
+            echo "Ready $svc: $old (Firestore) -> $pg (PostgreSQL)"
+          done
+          for target in health mcp mcp/agents; do
+            method=POST; expected=401
+            if [[ "$target" == health ]]; then method=GET; expected=200; fi
+            status="$(curl -sS --max-time 25 -X "$method" -o /tmp/awfl-preview-body -w '%{http_code}' "https://pgverify---api-4wmfqir74q-uc.a.run.app/$target")"
+            echo "Preview $target: HTTP $status"
+            test "$status" = "$expected"
+          done
+
+      - name: Switch GKE document provider while preserving legacy execution journal
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud container clusters get-credentials awfl-gke --project=awfl-us --region=us-central1 --quiet
+          kubectl -n awfl get deployment native-jobs -o json > /tmp/awfl-native-before.json
+          jq -e '.status.readyReplicas == 1 and (.spec.template.spec.containers[0].env |
+            any(.name == "AWFL_NATIVE_DOCUMENT_STORE_ENABLED" and .value == "0"))' /tmp/awfl-native-before.json >/dev/null
+          kubectl -n awfl set env deployment/native-jobs \
+            AWFL_DOCUMENT_STORAGE_BACKEND=postgres AWFL_NATIVE_DOCUMENT_STORE_ENABLED=0
+          kubectl -n awfl rollout status deployment/native-jobs --timeout=240s
+          kubectl -n awfl get deployment native-jobs -o json | jq -e '
+            (.status.readyReplicas == 1) and
+            (.spec.template.spec.containers[0].env |
+              any(.name == "AWFL_DOCUMENT_STORAGE_BACKEND" and .value == "postgres")) and
+            (.spec.template.spec.containers[0].env |
+              any(.name == "AWFL_NATIVE_DOCUMENT_STORE_ENABLED" and .value == "0"))
+          ' >/dev/null
+
+      - name: Promote pinned PostgreSQL Jobs and API revisions
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run services update-traffic jobs --project=awfl-us --region=us-central1 \
+            --to-revisions="$PG_JOBS=100" --quiet
+          gcloud run services update-traffic api --project=awfl-us --region=us-central1 \
+            --to-revisions="$PG_API=100" --quiet
+          echo "Production traffic promoted to PostgreSQL."
+
+      - name: Verify live MCP and Cloud Run revisions after promotion
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in health mcp mcp/agents; do
+            method=POST; expected=401
+            if [[ "$target" == health ]]; then method=GET; expected=200; fi
+            status="$(curl -sS --max-time 25 -X "$method" -o /tmp/awfl-live-body -w '%{http_code}' "https://api.awfl.us/$target")"
+            echo "Live $target: HTTP $status"
+            test "$status" = "$expected"
+          done
+          for svc in api jobs; do
+            gcloud run services describe "$svc" --project=awfl-us --region=us-central1 --format=json > "/tmp/awfl-verified-$svc.json"
+            expected="$PG_API"; if [[ "$svc" == jobs ]]; then expected="$PG_JOBS"; fi
+            jq -e --arg expected "$expected" '
+              ([.status.traffic[] | select(.percent == 100) | .revisionName][0] == $expected) and
+              ([.status.conditions[] | select(.type == "Ready" and .status == "True")] | length > 0)
+            ' "/tmp/awfl-verified-$svc.json" >/dev/null
+            echo "Verified $svc -> $expected"
+          done
+          echo "AWFL_POSTGRES_PRODUCTION_CUTOVER_SUCCEEDED"
+
+      - name: Roll back to pinned Firestore revisions if any step fails
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+          if [[ -n "$OLD_API" ]]; then
+            gcloud run services update-traffic api --project=awfl-us --region=us-central1 \
+              --to-revisions="$OLD_API=100" --quiet
+          fi
+          if [[ -n "$OLD_JOBS" ]]; then
+            gcloud run services update-traffic jobs --project=awfl-us --region=us-central1 \
+              --to-revisions="$OLD_JOBS=100" --quiet
+          fi
+          gcloud container clusters get-credentials awfl-gke --project=awfl-us --region=us-central1 --quiet
+          kubectl -n awfl set env deployment/native-jobs \
+            AWFL_DOCUMENT_STORAGE_BACKEND=firestore AWFL_NATIVE_DOCUMENT_STORE_ENABLED=0
+          kubectl -n awfl rollout status deployment/native-jobs --timeout=180s
+          echo "Rollback attempted; inspect runtime before retrying."
