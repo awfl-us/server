@@ -33,3 +33,32 @@ retroactively. They must be deleted and started again after deployment.
 Deployment requires both the API and Jobs services to run the new server commit.
 The consumer image itself does not need rebuilding: the bootstrap uses its
 existing Python 3 runtime and the existing CLI.
+
+## November 17: eviction retry and Job-state handling
+
+An AWFL lightweight pod was evicted because its **per-pod** ephemeral local
+storage exceeded **1Gi**. This is separate from the Kubernetes namespace's
+storage quota. New lightweight, browser, and Scala Jobs now request and limit
+ephemeral storage at 4Gi (CPU and memory profiles are unchanged).
+
+A Kubernetes Job can report `status.failed: 1` and `status.active: 1` after
+the controller launches a replacement. The earlier broker classified every
+nonzero failed count as a terminal Job failure and returned 403 for the
+replacement's Firebase bootstrap. The classifier now:
+
+- Rejects a deleting Job and Jobs with terminal `Failed`, `FailureTarget`,
+  `Complete`, or `SuccessCriteriaMet` conditions.
+- Accepts `status.active > 0` even when previous pod failures were recorded.
+- Treats retry backoff as `pending` until the configured `backoffLimit` is
+  exceeded; rejects exhausted retries.
+- Retains the existing project grant, 256-bit capability and competing
+  active-lock checks. No credential or authorization fallback is introduced.
+
+Credential bootstrap 403 responses now record a **reason category** in
+server logs without logging secrets. If 403 recurs after this fix, check whether
+it is `job_not_running`, `consumer_grant_replaced`, or
+`different_active_lock` before changing the authorization policy.
+
+Both the Job classification and resource requests are applied to **new**
+Kubernetes Jobs. Already-failed or already-running Jobs cannot have their
+immutable Job specs updated and must be cleanly restarted after rollout.
