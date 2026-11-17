@@ -69,6 +69,24 @@ Terraform deliberately ignores drift in the container image: future manual
 applies must not downgrade a successful CI image rollout. New/initial
 Deployments get the explicitly provided bootstrap image.
 
+## Detached worker rollout and recovery
+
+The Jobs Deployment must use **RollingUpdate** with one temporarily surged
+replica and no unavailable replicas. A Recreate deployment stops the only
+worker before the next image is downloaded and ready, losing in-flight native
+processes. Image-only GitHub Actions deploys do **not** apply Terraform changes;
+a separate authorized Terraform plan/apply is required to change an existing
+deployment's strategy. Rolling updates improve availability but may still end
+in-flight processes as old pods terminate.
+
+Durable Firestore claims fence competing workers across overlapping replicas.
+On recovery, log.write can safely re-emit the *same* structured log with its
+stable insert ID, then journal its null outcome. Downstream log consumers can
+deduplicate that ID. Recovered http.* operations and other external mutations
+remain blocked without reconciliation: their remote outcomes cannot be inferred.
+The detached scheduler may keep re-attempting such blocked effects; investigate
+and reconcile them instead of blindly replaying business mutations.
+
 Use a normal plan before any future apply. Avoid `-target` unless recovering
 from a known state issue. Never apply another Terraform root that claims these
 resources.
