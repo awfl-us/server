@@ -26,6 +26,19 @@ EXCLUDE_ROOT={'apiKeys','mcpOwners','mcpWorkspaces','mcpOAuthRequests',
     'mcpOAuthRefreshTokens','mcpOAuthCodes','mcpOAuthClients',
     'nativeWorkflowExecutions'}
 EXCLUDE_CHILD={'mcpCommandKeys'}
+# Leaf collections often contain thousands of historical events/messages.
+# Firestore supports arbitrary nested subcollections, but these specific
+# AWFL data models have terminal documents. All container/unknown collections
+# are still inspected recursively, including virtual parent documents.
+LEAF_COLLECTION_IDS={
+    'messages','items','relayEvents','callbacks','tasks','cursors',
+    'agentSessions','agents','creds','workflowDefinitions','workflowTypes',
+    'workflowExecLinks','workflowExecStatus','workflowExecsBySession',
+    'integrations','log.sessions.summaries','log.sessions.topicInfos',
+    'log.terms.summaries','log.terms.topicInfos',
+    'log.weekly.summaries','log.weekly.topicInfos',
+}
+
 SCHEMA=Path(__file__).resolve().parents[2]/'storage/postgres/schema.sql'
 
 def stable(value):
@@ -115,14 +128,20 @@ def walk(reader,max_documents=500000,workers=6):
             visited.add(collection)
             docs=list(reader.documents(collection))
             paths=[doc['name'].split('/documents/',1)[1] for doc in docs]
-            child_sets=list(ex.map(reader.collections,paths))
+            collection_name=collection.split('/')[-1]
+            if collection_name in LEAF_COLLECTION_IDS:
+                child_sets=[[] for _ in paths]
+            else:
+                child_sets=list(ex.map(reader.collections,paths))
             for doc,path,children in zip(docs,paths,child_sets):
                 if 'fields' in doc:
                     count+=1
                     if count>max_documents: raise RuntimeError('document limit exceeded')
+                    if count%2000==0:
+                        print('documents scanned:',count,file=sys.stderr,flush=True)
                     yield path,doc
                 for child in children:
-                    if child not in EXCLUDE_CHILD:
+                    if child not in EXCLUDE_CHILD and not child.startswith('locks.'):
                         waiting.append(path+'/'+child)
 
 def connect(dsn):
@@ -159,6 +178,20 @@ def run(args):
     sha=hashlib.sha256()
     imported=0
     missing=0
+    pending=[]
+    def flush_copy():
+        if not pending:return
+        placeholders=','.join('(%s,%s,%s,%s,%s::jsonb,%s,%s,%s)' for _ in pending)
+        params=tuple(item for row in pending for item in row)
+        sql=('INSERT INTO awfl_documents '
+            '(path,collection_path,collection_id,document_id,data,revision,created_at,updated_at)'
+            ' VALUES '+placeholders+
+            ' ON CONFLICT(path) DO UPDATE SET '
+            'data=EXCLUDED.data,revision=EXCLUDED.revision,'
+            'created_at=EXCLUDED.created_at,updated_at=EXCLUDED.updated_at')
+        with db.cursor() as cur:cur.execute(sql,params)
+        db.commit()
+        pending.clear()
     try:
         for path,snap in walk(reader,args.max_documents,args.workers):
             value={k:decode(v,kinds) for k,v in snap['fields'].items()
@@ -166,27 +199,23 @@ def run(args):
             h=digest(path,value)
             sha.update(bytes.fromhex(h))
             collection_counts[path.split('/')[-2]]+=1
-            if db:
+            if db and args.mode=='copy':
+                parts=path.split('/')
+                pending.append((path,'/'.join(parts[:-1]),parts[-2],
+                    parts[-1],stable(value),
+                    int(snap.get('fields',{}).get('__awflStorageMeta',{})
+                        .get('mapValue',{}).get('fields',{})
+                        .get('revision',{}).get('integerValue',1)),
+                    snap.get('createTime') or '1970-01-01T00:00:00Z',
+                    snap.get('updateTime') or '1970-01-01T00:00:00Z'))
+                if len(pending)>=100:flush_copy()
+            elif db:
                 with db.cursor() as cur:
-                    if args.mode=='copy':
-                        parts=path.split('/')
-                        cur.execute("""INSERT INTO awfl_documents
-                          (path,collection_path,collection_id,document_id,data,
-                           revision,created_at,updated_at)
-                          VALUES (%s,%s,%s,%s,%s::jsonb,%s,%s,%s)
-                          ON CONFLICT(path) DO NOTHING""",
-                          (path,'/'.join(parts[:-1]),parts[-2],parts[-1],stable(value),
-                           int(snap.get('fields',{}).get('__awflStorageMeta',{})
-                               .get('mapValue',{}).get('fields',{})
-                               .get('revision',{}).get('integerValue',1)),
-                           snap.get('createTime') or '1970-01-01T00:00:00Z',
-                           snap.get('updateTime') or '1970-01-01T00:00:00Z'))
-                    else:
-                        cur.execute("SELECT data FROM awfl_documents WHERE path=%s",(path,))
-                        row=cur.fetchone()
-                        if row is None or digest(path,row[0])!=h: missing+=1
+                    cur.execute('SELECT data FROM awfl_documents WHERE path=%s',(path,))
+                    row=cur.fetchone()
+                    if row is None or digest(path,row[0])!=h:missing+=1
             imported+=1
-            if db and args.mode=='copy' and imported%250==0: db.commit()
+        if db and args.mode=='copy':flush_copy()
         if db:db.commit()
         if db and args.mode=='verify':
             with db.cursor() as cur:
