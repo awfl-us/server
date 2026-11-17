@@ -1,4 +1,4 @@
-name: Diagnose AWFL domain vs direct Cloud Run (read-only)
+name: Reconcile AWFL native worker deployment strategy
 on:
   push:
     branches:
@@ -7,7 +7,7 @@ permissions:
   contents: read
   id-token: write
 jobs:
-  diagnose:
+  patch_strategy:
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
@@ -18,33 +18,43 @@ jobs:
           service_account: github-deployer@awfl-us.iam.gserviceaccount.com
           project_id: awfl-us
       - uses: google-github-actions/setup-gcloud@v2
-      - name: Compare direct Cloud Run and custom domain response
+      - name: Install kubectl and authenticate to GKE
+        run: |
+          gcloud components install kubectl gke-gcloud-auth-plugin --quiet
+          gcloud container clusters get-credentials awfl-gke --region us-central1 --project awfl-us
+      - name: Patch strategy only with strict pod-template integrity check
         run: |
           set -euo pipefail
-          direct="$(gcloud run services describe api --project awfl-us --region us-central1 --format='value(status.url)')"
-          echo "direct_cloud_run_api_url=$direct"
-          echo "custom_domain_dns:"
-          getent hosts api.awfl.us || true
-          for origin in "https://api.awfl.us" "$direct"; do
-            for path in /health /mcp /mcp/agents; do
-              if [ "$path" = /health ]; then method=GET; else method=POST; fi
-              status="$(curl -k --silent --show-error --max-time 15 --request "$method" --output /tmp/resp-body --write-out '%{http_code}' "$origin$path" || true)"
-              echo "$origin$path $method HTTP $status"
-              echo "BODY_FIRST_200:"
-              head -c 200 /tmp/resp-body | tr '\n' ' ' | tr -cd '[:print:]' || true
-              echo
-            done
-          done
-      - name: Inspect revisions and routing metadata
-        run: |
-          set -euo pipefail
-          gcloud run services describe api --region us-central1 --project awfl-us --format='json(status.conditions,status.traffic,status.latestReadyRevisionName,status.url)' >/tmp/service.json
+          kubectl -n awfl get deployment native-jobs -o json > /tmp/before-native-jobs.json
           python3 - <<'PY'
           import json
-          s=json.load(open('/tmp/service.json'))['status']
-          print('READY_REVISION',s.get('latestReadyRevisionName'))
-          print('TRAFFIC',[(x.get('revisionName'),x.get('percent')) for x in s.get('traffic',[])])
-          print('CONDITIONS',[(x.get('type'),x.get('status'),x.get('reason')) for x in s.get('conditions',[])])
+          d=json.load(open('/tmp/before-native-jobs.json'))
+          s=d['spec']; st=d.get('status',{})
+          print('BEFORE_STRATEGY',s['strategy'])
+          print('BEFORE_REPLICAS',s['replicas'],'READY',st.get('readyReplicas'),'UPDATED',st.get('updatedReplicas'),'GEN',d['metadata']['generation'],'OBSERVED',st.get('observedGeneration'))
+          print('IMAGE',s['template']['spec']['containers'][0]['image'])
+          env={x['name']:x.get('value') for x in s['template']['spec']['containers'][0]['env'] if x['name'] in ('AWFL_DOCUMENT_STORAGE_BACKEND','AWFL_NATIVE_DOCUMENT_STORE_ENABLED')}
+          print('STORAGE_VARS',env)
+          assert st.get('readyReplicas')==s['replicas'], 'would race an unhealthy deployment'
+          assert st.get('updatedReplicas')==s['replicas'], 'would race an ongoing rollout'
+          assert st.get('observedGeneration',0)>=d['metadata']['generation'],'deployment has outstanding generation'
           PY
-          echo "Load balancer URL maps (if authorized):"
-          gcloud compute url-maps list --project awfl-us --format='table(name,defaultService)' 2>&1 | head -30 || true
+          echo "PODS BEFORE:"
+          kubectl -n awfl get pods -l app=awfl-native-jobs -o name | sort
+          kubectl -n awfl patch deployment native-jobs --type merge -p '{"spec":{"strategy":{"type":"RollingUpdate","rollingUpdate":{"maxSurge":"1","maxUnavailable":"0"}}}}'
+          kubectl -n awfl get deployment native-jobs -o json > /tmp/after-native-jobs.json
+          python3 - <<'PY'
+          import json
+          b=json.load(open('/tmp/before-native-jobs.json'))['spec']
+          a=json.load(open('/tmp/after-native-jobs.json'))['spec']
+          assert a['strategy']['type']=='RollingUpdate'
+          assert a['strategy']['rollingUpdate']['maxSurge']=='1'
+          assert a['strategy']['rollingUpdate']['maxUnavailable']=='0'
+          assert b['template']==a['template'], 'pod template changed unexpectedly'
+          assert b['replicas']==a['replicas'], 'replica count changed'
+          print('AFTER_STRATEGY',a['strategy'])
+          print('TEMPLATE_UNCHANGED',True)
+          print('STORAGE_VARS_UNCHANGED',True)
+          PY
+          echo "PODS AFTER:"
+          kubectl -n awfl get pods -l app=awfl-native-jobs -o name | sort
