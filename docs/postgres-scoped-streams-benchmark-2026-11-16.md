@@ -15,7 +15,7 @@ After applying `storage/postgres/migrations/001_scoped_event_streams.sql`: docum
 - `update` using current `SERIALIZABLE` read/modify/write and `patch.increment`, with each worker writing a distinct document
 - `create` on distinct new documents
 
-One warmup read/write for each worker. Persistent pool max 17 (database max connections previously measured at 25). Successful attempts only contribute to percentiles; unsuccessful operations are counted separately, never silently excluded from success counts. The benchmark then deletes its random-prefix documents. Both trials were run from the same worker within one minute. One measured trial per condition, so short-term load jitter remains possible.
+One warmup read/write for each worker. Persistent pool max 17 (database max connections previously measured at 25). Successful attempts only contribute to percentiles; unsuccessful operations are counted separately, never silently excluded from success counts. The benchmark then deletes its random-prefix documents. Both trials were run from the same worker within one minute. The baseline and first revised run were measured once each. An additional post-migration confirmation run checked short-term variability on the final watcher implementation.
 
 ## Managed Cloud SQL results (milliseconds)
 
@@ -30,6 +30,11 @@ Successful serializable-update throughput increased from **65.54** to **616.61 o
 Raw outputs:
 - [Legacy global cursor](../benchmarks/postgres-scoped-streams-2026-11-16/cloud-sql-before.json)
 - [Scoped event streams](../benchmarks/postgres-scoped-streams-2026-11-16/cloud-sql-after.json)
+- [Scoped streams, confirmation run](../benchmarks/postgres-scoped-streams-2026-11-16/cloud-sql-after-repeat.json)
+
+## Confirmation run after final watcher optimization
+
+Using the same 16 × 24 workload, the repeat run reported **0/1,152 errors** and these p50 / p95 values (milliseconds): create **11.70 / 15.33**, put **12.37 / 27.80**, and serializable update **24.93 / 102.39**. The update remains much faster than the global-cursor baseline despite noise on the shared-core instance. The same managed PostgreSQL integration suite passed **7/7** after this last change.
 
 ## Caveats
 
@@ -42,6 +47,6 @@ Raw outputs:
 
 ## Verification
 
-The managed Cloud SQL PostgreSQL integration suite, including document watcher convergence, cross-process changes, session replay/idempotency and independent session/project cursors, passed **7/7** after migration. The full CI storage suite and automated CI benchmark are tracked in server [PR #134](https://github.com/awfl-us/server/pull/134).
+The managed Cloud SQL PostgreSQL integration suite, including document watcher convergence, cross-process changes, session replay/idempotency and independent session/project cursors, passed **7/7** after migration. The full CI storage suite and automated CI benchmark passed (26 passed, 5 expected skips, 0 failures) in server [PR #134](https://github.com/awfl-us/server/pull/134).
 
 **No production backend configuration, data routing, or Terraform resource was changed.**

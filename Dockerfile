@@ -20,6 +20,8 @@ RUN npm install
 
 # Copy app code
 COPY ./workflows ./workflows
+# Native memory execution and callbacks import this provider-neutral store.
+COPY ./storage ./storage
 COPY ./jobs ./jobs
 COPY ./mcp ./mcp
 COPY ./agentsMcp ./agentsMcp
