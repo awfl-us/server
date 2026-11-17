@@ -1,0 +1,57 @@
+name: Emergency restore AWFL Firestore
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/emergency-restore-firestore.yml
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Load deployed GCP identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          for key in GCP_PROJECT_ID GCP_REGION GCP_WIF_PROVIDER GCP_DEPLOY_SA GKE_CLUSTER_NAME GKE_CLUSTER_LOCATION K8S_NAMESPACE; do
+            echo "${key}=$(jq -r --arg key "$key" '.[$key]' .github/actions-variables.json)" >> "$GITHUB_ENV"
+          done
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_DEPLOY_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          install_components: gke-gcloud-auth-plugin,kubectl
+      - name: Immediately restore API MCP to Firestore
+        run: |
+          set -euo pipefail
+          gcloud run services update api --project="$GCP_PROJECT_ID" --region="$GCP_REGION" --update-env-vars="AWFL_DOCUMENT_STORAGE_BACKEND=firestore" --quiet
+          gcloud run services update-traffic api --project="$GCP_PROJECT_ID" --region="$GCP_REGION" --to-latest --quiet
+          gcloud run services describe api --project="$GCP_PROJECT_ID" --region="$GCP_REGION" --format='value(status.latestReadyRevisionName)'
+      - name: Restore Jobs to Firestore
+        run: |
+          set -euo pipefail
+          gcloud run services update jobs --project="$GCP_PROJECT_ID" --region="$GCP_REGION" --update-env-vars="AWFL_DOCUMENT_STORAGE_BACKEND=firestore" --quiet
+          gcloud run services update-traffic jobs --project="$GCP_PROJECT_ID" --region="$GCP_REGION" --to-latest --quiet
+      - name: Restore native GKE worker to Firestore
+        run: |
+          set -euo pipefail
+          gcloud container clusters get-credentials "$GKE_CLUSTER_NAME" --region="$GKE_CLUSTER_LOCATION" --project="$GCP_PROJECT_ID" --quiet
+          kubectl -n "$K8S_NAMESPACE" set env deployment/native-jobs AWFL_DOCUMENT_STORAGE_BACKEND=firestore AWFL_NATIVE_DOCUMENT_STORE_ENABLED=0
+          kubectl -n "$K8S_NAMESPACE" rollout status deployment/native-jobs --timeout=240s
+      - name: Verify MCP authentication endpoints
+        run: |
+          set -euo pipefail
+          for endpoint in /mcp /mcp/agents; do
+            code="$(curl --max-time 20 --silent --output /dev/null --write-out '%{http_code}' -X POST "https://api.awfl.us$endpoint")"
+            echo "$endpoint HTTP $code"
+            test "$code" = 401
+          done
