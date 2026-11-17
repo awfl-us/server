@@ -1,0 +1,93 @@
+name: Cut over AWFL native GKE document storage to PostgreSQL
+on:
+  push:
+    branches:
+      - ops/postgres-prod-retry-20261117
+    paths:
+      - .github/workflows/ops-postgres-native-cutover.yml
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  gke-postgres-cutover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/323709301334/locations/global/workloadIdentityPools/github-oidc/providers/github
+          service_account: github-deployer@awfl-us.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: awfl-us
+          install_components: gke-gcloud-auth-plugin,kubectl
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.5
+          terraform_wrapper: false
+
+      - name: Refresh GKE credentials and validate current native ownership
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud container clusters get-credentials awfl-gke --region=us-central1 --project=awfl-us --quiet
+          kubectl -n awfl get deployment native-jobs -o json > /tmp/native-before.json
+          jq -e '.status.readyReplicas == 1 and .spec.replicas == 1' /tmp/native-before.json
+          jq -e '.spec.template.spec.containers[0].env |
+            any(.name == "AWFL_NATIVE_DOCUMENT_STORE_ENABLED" and .value == "0")' /tmp/native-before.json
+          IMAGE="$(jq -r '.spec.template.spec.containers[0].image' /tmp/native-before.json)"
+          [[ "$IMAGE" =~ ^us-central1-docker\.pkg\.dev/awfl-us/app/api:[0-9a-f]{40}$ ]] || {
+            echo "Unexpected native image; refusing deployment"; exit 1;
+          }
+          echo "NATIVE_JOBS_IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          echo "Native worker image: $IMAGE"
+
+      - name: Plan only the existing GKE scheduler Terraform change
+        shell: bash
+        run: |
+          set -euo pipefail
+          terraform -chdir=infra/native-execution init -input=false -no-color
+          terraform -chdir=infra/native-execution validate -no-color
+          terraform -chdir=infra/native-execution plan -input=false -no-color \
+            -target=kubernetes_deployment_v1.native_scheduler \
+            -var="native_jobs_image=$NATIVE_JOBS_IMAGE" \
+            -var='native_jobs_document_backend=postgres' \
+            -var='native_jobs_document_store_enabled=false' \
+            -out=/tmp/awfl-pg-native.tfplan
+          terraform -chdir=infra/native-execution show -json /tmp/awfl-pg-native.tfplan > /tmp/awfl-pg-native-plan.json
+          jq -e '
+            [.resource_changes[] | select(.change.actions != ["no-op"])] as $changes |
+            (($changes | length) == 1) and
+            ($changes[0].address == "kubernetes_deployment_v1.native_scheduler") and
+            ($changes[0].change.actions == ["update"]) and
+            (([$changes[0].change.after.spec[0].template[0].spec[0].container[0].env[] |
+              select(.name == "AWFL_DOCUMENT_STORAGE_BACKEND") | .value][0]) == "postgres") and
+            (([$changes[0].change.after.spec[0].template[0].spec[0].container[0].env[] |
+              select(.name == "AWFL_NATIVE_DOCUMENT_STORE_ENABLED") | .value][0]) == "0")
+          ' /tmp/awfl-pg-native-plan.json || {
+            echo "Refusing to apply unexpected infrastructure changes"
+            jq -r '.resource_changes[] | select(.change.actions != ["no-op"]) |
+              [.address, (.change.actions | join(","))] | @tsv' /tmp/awfl-pg-native-plan.json
+            exit 1
+          }
+
+      - name: Apply only the approved existing GKE scheduler update
+        shell: bash
+        run: |
+          set -euo pipefail
+          terraform -chdir=infra/native-execution apply -input=false -no-color /tmp/awfl-pg-native.tfplan
+          kubectl -n awfl rollout status deployment/native-jobs --timeout=240s
+          kubectl -n awfl get deployment native-jobs -o json | jq -e '
+            .status.readyReplicas == 1 and
+            (.spec.template.spec.containers[0].env |
+              any(.name == "AWFL_DOCUMENT_STORAGE_BACKEND" and .value == "postgres")) and
+            (.spec.template.spec.containers[0].env |
+              any(.name == "AWFL_NATIVE_DOCUMENT_STORE_ENABLED" and .value == "0"))
+          '
+          echo "Native GKE worker now uses PostgreSQL for documents, legacy Firestore for native execution state."
