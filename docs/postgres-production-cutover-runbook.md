@@ -101,3 +101,23 @@ PG-owned post-cutover documents from legacy-source verification. The preferred
 path remains a quiescent final sync before switching; the fenced mode is
 additional recovery protection, not permission to split one native root
 between providers. Old Firestore writes are not deleted by this tool.
+
+## Required SQL grants after migration and schema setup
+
+The Cloud SQL runtime user can authenticate via IAM, but IAM alone does not
+grant SQL table read/write access. On November 17, the first authenticated
+Cloud Run canary failed with a SQL permission error on awfl_documents.
+A scoped SQL grant was applied and all SELECT, INSERT, UPDATE, DELETE privileges
+were verified on the three AWFL tables.
+
+To apply and verify the idempotent grant at schema setup and after future
+SQL table migrations, run as the existing awfl-consumer SQL migration owner:
+
+    export AWFL_MIGRATION_PG_DSN='postgresql://<owner>@127.0.0.1:5452/awfl_prod'
+    export AWFL_POSTGRES_IAM_USER='323709301334-compute@developer'
+    python3 scripts/migrations/grant_postgres_runtime.py
+
+The script checks expected database, owner and table ownership, and grants
+only the existing AWFL data/stream tables plus default table privileges for
+future tables created by the same migration owner. Keep Auth and the MCP
+control-plane persistence in Firestore.
