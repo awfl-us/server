@@ -12,6 +12,10 @@ CREATE TABLE IF NOT EXISTS awfl_documents (
 );
 CREATE INDEX IF NOT EXISTS awfl_documents_collection ON awfl_documents(collection_path, document_id);
 CREATE INDEX IF NOT EXISTS awfl_documents_group ON awfl_documents(collection_id, path);
+-- Required for prefix lookups (listCollections) with non-C database collations.
+-- The ordinary btree index cannot optimize parameterized LIKE under en_US.
+CREATE INDEX IF NOT EXISTS awfl_documents_collection_path_pattern
+  ON awfl_documents (collection_path text_pattern_ops, collection_id);
 -- Durable ordering applies only to actual event streams, never document writes.
 -- Concurrent streams do not contend for a global cursor row.
 CREATE TABLE IF NOT EXISTS awfl_storage_stream_cursors (

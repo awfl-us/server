@@ -214,3 +214,33 @@ test('PostgreSQL: legacy API compatibility facade reads, filters, updates and pa
       await storage.close();
     }
   });
+
+test('PostgreSQL: indexed subcollection lookup excludes adjacent and wildcard parent paths',
+  {skip:!enabled,timeout:30_000},async()=>{
+    const {storage,collection}=await setup();
+    const parents=[
+      collection+'/prefix',
+      collection+'/prefix0',
+      collection+'/prefix%_',
+      collection+'/prefix-other',
+    ];
+    const paths=[
+      parents[0]+'/children/one',
+      parents[0]+'/extra/two',
+      parents[1]+'/other/three',
+      parents[2]+'/literal/four',
+      parents[3]+'/not-matching/five',
+    ];
+    try{
+      const index=await storage.pool.query("SELECT indexdef FROM pg_indexes WHERE schemaname='public' AND indexname='awfl_documents_collection_path_pattern'");
+      assert.match(index.rows[0]?.indexdef || '',/text_pattern_ops/);
+      for(const path of paths) await storage.create(path,{ok:true});
+      assert.deepEqual(await storage.listCollections(parents[0]),['children','extra']);
+      assert.deepEqual(await storage.listCollections(parents[1]),['other']);
+      assert.deepEqual(await storage.listCollections(parents[2]),['literal']);
+      assert.deepEqual(await storage.listCollections(parents[3]),['not-matching']);
+    } finally {
+      for(const path of paths) await storage.delete(path);
+      await storage.close();
+    }
+  });

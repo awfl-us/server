@@ -22,7 +22,7 @@ export async function createNativeMemoryStore({
   }
   if (backend==='postgres' && !pool) {
     const {default:pg}=await import('pg');
-    const max=Number(env.AWFL_POSTGRES_POOL_SIZE || 2);
+    const max=Number(env.AWFL_POSTGRES_POOL_SIZE || 3);
     if (!Number.isSafeInteger(max) || max<1 || max>5) {
       throw new TypeError('AWFL_POSTGRES_POOL_SIZE must be 1..5');
     }
