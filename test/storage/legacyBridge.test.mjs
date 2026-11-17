@@ -54,3 +54,15 @@ test('compatibility transactions update legacy OAuth documents atomically',async
   assert.equal((await ref.get()).data().status,'done');
   assert.equal((await db.collection('mcpOAuthCodes').doc('one').get()).exists,true);
 });
+
+
+test('unbounded legacy query paginates beyond 1000 instead of silently truncating', async()=>{
+  const db=new StorageCompatFirestore(documentStorage());
+  const col=db.collection('users/u/projects');
+  for(let i=0;i<1205;i++){
+    await col.doc('p'+String(i).padStart(5,'0')).set({created:i});
+  }
+  const result=await col.get();
+  assert.equal(result.docs.length,1205);
+  assert.equal(result.docs.at(-1).id,'p01204');
+});

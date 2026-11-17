@@ -63,8 +63,12 @@ class CompatQuery {
       orderBy:this.order||{field:'__name__',direction:'asc'}};
   }
   async get() {
-    const need=this.skip+(this.take??1000);
-    if(need>11000) throw new RangeError('query exceeds compatibility limit');
+    // Unbounded legacy .get() must not silently return only the first 1000.
+    // Scan up to a declared safety cap, then fail closed on overflow.
+    const maxDocuments=50000;
+    const need=this.take===null ? maxDocuments+1 : this.skip+this.take;
+    if(this.take!==null && need>maxDocuments)
+      throw new RangeError('query exceeds compatibility limit');
     const docs=[];
     let startAfter;
     while(docs.length<need) {
@@ -73,6 +77,7 @@ class CompatQuery {
         ...this.spec(),limit:count,...(startAfter&&{startAfter}),
       });
       docs.push(...page);
+      if(docs.length>maxDocuments) throw new RangeError('unbounded query exceeds compatibility limit');
       if(page.length<count) break;
       startAfter=page.at(-1).path;
     }
