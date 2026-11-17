@@ -1,5 +1,6 @@
 import { OpenAI } from 'openai';
 import { stripNullsDeep } from './utils.js';
+import { toOpenAiMessages } from './openaiMessages.js';
 
 // OpenAI adapter wrapping chat.completions
 // Input: { apiKey, model, messages, temperature, max_tokens, response_format, tools, tool_choice }
@@ -13,7 +14,7 @@ export function buildChatPayload(params) {
   const hasFunctionTools = Array.isArray(tools) && tools.some(t => t?.type === 'function');
   return stripNullsDeep({
     model,
-    messages,
+    messages: toOpenAiMessages(messages),
     temperature: isSol ? undefined : temperature,
     max_completion_tokens: typeof max_tokens === 'number' ? max_tokens : undefined,
     response_format,
