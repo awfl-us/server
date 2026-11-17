@@ -1,0 +1,64 @@
+name: Restore AWFL normal Cloud Run startup
+on:
+  push:
+    branches: [ops/mcp-maintenance-diagnose-261117]
+    paths: [.github/workflows/restore-awfl-startup.yml]
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Load deploy credentials
+        run: |
+          set -euo pipefail
+          echo "GCP_WIF_PROVIDER=$(jq -r .GCP_WIF_PROVIDER .github/actions-variables.json)" >> "$GITHUB_ENV"
+          echo "GCP_DEPLOY_SA=$(jq -r .GCP_DEPLOY_SA .github/actions-variables.json)" >> "$GITHUB_ENV"
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_DEPLOY_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: awfl-us
+      - name: Immediately route both services to known-good pre-maintenance revisions
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run services update-traffic api --project=awfl-us --region=us-central1 --to-revisions=api-00198-7gf=100 --quiet
+          gcloud run services update-traffic jobs --project=awfl-us --region=us-central1 --to-revisions=jobs-00193-vmv=100 --quiet
+          for path in /mcp /mcp/agents; do
+            code=$(curl --silent --show-error --max-time 25 -X POST -o /tmp/awfl-body -w '%{http_code}' "https://api.awfl.us$path")
+            echo "Pinned known-good $path status: $code"
+            test "$code" = 401
+          done
+      - name: Remove inherited maintenance command and args from API and Jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          for service in api jobs; do
+            gcloud run services update "$service" --project=awfl-us --region=us-central1 --command="" --args="" --update-env-vars="AWFL_DOCUMENT_STORAGE_BACKEND=firestore" --quiet
+            gcloud run services update-traffic "$service" --project=awfl-us --region=us-central1 --to-latest --quiet
+            echo "$service new revision:"
+            gcloud run services describe "$service" --project=awfl-us --region=us-central1 --format=json | jq '{
+              latest: .status.latestReadyRevisionName,
+              traffic: .status.traffic,
+              command: .spec.template.spec.containers[0].command,
+              args: .spec.template.spec.containers[0].args,
+              backend: [.spec.template.spec.containers[0].env[]? | select(.name=="AWFL_DOCUMENT_STORAGE_BACKEND") | .value]
+            }'
+          done
+      - name: Confirm MCP operational
+        run: |
+          set -euo pipefail
+          for path in /mcp /mcp/agents; do
+            code=$(curl --silent --show-error --max-time 25 -X POST -o /tmp/awfl-body -w '%{http_code}' "https://api.awfl.us$path")
+            echo "$path status: $code"
+            test "$code" = 401
+          done
+          code=$(curl --silent --show-error --max-time 25 -o /dev/null -w '%{http_code}' https://api.awfl.us/health)
+          echo "/health status: $code"
+          test "$code" = 200
