@@ -51,14 +51,23 @@ export function createConsumerCredentialsRouter({
     const expected = /^[a-f0-9]{64}$/.test(grant?.hash || '')
       ? Buffer.from(grant.hash, 'hex') : Buffer.alloc(32);
     if (!snap?.exists || grant?.consumerId !== consumerId ||
-        !timingSafeEqual(actual, expected)) return { status: 403 };
+        !timingSafeEqual(actual, expected)) {
+      if (bootstrap) console.warn('[consumer-credentials] Firebase bootstrap denied', {
+        reason: !snap?.exists ? 'project_missing' :
+          grant?.consumerId !== consumerId ? 'consumer_grant_replaced' : 'invalid_capability',
+      });
+      return { status: 403 };
+    }
 
     if (!bootstrap) {
       if (!lock || lock.consumerId !== consumerId ||
           lock.expiresAt <= Date.now()) return { status: 403 };
     } else {
       if (lock && lock.consumerId !== consumerId &&
-          lock.expiresAt > Date.now()) return { status: 403 };
+          lock.expiresAt > Date.now()) {
+        console.warn('[consumer-credentials] Firebase bootstrap denied', { reason: 'different_active_lock' });
+        return { status: 403 };
+      }
 
       // Check actual Job existence, not the presence of an old credential
       // grant. An intentionally stopped/deleted Job may not bootstrap.
@@ -67,6 +76,10 @@ export function createConsumerCredentialsRouter({
         namespace: process.env.K8S_NAMESPACE || 'awfl', jobName,
       });
       if (job?.state !== 'active' && job?.state !== 'pending') {
+        console.warn('[consumer-credentials] Firebase bootstrap denied', {
+          reason: 'job_not_running', jobState: job?.state || 'unknown',
+          jobFailedPods: job?.failed || 0, jobActivePods: job?.active || 0,
+        });
         return { status: 403 };
       }
     }
