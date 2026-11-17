@@ -173,3 +173,31 @@ test('experimental document-store Jobs executes memory task on injected store on
     else process.env.AWFL_NATIVE_DOCUMENT_STORE_ENABLED = prev;
   }
 });
+
+
+test('terminal failure logs the persisted error and profiles failed rather than completed', async () => {
+  const old = process.env.AWFL_NATIVE_PROFILE_ENABLED;
+  process.env.AWFL_NATIVE_PROFILE_ENABLED = '1';
+  const errors = [], infos = [];
+  const oldError = console.error, oldInfo = console.info;
+  console.error = value => errors.push(value);
+  console.info = value => infos.push(value);
+  try {
+    const id = 'native_' + 'f'.repeat(32);
+    const app = appFor({ store: {}, releases: {}, handlers: {},
+      execute: async () => ({ status: 'failed', error: { code: null, message: 'missing field or element: arg1' } }),
+    });
+    const response = await request(app).post('/native/execute').send({ executionId: id });
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body, { state: 'FAILED' });
+    assert.deepEqual(JSON.parse(errors[0]), { event: 'awfl_native_execution_failed',
+      executionId: id, projectId: 'project-a', errorCode: null,
+      errorMessage: 'missing field or element: arg1' });
+    const timing = infos.map(line => JSON.parse(line)).find(line => line.event === 'awfl_native_job_timing');
+    assert.equal(timing.outcome, 'failed');
+  } finally {
+    console.error = oldError; console.info = oldInfo;
+    if (old === undefined) delete process.env.AWFL_NATIVE_PROFILE_ENABLED;
+    else process.env.AWFL_NATIVE_PROFILE_ENABLED = old;
+  }
+});
