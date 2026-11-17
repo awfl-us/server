@@ -1,5 +1,5 @@
 import express from 'express';
-import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import { getDocumentStorage } from '../../storage/service.js';
 import { projectScopedCollectionPath } from '../userAuth.js';
 
 const router = express.Router();
@@ -14,7 +14,7 @@ router.get('/', async (req, res) => {
     const userId = req.userId;
     if (!userId) return res.status(401).json({ error: 'Unauthorized: missing req.userId' });
 
-    const db = getFirestore();
+    const db = await getDocumentStorage();
 
     const workspaceId = String(req.query.workspaceId || req.query.workspace_id || '').trim();
     let projectId = String(req.query.projectId || req.query.project_id || '').trim();
@@ -22,41 +22,21 @@ router.get('/', async (req, res) => {
 
     if (workspaceId) {
       const wsPath = projectScopedCollectionPath(userId, req.projectId, `workspaces/${workspaceId}`);
-      const wsSnap = await db.doc(wsPath).get();
-      if (!wsSnap.exists) return res.status(404).json({ error: 'workspace not found' });
-      const ws = wsSnap.data() || {};
+      const wsSnap = await db.get(wsPath);
+      if (!wsSnap) return res.status(404).json({ error: 'workspace not found' });
+      const ws = wsSnap.data || {};
       if (!projectId) projectId = String(ws.projectId || '').trim();
       if (!sessionId && typeof ws.sessionId === 'string') sessionId = String(ws.sessionId || '').trim();
     }
 
     if (!projectId) return res.status(400).json({ error: 'projectId or workspaceId required' });
 
-    const colPath = projectScopedCollectionPath(userId, req.projectId, `cursors`);
-    const projRef = db.doc(`${colPath}/project`);
-    const reads = [projRef.get()];
-    let sessionRef = null;
-    if (sessionId) {
-      sessionRef = db.doc(`${colPath}/session:${sessionId}`);
-      reads.push(sessionRef.get());
-    }
+    const colPath = projectScopedCollectionPath(userId, req.projectId, 'cursors');
+    const project = await db.get(`${colPath}/project`);
+    const session = sessionId ? await db.get(`${colPath}/session:${sessionId}`) : null;
 
-    const snaps = await Promise.all(reads);
-    const projSnap = snaps[0];
-    const sessSnap = sessionId ? snaps[1] : null;
-
-    const normalizeCursor = (doc) => {
-      if (!doc) return null;
-      const c = { ...doc };
-      if (c.updatedAt && typeof c.updatedAt.toMillis === 'function') {
-        c.updatedAt = new Date(c.updatedAt.toMillis()).toISOString();
-      }
-      return c;
-    };
-
-    const project = projSnap.exists ? normalizeCursor(projSnap.data()) : null;
-    const session = sessSnap && sessSnap.exists ? normalizeCursor(sessSnap.data()) : null;
-
-    res.json({ projectId, sessionId: sessionId || null, project, session });
+    res.json({ projectId, sessionId: sessionId || null,
+      project: project?.data || null, session: session?.data || null });
   } catch (err) {
     console.error('[events GET /cursors] error', err);
     res.status(400).json({ error: String(err?.message || err) });
@@ -70,7 +50,7 @@ router.post('/', async (req, res) => {
     const userId = req.userId;
     if (!userId) return res.status(401).json({ error: 'Unauthorized: missing req.userId' });
 
-    const db = getFirestore();
+    const db = await getDocumentStorage();
 
     const body = req.body || {};
     const workspaceId = String(body.workspaceId || body.workspace_id || '').trim();
@@ -79,9 +59,9 @@ router.post('/', async (req, res) => {
 
     if (workspaceId) {
       const wsPath = projectScopedCollectionPath(userId, req.projectId, `workspaces/${workspaceId}`);
-      const wsSnap = await db.doc(wsPath).get();
-      if (!wsSnap.exists) return res.status(404).json({ error: 'workspace not found' });
-      const ws = wsSnap.data() || {};
+      const wsSnap = await db.get(wsPath);
+      if (!wsSnap) return res.status(404).json({ error: 'workspace not found' });
+      const ws = wsSnap.data || {};
       if (!projectId) projectId = String(ws.projectId || '').trim();
       if (!sessionId && typeof ws.sessionId === 'string') sessionId = String(ws.sessionId || '').trim();
     }
@@ -104,19 +84,14 @@ router.post('/', async (req, res) => {
 
     if (targets.includes('session') && !sessionId) return res.status(400).json({ error: 'sessionId required for session-target cursor' });
 
-    const colPath = projectScopedCollectionPath(userId, req.projectId, `cursors`);
-
-    const toWrite = [];
-    if (targets.includes('project')) {
-      const ref = db.doc(`${colPath}/project`);
-      toWrite.push(ref.set({ eventId, timestamp, updatedAt: FieldValue.serverTimestamp() }, { merge: true }));
-    }
-    if (targets.includes('session')) {
-      const ref = db.doc(`${colPath}/session:${sessionId}`);
-      toWrite.push(ref.set({ eventId, timestamp, sessionId, updatedAt: FieldValue.serverTimestamp() }, { merge: true }));
-    }
-
-    await Promise.all(toWrite);
+    const colPath = projectScopedCollectionPath(userId, req.projectId, 'cursors');
+    const updatedAt = new Date().toISOString();
+    const writes=[];
+    if(targets.includes('project'))writes.push({op:'put',path:`${colPath}/project`,
+      data:{eventId,timestamp,updatedAt},options:{merge:true}});
+    if(targets.includes('session'))writes.push({op:'put',path:`${colPath}/session:${sessionId}`,
+      data:{eventId,timestamp,sessionId,updatedAt},options:{merge:true}});
+    await db.batch(writes);
 
     res.status(200).json({ ok: true, projectId, sessionId: sessionId || null, updated: targets });
   } catch (err) {

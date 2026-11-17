@@ -33,5 +33,10 @@ app.use((req, res) => {
 const PORT = process.env.PORT || 8080
 app.listen(PORT, () => {
   console.log(`Jobs service listening on port ${PORT}`)
-  startNativeDetachedRecovery()
+  Promise.resolve().then(() => startNativeDetachedRecovery()).catch(error => {
+    console.error('Native detached recovery failed to initialize:', error?.message || error)
+    // This process must not claim to be a healthy persistent scheduler when
+    // it cannot access the selected execution-state backend.
+    process.exit(1)
+  })
 })

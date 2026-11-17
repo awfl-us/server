@@ -2,16 +2,8 @@
 // Centralizes Firestore access, path builders, Kala promotion, and Yoj message building
 // so routers can remain thin and mirror the modular Scala structure.
 
-import { initializeApp, getApps } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
+import { getDocumentStorage, readDocuments } from '../../../storage/service.js';
 import { projectScopedCollectionPath } from '../../userAuth.js';
-
-// Ensure Firebase Admin is initialized once
-if (!getApps().length) {
-  initializeApp();
-}
-
-export const db = getFirestore();
 
 // -----------------------------------
 // Collection path helpers
@@ -22,52 +14,36 @@ export const logWeeklyCollection = (name) => `log.weekly.${name}`;
 export const logTermsCollection = (name) => `log.terms.${name}`;
 
 // -----------------------------------
-// Generic Firestore readers
+// Generic document Storage readers
 // -----------------------------------
-export async function listBetween(userId, projectId, collectionPath, begin, end, opts = {}) {
-  let ref = db.collection(projectScopedCollectionPath(userId, projectId, collectionPath));
-  if (opts.user_id !== undefined && opts.user_id !== null && `${opts.user_id}`.length > 0) {
-    ref = ref.where('user_id', '==', opts.user_id);
-  }
-  const snapshot = await ref
-    .where('create_time', '>', begin)
-    .where('create_time', '<=', end)
-    .orderBy('create_time', 'asc')
-    .get();
-
-  const documents = await Promise.all(
-    snapshot.docs.map(async (doc) => {
-      const subcollections = await doc.ref.listCollections();
-      return {
-        id: doc.id,
-        data: doc.data() ?? {},
-        subcollections: subcollections.map((s) => s.id),
-      };
-    })
-  );
-  return { documents };
+export async function listBetweenFlat(userId, projectId, collectionPath, begin, end, opts={}) {
+  const store=await getDocumentStorage();
+  const where=[
+    {field:'create_time',op:'>',value:begin},
+    {field:'create_time',op:'<=',value:end},
+  ];
+  if(opts.user_id!=null&&String(opts.user_id))
+    where.push({field:'user_id',op:'==',value:opts.user_id});
+  const docs=await readDocuments(store,{
+    collection:projectScopedCollectionPath(userId,projectId,collectionPath),where,
+  });
+  docs.sort((a,b)=>a.data.create_time-b.data.create_time||a.path.localeCompare(b.path));
+  return docs.map(doc=>({id:doc.id,data:doc.data}));
 }
 
-export async function listBetweenFlat(userId, projectId, collectionPath, begin, end, opts = {}) {
-  // Variant that returns a flat array of { id, data }
-  let ref = db.collection(projectScopedCollectionPath(userId, projectId, collectionPath));
-  if (opts.user_id !== undefined && opts.user_id !== null && `${opts.user_id}`.length > 0) {
-    ref = ref.where('user_id', '==', opts.user_id);
-  }
-  const snapshot = await ref
-    .where('create_time', '>', begin)
-    .where('create_time', '<=', end)
-    .orderBy('create_time', 'asc')
-    .get();
-
-  return snapshot.docs.map((doc) => ({ id: doc.id, data: doc.data() ?? {} }));
+export async function listBetween(userId, projectId, collectionPath, begin, end, opts={}) {
+  const documents=await listBetweenFlat(userId,projectId,collectionPath,begin,end,opts);
+  const store=await getDocumentStorage();
+  const scoped=projectScopedCollectionPath(userId,projectId,collectionPath);
+  return {documents:await Promise.all(documents.map(async d=>({
+    ...d,subcollections:await store.listCollections(`${scoped}/${d.id}`),
+  })))};
 }
 
 export async function readDoc(userId, projectId, collectionPath, id) {
-  const docRef = db.collection(projectScopedCollectionPath(userId, projectId, collectionPath)).doc(id);
-  const docSnap = await docRef.get();
-  if (!docSnap.exists) return null;
-  return docSnap.data();
+  const scoped=projectScopedCollectionPath(userId,projectId,collectionPath);
+  const doc=await (await getDocumentStorage()).get(`${scoped}/${id}`);
+  return doc?.data??null;
 }
 
 // -----------------------------------

@@ -6,9 +6,33 @@ import { runNativeArtifact, buildNativeTrustedGlobals } from './runner.js';
 import { createNativeLocalRunner } from './localWorkflows.js';
 import { createNativeProgressWriter } from './progressWriter.js';
 import { createMemoryDetachedLauncher } from './memoryDetached.js';
+import { createNativeAsyncScheduler } from './asyncScheduler.js';
 
 const EXECUTION_LEASE_MS = 30 * 60 * 1000; // Cloud Tasks dispatch deadline.
 const MAX_TRANSITIONS = 10_000;
+
+// Recover provider-neutral detached roots in the persistent GKE Jobs worker.
+// Leases fence concurrent claims. On an expired lease memory-mode workflows
+// restart from their original input (explicit cache steps handle idempotency).
+const memorySchedulers = new WeakMap();
+export function nativeMemoryAsyncSchedulerFor({ store, releases, handlers }) {
+  if (!store?.get || !store?.listPendingAsync) {
+    throw new Error('memory scheduler requires durable native document Storage');
+  }
+  let scheduler = memorySchedulers.get(store);
+  if (!scheduler) {
+    scheduler = createNativeAsyncScheduler({
+      store,
+      execute: ({ executionId, userId, projectId }) => runNativeMemoryWorkflow({
+        store, releases, handlers, executionId, userId, projectId,
+        asyncScheduler: scheduler,
+      }),
+    });
+    memorySchedulers.set(store, scheduler);
+    scheduler.start();
+  }
+  return scheduler;
+}
 
 export async function runNativeMemoryWorkflow({
   store, releases, handlers, executionId, userId, projectId,
@@ -67,7 +91,8 @@ export async function runNativeMemoryWorkflow({
     runDetached: request => {
       detachedLauncher ||= createMemoryDetachedLauncher({
         store, releases, handlers, executionId, userId, projectId,
-        asyncScheduler,
+        asyncScheduler: asyncScheduler ||
+          nativeMemoryAsyncSchedulerFor({ store, releases, handlers }),
       });
       return detachedLauncher(request);
     },

@@ -1,7 +1,4 @@
-import { getFirestore } from 'firebase-admin/firestore';
 import { userScopedCollectionPath } from '../userAuth.js';
-
-const db = getFirestore();
 
 export function has(v) { return v !== undefined && v !== null; }
 
@@ -16,17 +13,9 @@ export function asBool(v, d = false) {
   return d;
 }
 
-export function projectsCol(userId) {
-  return db.collection(userScopedCollectionPath(userId, 'projects'));
-}
-
-export function projectDoc(userId, id) {
-  return db.doc(userScopedCollectionPath(userId, `projects/${id}`));
-}
-
-export function integrationsCol(userId, projectId) {
-  return projectDoc(userId, projectId).collection('integrations');
-}
+export const projectsPath = userId => userScopedCollectionPath(userId, 'projects');
+export const projectPath = (userId,id) => userScopedCollectionPath(userId, `projects/${id}`);
+export const integrationsPath = (userId,projectId) => `${projectPath(userId,projectId)}/integrations`;
 
 export function normalizeGitRemote(input) {
   if (!input) return '';

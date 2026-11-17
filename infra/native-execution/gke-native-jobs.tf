@@ -12,6 +12,25 @@ variable "native_jobs_image" {
   }
 }
 
+# Keep native execution on its original Firestore journal while existing
+# legacy roots drain. Document-provider cutover is an explicit second flag.
+# Terraform owns both values; do not patch the GKE Deployment by hand.
+variable "native_jobs_document_backend" {
+  type        = string
+  description = "Shared Jobs document provider: firestore or postgres"
+  default     = "firestore"
+  validation {
+    condition     = contains(["firestore", "postgres"], var.native_jobs_document_backend)
+    error_message = "native_jobs_document_backend must be firestore or postgres"
+  }
+}
+
+variable "native_jobs_document_store_enabled" {
+  type        = bool
+  description = "Enable provider-neutral native-memory execution after legacy roots drain"
+  default     = false
+}
+
 data "google_client_config" "native_scheduler" {}
 
 data "google_container_cluster" "native_scheduler" {
@@ -105,7 +124,7 @@ resource "kubernetes_deployment_v1" "native_scheduler" {
           security_context {
             allow_privilege_escalation = false
             privileged                 = false
-            read_only_root_filesystem = false
+            read_only_root_filesystem  = false
             run_as_non_root            = false
             capabilities {
               drop = ["NET_RAW"]
@@ -147,6 +166,33 @@ resource "kubernetes_deployment_v1" "native_scheduler" {
           env {
             name  = "AWFL_NATIVE_PERSISTENT_WORKER"
             value = "1"
+          }
+
+          # Keep this in sync with Cloud Run API/Jobs during the finite cutover.
+          # Backend stays Firestore until data migration/recovery tests pass.
+          env {
+            name  = "AWFL_DOCUMENT_STORAGE_BACKEND"
+            value = var.native_jobs_document_backend
+          }
+          env {
+            name  = "AWFL_NATIVE_DOCUMENT_STORE_ENABLED"
+            value = var.native_jobs_document_store_enabled ? "1" : "0"
+          }
+          env {
+            name  = "AWFL_CLOUD_SQL_INSTANCE"
+            value = "awfl-us:us-central1:awfl-native-storage-bench"
+          }
+          env {
+            name  = "AWFL_POSTGRES_DB"
+            value = "awfl_prod"
+          }
+          env {
+            name  = "AWFL_POSTGRES_IAM_USER"
+            value = trimsuffix(local.runtime_sa, ".gserviceaccount.com")
+          }
+          env {
+            name  = "AWFL_POSTGRES_POOL_SIZE"
+            value = "2"
           }
           # Same in-process Firestore tracing as Cloud Run Jobs.
           env {

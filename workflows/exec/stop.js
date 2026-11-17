@@ -1,3 +1,4 @@
+import { providerDocumentDb } from '../../storage/legacyBridge.js';
 import express from 'express';
 import { getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { ExecutionsClient } from '@google-cloud/workflows';
@@ -18,7 +19,7 @@ export async function cancelExecutionChain({ userId, projectId, execId, workflow
   }
     const includeDesc = Boolean(includeDescendants);
 
-    const db = getFirestore();
+    const db = providerDocumentDb(getFirestore);
     if (isNativeExecutionId(execId)) {
       try {
         return await cancelNativeExecution({ db, execId, userId, projectId });
@@ -214,7 +215,7 @@ export async function cancelExecutionChain({ userId, projectId, execId, workflow
       if (cancelled) {
         try {
           await db.collection(statusesCollection).doc(id).set(
-            { status: 'Cancelled', updated: Timestamp.now() },
+            { status: 'Cancelled', updated: process.env.AWFL_DOCUMENT_STORAGE_BACKEND === 'postgres' ? new Date().toISOString() : Timestamp.now() },
             { merge: true }
           );
         } catch (e) {

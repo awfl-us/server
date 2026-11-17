@@ -1,3 +1,4 @@
+import { providerDocumentDb } from '../../storage/legacyBridge.js';
 import express from 'express';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getUserIdFromReq, projectScopedCollectionPath } from '../utils.js';
@@ -23,7 +24,7 @@ router.post('/tree', async (req, res) => {
       return res.status(400).json({ error: 'Missing required field: sessionId' });
     }
 
-    const db = getFirestore();
+    const db = providerDocumentDb(getFirestore);
 
     const regsCollection = projectScopedCollectionPath(userId, req.projectId, COLLECTIONS.regs);
     const linksCollection = projectScopedCollectionPath(userId, req.projectId, COLLECTIONS.links);

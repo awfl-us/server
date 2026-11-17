@@ -1,3 +1,4 @@
+import { providerDocumentDb } from '../../storage/legacyBridge.js';
 import { latestSessionExecutions } from './statusService.js';
 import express from 'express';
 import { getFirestore } from 'firebase-admin/firestore';
@@ -17,7 +18,7 @@ router.get('/status/:execId', async (req, res) => {
     const { execId } = req.params || {};
     if (!execId) return res.status(400).json({ error: 'Missing execId' });
 
-    const db = getFirestore();
+    const db = providerDocumentDb(getFirestore);
     if (isNativeExecutionId(execId)) {
       try {
         const status = await nativeExecutionStatus({
@@ -63,7 +64,7 @@ router.get('/status/latest/:sessionId', async (req, res) => {
     if (limit > 50) limit = 50; // defensive cap on returned items
 
     const { items, hasRegistrations } = await latestSessionExecutions({
-      db: getFirestore(), userId, projectId: req.projectId,
+      db: providerDocumentDb(getFirestore), userId, projectId: req.projectId,
       sessionId, limit, includeMetadata: true,
     });
     if (!hasRegistrations) return res.status(404).json({ error: 'No executions found for session' });

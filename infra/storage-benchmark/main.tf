@@ -21,10 +21,19 @@ variable "client_service_account" {
   type    = string
   default = "awfl-consumer@awfl-us.iam.gserviceaccount.com"
 }
+variable "runtime_service_account" {
+  type        = string
+  description = "Cloud Run API/Jobs and native-jobs GKE Workload Identity runtime"
+  default     = "323709301334-compute@developer.gserviceaccount.com"
+}
 variable "benchmark_user_email" {
   type        = string
-  description = "Optional Google account permitted to connect via Cloud SQL IAM authentication"
-  default     = ""
+  description = "Existing human IAM database user (required to preserve prior Terraform state)"
+  nullable    = false
+  validation {
+    condition     = can(regex("^[^@]+@[^@]+$", var.benchmark_user_email))
+    error_message = "Supply the existing Cloud SQL IAM_USER email via TF_VAR_benchmark_user_email."
+  }
 }
 
 provider "google" {
@@ -71,7 +80,7 @@ resource "google_sql_database_instance" "benchmark" {
   name                = "awfl-native-storage-bench"
   region              = var.region
   database_version    = "POSTGRES_15"
-  deletion_protection = false
+  deletion_protection = true
   depends_on          = [google_project_service.sqladmin]
   settings {
     edition           = "ENTERPRISE"
@@ -80,8 +89,16 @@ resource "google_sql_database_instance" "benchmark" {
     activation_policy = "ALWAYS"
     disk_size         = 10
     disk_type         = "PD_SSD"
-    disk_autoresize   = false
-    backup_configuration { enabled = false }
+    disk_autoresize   = true
+    backup_configuration {
+      enabled                        = true
+      start_time                     = "06:00"
+      point_in_time_recovery_enabled = true
+      backup_retention_settings {
+        retained_backups = 7
+        retention_unit   = "COUNT"
+      }
+    }
     database_flags {
       name  = "cloudsql.iam_authentication"
       value = "on"
@@ -90,13 +107,42 @@ resource "google_sql_database_instance" "benchmark" {
       ipv4_enabled = true
       # No authorized networks: connectivity exclusively via Cloud SQL proxy.
     }
-    user_labels = { purpose = "storage-benchmark", app = "awfl" }
+    user_labels = { purpose = "storage-benchmark-and-prod", app = "awfl" }
   }
 }
 resource "google_sql_database" "benchmark" {
   project  = var.project_id
   instance = google_sql_database_instance.benchmark.name
   name     = "awfl_bench"
+}
+
+# Separate production database on the existing Terraform-owned instance.
+# No second database service, no state import or destroy/recreate.
+resource "google_sql_database" "production" {
+  project  = var.project_id
+  instance = google_sql_database_instance.benchmark.name
+  name     = "awfl_prod"
+}
+
+# API/Jobs and persistent native GKE Jobs share the existing runtime service
+# account via Workload Identity. IAM DB auth never uses plaintext passwords.
+resource "google_sql_user" "runtime" {
+  project        = var.project_id
+  instance       = google_sql_database_instance.benchmark.name
+  name           = trimsuffix(var.runtime_service_account, ".gserviceaccount.com")
+  type           = "CLOUD_IAM_SERVICE_ACCOUNT"
+  database_roles = ["cloudsqlsuperuser"]
+}
+
+resource "google_project_iam_member" "runtime_cloudsql_connect" {
+  project = var.project_id
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${var.runtime_service_account}"
+}
+resource "google_project_iam_member" "runtime_cloudsql_login" {
+  project = var.project_id
+  role    = "roles/cloudsql.instanceUser"
+  member  = "serviceAccount:${var.runtime_service_account}"
 }
 resource "google_sql_user" "benchmark" {
   project        = var.project_id
@@ -134,6 +180,12 @@ resource "google_project_iam_member" "bench_cloudsql_login" {
   project = var.project_id
   role    = "roles/cloudsql.instanceUser"
   member  = "serviceAccount:${var.client_service_account}"
+}
+output "production_database_name" {
+  value = google_sql_database.production.name
+}
+output "production_database_user" {
+  value = google_sql_user.runtime.name
 }
 output "postgres_instance_connection_name" {
   value = google_sql_database_instance.benchmark.connection_name

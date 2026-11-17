@@ -1,3 +1,4 @@
+import { providerDocumentDb } from '../storage/legacyBridge.js';
 import express from 'express';
 import { getFirestore } from 'firebase-admin/firestore';
 import { projectScopedCollectionPath } from './userAuth.js';
@@ -6,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const router = express.Router();
-const db = getFirestore();
+const db = providerDocumentDb(getFirestore);
 
 // Helpers
 function has(v) { return v !== undefined && v !== null; }

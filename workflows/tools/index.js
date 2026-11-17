@@ -1,14 +1,8 @@
 import express from 'express';
-import { getFirestore } from 'firebase-admin/firestore';
-import { initializeApp, getApps } from 'firebase-admin/app';
+import { getDocumentStorage, readDocuments } from '../../storage/service.js';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-
-// Ensure Firebase Admin is initialized once (reuse global app if already inited)
-if (!getApps().length) {
-  try { initializeApp(); } catch (_) {}
-}
 
 const router = express.Router();
 router.use(express.json());
@@ -49,24 +43,18 @@ function normalizeToolDef(raw) {
   return { name, description, workflowName, defs };
 }
 
-async function listFromFirestore(userId) {
+async function listFromStorage(userId) {
   try {
-    const db = getFirestore();
-
-    const userDocs = [];
-    if (userId) {
-      const userScoped = await db.collection(`users/${userId}/tools/defs`).get();
-      userScoped.forEach(d => userDocs.push({ id: d.id, ...d.data() }));
-    }
-
-    const globalDocs = [];
-    const globalScoped = await db.collection('tools/defs/items').get().catch(() => ({ forEach: () => {} }));
-    globalScoped.forEach(d => globalDocs.push({ id: d.id, ...d.data() }));
-
-    const combined = [...userDocs, ...globalDocs];
-    return combined.map(normalizeToolDef).filter(Boolean);
-  } catch (_err) {
-    // Firestore may be unavailable in some environments; return empty so we still include files
+    const db = await getDocumentStorage();
+    const userDocs = userId
+      ? await readDocuments(db, { collection: `users/${userId}/toolDefs` })
+      : [];
+    const globalDocs = await readDocuments(db, { collection: 'tools/defs/items' }).catch(() => []);
+    return [...userDocs, ...globalDocs]
+      .map(doc => ({ id: doc.id, ...doc.data }))
+      .map(normalizeToolDef).filter(Boolean);
+  } catch (_) {
+    // Local tool definitions remain available even when document storage is offline.
     return [];
   }
 }
@@ -189,14 +177,14 @@ function toServiceItem(t) {
 }
 
 // GET /workflows/tools/list -> returns an envelope: { items: [ { type:'function', function:{ name, description, parameters }, workflowName } ] }
-// Includes both Firestore (user -> global) and local defs, with precedence user > global > files on duplicates
+// Includes provider-neutral storage (user -> global) and local defs, with precedence user > global > files on duplicates
 // Optional query param: names (comma-separated, repeated, or JSON array) to filter the returned tool names
 router.get('/list', async (req, res) => {
   try {
     const userId = req.userId || null; // provided by clientAuth middleware
 
     const [dbTools, fileTools] = await Promise.all([
-      listFromFirestore(userId),
+      listFromStorage(userId),
       listFromFiles(),
     ]);
 

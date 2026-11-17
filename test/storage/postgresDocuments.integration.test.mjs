@@ -181,3 +181,36 @@ test('PostgreSQL: concurrent session and project event cursors are independent',
     }
   }finally{await storage.close();}
 });
+
+test('PostgreSQL: legacy API compatibility facade reads, filters, updates and paginates on same DB',
+  {skip:!enabled,timeout:30_000}, async()=>{
+    const {storage,root,collection}=await setup();
+    const {StorageCompatFirestore}=await import('../../storage/legacyBridge.js');
+    const facade=new StorageCompatFirestore(storage), col=facade.collection(collection);
+    const first=col.doc('first'), second=col.doc('second'), third=col.doc('third');
+    try {
+      await first.set({created:1,status:'pending',visits:0});
+      await second.set({created:2,status:'ready',visits:0});
+      await third.set({created:3,status:'ready',visits:0});
+      const paged=await col.where('status','==','ready')
+        .orderBy('created','desc').limit(1).get();
+      assert.equal(paged.docs.length,1);
+      assert.equal(paged.docs[0].id,'third');
+      assert.equal((await col.where('status','==','ready').count().get()).data().count,2);
+      const all=await col.get();
+      assert.deepEqual(all.docs.map(d=>d.id),['first','second','third']);
+      assert.deepEqual((await first.get()).data(),{created:1,status:'pending',visits:0});
+      await facade.runTransaction(async tx=>{
+        const snap=await tx.get(first);
+        assert.equal(snap.get('status'),'pending');
+        tx.update(first,{visits:4});
+      });
+      assert.equal((await first.get()).data().visits,4);
+      assert.deepEqual((await facade.doc(root).listCollections()).map(x=>x.id),['cases']);
+    } finally {
+      await storage.delete(first.path);
+      await storage.delete(second.path);
+      await storage.delete(third.path);
+      await storage.close();
+    }
+  });

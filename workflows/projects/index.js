@@ -1,5 +1,7 @@
 import express from 'express';
-import { projectsCol, projectDoc, has, asBool, normalizeGitRemote } from './util.js';
+import { projectsPath, projectPath, has, asBool, normalizeGitRemote } from './util.js';
+import { getDocumentStorage } from '../../storage/service.js';
+import { randomUUID } from 'node:crypto';
 import { acquireConsumerLock, releaseConsumerLock, getConsumerLockStatus, heartbeatConsumer } from './lock.js';
 
 const router = express.Router();
@@ -15,12 +17,12 @@ router.post('/', async (req, res) => {
     const { remote, name } = req.body || {};
     let { live } = req.body || {};
 
-    const col = projectsCol(userId);
-    const docRef = col.doc();
+    const db = await getDocumentStorage();
+    const id = randomUUID().replaceAll('-', '');
     const now = Date.now();
 
     const data = {
-      id: docRef.id,
+      id,
       remote: remote ? normalizeGitRemote(remote) : null,
       ...(has(name) ? { name: String(name).trim() } : {}),
       live: asBool(live, false),
@@ -28,7 +30,7 @@ router.post('/', async (req, res) => {
       updated: now,
     };
 
-    await docRef.set(data, { merge: true });
+    await db.create(projectPath(userId,id),data);
     return res.status(201).json({ project: data });
   } catch (err) {
     console.error('[projects] create failed', err);
@@ -43,12 +45,10 @@ router.get('/', async (req, res) => {
     if (!userId) return res.status(401).json({ error: 'Unauthorized: missing req.userId' });
 
     const { limit = 50, order = 'desc' } = req.query || {};
-    const q = projectsCol(userId)
-      .orderBy('created', order === 'asc' ? 'asc' : 'desc')
-      .limit(Math.min(Number(limit) || 50, 200));
-
-    const snap = await q.get();
-    const projects = snap.docs.map(d => d.data());
+    const snap = await (await getDocumentStorage()).query({collection:projectsPath(userId),
+      orderBy:{field:'created',direction:order==='asc'?'asc':'desc'},
+      limit:Math.min(Math.max(Number(limit)||50,1),200)});
+    const projects = snap.map(d=>d.data);
     return res.status(200).json({ projects });
   } catch (err) {
     console.error('[projects] list failed', err);
@@ -62,10 +62,11 @@ router.get('/:id', async (req, res) => {
     const userId = req.userId;
     if (!userId) return res.status(401).json({ error: 'Unauthorized: missing req.userId' });
     const { id } = req.params;
-    const ref = projectDoc(userId, id);
-    const snap = await ref.get();
-    if (!snap.exists) return res.status(404).json({ error: 'Project not found' });
-    return res.status(200).json({ project: snap.data() });
+    const db = await getDocumentStorage();
+    const path = projectPath(userId, id);
+    const snap = await db.get(path);
+    if (!snap) return res.status(404).json({ error: 'Project not found' });
+    return res.status(200).json({ project: snap.data });
   } catch (err) {
     console.error('[projects] get failed', err);
     return res.status(500).json({ error: 'Failed to get project' });
@@ -82,18 +83,19 @@ router.patch('/:id', async (req, res) => {
     const { remote, name } = req.body || {};
     let { live } = req.body || {};
 
-    const ref = projectDoc(userId, id);
-    const snap = await ref.get();
-    if (!snap.exists) return res.status(404).json({ error: 'Project not found' });
+    const db = await getDocumentStorage();
+    const path = projectPath(userId, id);
+    const snap = await db.get(path);
+    if (!snap) return res.status(404).json({ error: 'Project not found' });
 
     const updates = { updated: Date.now() };
     if (has(remote)) updates.remote = normalizeGitRemote(String(remote));
     if (has(name)) updates.name = String(name).trim();
     if (has(live)) updates.live = asBool(live, false);
 
-    await ref.set(updates, { merge: true });
-    const after = await ref.get();
-    return res.status(200).json({ project: after.data() });
+    await db.put(path,updates,{merge:true});
+    const after = await db.get(path);
+    return res.status(200).json({ project: after.data });
   } catch (err) {
     console.error('[projects] update failed', err);
     return res.status(500).json({ error: 'Failed to update project' });
@@ -107,11 +109,12 @@ router.delete('/:id', async (req, res) => {
     if (!userId) return res.status(401).json({ error: 'Unauthorized: missing req.userId' });
     const { id } = req.params;
 
-    const ref = projectDoc(userId, id);
-    const snap = await ref.get();
-    if (!snap.exists) return res.status(404).json({ error: 'Project not found' });
+    const db = await getDocumentStorage();
+    const path = projectPath(userId, id);
+    const snap = await db.get(path);
+    if (!snap) return res.status(404).json({ error: 'Project not found' });
 
-    await ref.delete();
+    await db.delete(path);
     return res.status(200).json({ ok: true });
   } catch (err) {
     console.error('[projects] delete failed', err);

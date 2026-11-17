@@ -1,7 +1,7 @@
 import express from 'express';
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { getFirestore } from 'firebase-admin/firestore';
-import { projectDoc } from '../projects/util.js';
+import { credentialStorageDb } from '../../storage/legacyBridge.js';
+import { projectPath } from '../projects/util.js';
 import { resolveGoogleCloudAccessToken } from './service.js';
 import { resolveGithubAppCredential } from '../githubApp/service.js';
 import { mintWorkspaceToken } from '../workspace/storageTokens.js';
@@ -25,13 +25,14 @@ export function consumerCredentialPayload(google, github) {
  * exists. Never allow a different, active consumer to be displaced.
  */
 export function createConsumerCredentialsRouter({
-  readProject = (userId, projectId) => projectDoc(userId, projectId).get(),
+  readProject = async (userId, projectId) =>
+    (await credentialStorageDb()).doc(projectPath(userId, projectId)).get(),
   inspectJob = inspectK8sJob,
   mintFirebase = mintUserCustomToken,
   resolveGoogle = resolveGoogleCloudAccessToken,
   resolveGithub = resolveGithubAppCredential,
   mintStorage = mintWorkspaceToken,
-  getDb = getFirestore,
+  getDb = credentialStorageDb,
 } = {}) {
   const router = express.Router();
   router.use((_req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
@@ -43,13 +44,13 @@ export function createConsumerCredentialsRouter({
       return { status: 401 };
     }
     const snap = await readProject(userId, projectId);
-    const data = snap.data();
+    const data = snap?.data();
     const lock = data?.consumerLock;
     const grant = data?.consumerCredentialRefresh;
     const actual = createHash('sha256').update(capability).digest();
     const expected = /^[a-f0-9]{64}$/.test(grant?.hash || '')
       ? Buffer.from(grant.hash, 'hex') : Buffer.alloc(32);
-    if (!snap.exists || grant?.consumerId !== consumerId ||
+    if (!snap?.exists || grant?.consumerId !== consumerId ||
         !timingSafeEqual(actual, expected)) return { status: 403 };
 
     if (!bootstrap) {
@@ -90,7 +91,7 @@ export function createConsumerCredentialsRouter({
       const authenticated = await authenticateConsumer(req);
       if (authenticated.status) return res.sendStatus(authenticated.status);
       const { userId, projectId } = authenticated;
-      const db = getDb();
+      const db = await getDb();
       const [google, github] = await Promise.all([
         resolveGoogle({ userId, projectId, db }),
         resolveGithub({ userId, projectId, db }),

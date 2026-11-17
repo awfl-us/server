@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { getFirestore } from 'firebase-admin/firestore';
+import { credentialStorageDb } from '../../storage/legacyBridge.js';
 import { encryptString, decryptString } from '../crypto.js';
 
 const CLOUD_SCOPE = 'https://www.googleapis.com/auth/cloud-platform';
@@ -59,7 +59,8 @@ export function googleCloudAuthUrl({ clientId, state, codeChallenge, redirectUri
   return url.toString();
 }
 
-export async function googleCloudStatus({ userId, projectId, db = getFirestore() }) {
+export async function googleCloudStatus({ userId, projectId, db = null }) {
+  db ||= await credentialStorageDb();
   await assertProject(db, userId, projectId);
   const snap = await integrationRef(db, userId, projectId).get();
   const data = snap.data();
@@ -72,7 +73,8 @@ export async function googleCloudStatus({ userId, projectId, db = getFirestore()
   };
 }
 
-export async function beginGoogleCloudOAuth({ userId, projectId, cloudProjectId, db = getFirestore() }) {
+export async function beginGoogleCloudOAuth({ userId, projectId, cloudProjectId, db = null }) {
+  db ||= await credentialStorageDb();
   requireConfigured();
   await assertProject(db, userId, projectId);
   // A Google Cloud project ID (not a numeric project number).
@@ -116,7 +118,8 @@ async function exchange(body, fetcher) {
   return response.json();
 }
 
-export async function finishGoogleCloudOAuth({ state, code, error, db = getFirestore(), fetcher = fetch }) {
+export async function finishGoogleCloudOAuth({ state, code, error, db = null, fetcher = fetch }) {
+  db ||= await credentialStorageDb();
   const pending = await consumeState(state, db);
   if (error) throw new Error('Google Cloud authorization denied');
   if (typeof code !== 'string' || code.length < 4 || code.length > 4096) throw new Error('Authorization code missing');
@@ -159,7 +162,8 @@ export async function finishGoogleCloudOAuth({ state, code, error, db = getFires
   return { projectId: pending.projectId, result: 'connected' };
 }
 
-export async function resolveGoogleCloudAccessToken({ userId, projectId, db = getFirestore(), fetcher = fetch }) {
+export async function resolveGoogleCloudAccessToken({ userId, projectId, db = null, fetcher = fetch }) {
+  db ||= await credentialStorageDb();
   if (!userId || !projectId) return null;
   const snap = await integrationRef(db, userId, projectId).get();
   if (!snap.exists) return null;
@@ -185,7 +189,8 @@ export async function resolveGoogleCloudAccessToken({ userId, projectId, db = ge
   return resolvedToken(refreshed.access_token, data.cloudProjectId, expiresAt);
 }
 
-export async function testGoogleCloud({ userId, projectId, db = getFirestore(), fetcher = fetch }) {
+export async function testGoogleCloud({ userId, projectId, db = null, fetcher = fetch }) {
+  db ||= await credentialStorageDb();
   await assertProject(db, userId, projectId);
   const auth = await resolveGoogleCloudAccessToken({ userId, projectId, db, fetcher });
   if (!auth) throw new Error('Google Cloud is not connected');
@@ -199,7 +204,8 @@ export async function testGoogleCloud({ userId, projectId, db = getFirestore(), 
     access: response.ok ? 'ok' : response.status === 403 ? 'permission_denied' : 'unavailable' };
 }
 
-export async function disconnectGoogleCloud({ userId, projectId, db = getFirestore(), fetcher = fetch }) {
+export async function disconnectGoogleCloud({ userId, projectId, db = null, fetcher = fetch }) {
+  db ||= await credentialStorageDb();
   await assertProject(db, userId, projectId);
   const ref = integrationRef(db, userId, projectId);
   const snap = await ref.get();

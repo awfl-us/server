@@ -1,13 +1,14 @@
 import express from 'express';
 import axios from 'axios';
 import { getFirestore } from 'firebase-admin/firestore';
+import { getDocumentStorage } from '../../storage/service.js';
+import { selectedStorageBackend } from '../../storage/factory.js';
 import { userScopedCollectionPath } from '../utils.js';
 import { GoogleAuth } from 'google-auth-library';
 import { ExecutionService } from '../../mcp/service.js';
-import { recordNativeCallbackDelivery } from '../native/callbackEffects.js';
+import { recordNativeCallbackDelivery, nativeCallbacksUseLegacyFirestore } from '../native/callbackEffects.js';
 
 const router = express.Router();
-const db = getFirestore();
 router.use(express.json({ limit: process.env.CALLBACK_MAX_BYTES || '1mb' }));
 
 function isHttpUrl(u) {
@@ -53,11 +54,31 @@ router.post('/:id', async (req, res) => {
   try {
     // Store and read callbacks under user-scoped collection only
     const docPath = userScopedCollectionPath(userId, `callbacks/${id}`);
-    const ref = db.doc(docPath);
-    const snap = await ref.get();
-    if (!snap.exists) return res.status(404).json({ error: 'Callback not found' });
+    const store = await getDocumentStorage();
+    let snap = null, nativeLegacyRef = null;
+    // Existing native roots and their callbacks must use the same backend.
+    // The initial bulk SQL copy includes historical callback documents, but
+    // that copied snapshot must NEVER receive an old root's live delivery.
+    if (nativeCallbacksUseLegacyFirestore() && /^n[a-f0-9]{32}$/.test(id)) {
+      const ref = getFirestore().doc(docPath);
+      const legacy = await ref.get();
+      if (legacy.exists && legacy.data()?.kind === 'native_workflow') {
+        snap = { data: legacy.data() };
+        nativeLegacyRef = ref;
+      }
+    }
+    snap ||= await store.get(docPath);
+    // The MCP workspace/request control plane intentionally stays in
+    // Firestore even when Jobs callback documents use PostgreSQL.
+    if (!snap && selectedStorageBackend() === 'postgres') {
+      const legacy = await getFirestore().doc(docPath).get();
+      if (legacy.exists && legacy.data()?.kind === 'mcp_request') {
+        snap = { data: legacy.data() };
+      }
+    }
+    if (!snap) return res.status(404).json({ error: 'Callback not found' });
 
-    const data = snap.data() || {};
+    const data = snap.data || {};
     // Native callbacks use the existing delivery URL and the SAME user-scoped
     // callback document; their result is recorded before acknowledgement.
     // The waiting native worker observes this record's Firestore change.
@@ -68,8 +89,9 @@ router.post('/:id', async (req, res) => {
       }
       try {
         const result = await recordNativeCallbackDelivery({
-          db, ref, body: req.body,
-          identity: { userId, projectId: req.projectId },
+          ...(nativeLegacyRef ? { db: getFirestore(), ref: nativeLegacyRef }
+            : { storage: store, ref: docPath }),
+          body: req.body, identity: { userId, projectId: req.projectId },
         });
         return res.status(200).json({ ok: true, recorded: result === 'recorded' });
       } catch (error) {
@@ -95,7 +117,7 @@ router.post('/:id', async (req, res) => {
         return res.status(400).json({ error: 'Invalid result' });
       }
       try {
-        const service = new ExecutionService({ db });
+        const service = new ExecutionService({ db: getFirestore() });
         const kind = req.body._awfl_mcp_event;
         const result = kind === 'claim'
           ? await service.claim(userId, req.projectId, mcp.workspaceId, mcp.requestId, req.body.consumer_id)
@@ -137,11 +159,8 @@ router.post('/:id', async (req, res) => {
 
     const now = Date.now();
     try {
-      await ref.update({
-        called_at: now,
-        last_status: status,
-        last_error: lastError,
-      });
+      await store.put(docPath, { called_at: now,
+        last_status: status, last_error: lastError }, {merge:true});
     } catch (e) {
       // log and continue
       console.warn('[callbacks invoke] failed to persist call metadata', String(e?.message || e));

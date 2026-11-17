@@ -10,14 +10,8 @@
 
 import express from 'express';
 import axios from 'axios';
-import { getFirestore } from 'firebase-admin/firestore';
-import { initializeApp, getApps } from 'firebase-admin/app';
+import { getDocumentStorage } from '../storage/service.js';
 import { resolveGithubAppCredential } from './githubApp/service.js';
-
-// Ensure Firebase Admin initialized (no-op if already initialized by host)
-if (!getApps().length) {
-  try { initializeApp(); } catch (_) {}
-}
 
 const GITHUB_API = 'https://api.github.com';
 const DEFAULT_OWNER = 'dezmoanded';
@@ -68,11 +62,10 @@ function encodePathSegments(path = '') {
 async function loadGithubConfig(userId, projectId) {
   if (!userId || !projectId) return null;
   try {
-    const db = getFirestore();
-    const ref = db.doc(`users/${userId}/projects/${projectId}/integrations/github`);
-    const snap = await ref.get();
-    if (!snap.exists) return null;
-    const data = snap.data() || {};
+    const db=await getDocumentStorage();
+    const snap=await db.get(`users/${userId}/projects/${projectId}/integrations/github`);
+    if(!snap)return null;
+    const data=snap.data||{};
     return {
       owner: data.owner || DEFAULT_OWNER,
       repo: data.repo || DEFAULT_REPO,
@@ -102,8 +95,8 @@ export async function resolveGithubCredential({ userId, projectId }) {
 
 async function saveGithubConfig(userId, projectId, { owner, repo, token, defaultBranch }) {
   if (!userId || !projectId) throw new Error('userId and projectId are required');
-  const db = getFirestore();
-  const ref = db.doc(`users/${userId}/projects/${projectId}/integrations/github`);
+  const db = await getDocumentStorage();
+  const path=`users/${userId}/projects/${projectId}/integrations/github`;
   const payload = {
     owner: owner || DEFAULT_OWNER,
     repo: repo || DEFAULT_REPO,
@@ -111,16 +104,16 @@ async function saveGithubConfig(userId, projectId, { owner, repo, token, default
     updatedAt: new Date().toISOString(),
   };
   if (typeof token === 'string') payload.token = token; // allow updating token
-  await ref.set(payload, { merge: true });
+  await db.put(path,payload,{merge:true});
   // Return masked response
   return { ...payload, hasToken: !!payload.token, token: undefined };
 }
 
 async function deleteGithubConfig(userId, projectId) {
   if (!userId || !projectId) throw new Error('userId and projectId are required');
-  const db = getFirestore();
-  const ref = db.doc(`users/${userId}/projects/${projectId}/integrations/github`);
-  await ref.delete();
+  const db = await getDocumentStorage();
+  const path=`users/${userId}/projects/${projectId}/integrations/github`;
+  await db.delete(path);
   return { ok: true };
 }
 

@@ -1,8 +1,6 @@
 import { sanitizeEnvironment } from '../../mcp/environment.js';
-import { getFirestore } from 'firebase-admin/firestore';
-import { projectDoc } from './util.js';
-
-const db = getFirestore();
+import { getDocumentStorage } from '../../storage/service.js';
+import { projectPath } from './util.js';
 
 function nowMs() { return Date.now(); }
 function clampLeaseMs(input) {
@@ -25,18 +23,19 @@ export async function acquireConsumerLock({ userId, projectId, consumerId, lease
   if (!consumerId) throw new Error('acquireConsumerLock: consumerId required');
 
   const pid = String(projectId).trim();
-  const ref = projectDoc(userId, pid);
+  const path = projectPath(userId, pid);
   const lease = clampLeaseMs(leaseMs);
 
-  const result = await db.runTransaction(async (tx) => {
-    const snap = await tx.get(ref);
-    if (!snap.exists) {
+  const db = await getDocumentStorage();
+  const result = await db.transaction(async (tx) => {
+    const snap = await tx.get(path);
+    if (!snap) {
       const err = new Error('Project not found');
       err.code = 404;
       throw err;
     }
 
-    const data = snap.data() || {};
+    const data = snap.data || {};
     const existing = data.consumerLock || null;
     const now = nowMs();
 
@@ -50,7 +49,7 @@ export async function acquireConsumerLock({ userId, projectId, consumerId, lease
         expiresAt: now + lease,
         runtime: null,
       };
-      tx.set(ref, { consumerLock: newLock, updated: now }, { merge: true });
+      await tx.put(path, { consumerLock: newLock, updated: now }, { merge: true });
       return { ok: true, lock: shapeLock(newLock) };
     }
 
@@ -63,7 +62,7 @@ export async function acquireConsumerLock({ userId, projectId, consumerId, lease
         refreshedAt: now,
         expiresAt: now + lease,
       };
-      tx.set(ref, { consumerLock: refreshed, updated: now }, { merge: true });
+      await tx.put(path, { consumerLock: refreshed, updated: now }, { merge: true });
       return { ok: true, lock: shapeLock(refreshed), refreshed: true };
     }
 
@@ -80,17 +79,18 @@ export async function releaseConsumerLock({ userId, projectId, consumerId, force
   if (!projectId) throw new Error('releaseConsumerLock: projectId required');
 
   const pid = String(projectId).trim();
-  const ref = projectDoc(userId, pid);
+  const path = projectPath(userId, pid);
 
-  const result = await db.runTransaction(async (tx) => {
-    const snap = await tx.get(ref);
-    if (!snap.exists) {
+  const db = await getDocumentStorage();
+  const result = await db.transaction(async (tx) => {
+    const snap = await tx.get(path);
+    if (!snap) {
       const err = new Error('Project not found');
       err.code = 404;
       throw err;
     }
 
-    const data = snap.data() || {};
+    const data = snap.data || {};
     const existing = data.consumerLock || null;
     const now = nowMs();
 
@@ -99,7 +99,7 @@ export async function releaseConsumerLock({ userId, projectId, consumerId, force
     }
 
     if (force || (consumerId && existing.consumerId === consumerId)) {
-      tx.set(ref, { consumerLock: null, updated: now }, { merge: true });
+      await tx.put(path, { consumerLock: null, updated: now }, { merge: true });
       return { ok: true, released: true };
     }
 
@@ -115,15 +115,15 @@ export async function getConsumerLockStatus({ userId, projectId }) {
   if (!projectId) throw new Error('getConsumerLockStatus: projectId required');
 
   const pid = String(projectId).trim();
-  const ref = projectDoc(userId, pid);
-  const snap = await ref.get();
-  if (!snap.exists) {
+  const path = projectPath(userId, pid);
+  const snap = await (await getDocumentStorage()).get(path);
+  if (!snap) {
     const err = new Error('Project not found');
     err.code = 404;
     throw err;
   }
 
-  const data = snap.data() || {};
+  const data = snap.data || {};
   const existing = data.consumerLock || null;
   const now = nowMs();
 
@@ -145,16 +145,17 @@ export async function setConsumerRuntimeInfo({ userId, projectId, consumerId, ru
   if (!consumerId) throw new Error('setConsumerRuntimeInfo: consumerId required');
 
   const pid = String(projectId).trim();
-  const ref = projectDoc(userId, pid);
+  const path = projectPath(userId, pid);
 
-  const result = await db.runTransaction(async (tx) => {
-    const snap = await tx.get(ref);
-    if (!snap.exists) {
+  const db = await getDocumentStorage();
+  const result = await db.transaction(async (tx) => {
+    const snap = await tx.get(path);
+    if (!snap) {
       const err = new Error('Project not found');
       err.code = 404;
       throw err;
     }
-    const data = snap.data() || {};
+    const data = snap.data || {};
     const existing = data.consumerLock || null;
     const now = nowMs();
 
@@ -163,7 +164,7 @@ export async function setConsumerRuntimeInfo({ userId, projectId, consumerId, ru
     }
 
     const updated = { ...existing, runtime, refreshedAt: now };
-    tx.set(ref, { consumerLock: updated, updated: now }, { merge: true });
+    await tx.put(path, { consumerLock: updated, updated: now }, { merge: true });
     return { ok: true, lock: shapeLock(updated), runtime: runtime || null };
   });
 
@@ -174,14 +175,14 @@ export async function getConsumerLock({ userId, projectId }) {
   if (!userId) throw new Error('getConsumerLock: userId required');
   if (!projectId) throw new Error('getConsumerLock: projectId required');
   const pid = String(projectId).trim();
-  const ref = projectDoc(userId, pid);
-  const snap = await ref.get();
-  if (!snap.exists) {
+  const path = projectPath(userId, pid);
+  const snap = await (await getDocumentStorage()).get(path);
+  if (!snap) {
     const err = new Error('Project not found');
     err.code = 404;
     throw err;
   }
-  const data = snap.data() || {};
+  const data = snap.data || {};
   const lock = data.consumerLock || null;
   return { ok: true, lock: lock ? { ...shapeLock(lock), runtime: lock.runtime || null,
     heartbeat: lock.heartbeat || null } : null };
@@ -194,12 +195,12 @@ export async function getConsumerLock({ userId, projectId }) {
  * cannot update a replacement's heartbeat after its lease expires.
  */
 export async function heartbeatConsumer({ userId, projectId, consumerId, connected, capacity, activeExecutions, capabilities, environment }) {
-  const ref = projectDoc(userId, projectId);
-  return db.runTransaction(async tx => {
-    const snap = await tx.get(ref);
-    const lock = snap.data()?.consumerLock;
+  const path = projectPath(userId, projectId);
+  return (await getDocumentStorage()).transaction(async tx => {
+    const snap = await tx.get(path);
+    const lock = snap.data?.consumerLock;
     const now = Date.now();
-    if (!snap.exists || !lock || lock.consumerId !== consumerId || lock.expiresAt <= now) {
+    if (!snap || !lock || lock.consumerId !== consumerId || lock.expiresAt <= now) {
       return { ok: false, error: 'Consumer lock no longer held' };
     }
     const heartbeat = {
@@ -215,7 +216,7 @@ export async function heartbeatConsumer({ userId, projectId, consumerId, connect
         ? capabilities.filter(x => typeof x === 'string').slice(0, 32) : [],
       environment: sanitizeEnvironment(environment),
     };
-    tx.set(ref, { consumerLock: { ...lock, heartbeat } }, { merge: true });
+    await tx.put(path, { consumerLock: { ...lock, heartbeat } }, { merge: true });
     return { ok: true, heartbeat: { at: now, phase: heartbeat.phase } };
   });
 }

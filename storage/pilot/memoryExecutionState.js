@@ -18,23 +18,39 @@ export class NativeMemoryExecutionPilotStore {
   }
   async create({ executionId, userId, projectId, artifactSha256, input,
     protocolVersion = 2, workflowName, allowedOperations, parallelVersion,
-    streamIpcVersion, trustedGlobalsVersion, executionMode = 'memory' }) {
+    streamIpcVersion, trustedGlobalsVersion, executionMode = 'memory',
+    asyncLaunch = false }) {
     checkKey(executionId);
     requireSize(input, 'input');
     if (!userId || !projectId || !workflowName || !/^[a-f0-9]{64}$/.test(artifactSha256 || '') ||
         protocolVersion !== 2 || executionMode !== 'memory' ||
-        !Array.isArray(allowedOperations)) throw new TypeError('invalid memory execution');
+        !Array.isArray(allowedOperations) || typeof asyncLaunch !== 'boolean') throw new TypeError('invalid memory execution');
     const now = this.clock();
     const state = { executionId, userId, projectId, artifactSha256, input: copy(input),
       workflowName, allowedOperations: [...allowedOperations], protocolVersion,
       ...(parallelVersion && { parallelVersion }),
       ...(streamIpcVersion && { streamIpcVersion }),
       ...(trustedGlobalsVersion && { trustedGlobalsVersion }),
-      executionMode, status: 'ready', owner: null, epoch: 0,
+      executionMode, ...(asyncLaunch && { asyncLaunch: true }),
+      status: 'ready', owner: null, epoch: 0,
       leaseUntil: 0, effectCount: 0, pendingEffect: null,
       createdAt: now, updatedAt: now };
     await this.records.create(executionId, state);
     return copy(state);
+  }
+  async listPendingAsync(limit = 100) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+      throw new Error('invalid native async scan limit');
+    }
+    if (!this.records.storage?.query || !this.records.collection) {
+      throw new Error('durable detached scanner requires document Storage');
+    }
+    const documents = await this.records.storage.query({
+      collection: this.records.collection,
+      where: [{ field: 'asyncLaunch', op: '==', value: true }],
+      limit,
+    });
+    return documents.map(doc => copy(doc.data));
   }
   async get(executionId) { return this.records.get(checkKey(executionId)); }
   async claim({ executionId, workerId, leaseMs = 60_000,

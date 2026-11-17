@@ -11,6 +11,10 @@ const stopProjectConsumer = async args => (await import('../jobs/producer/stop.j
 const getConsumerLock = async args => (await import('../workflows/projects/lock.js')).getConsumerLock(args);
 const inspectK8sJob = async args => (await import('../jobs/producer/gke.js')).inspectK8sJob(args);
 import { pickBackend, normalizeEnvelope } from '../workflows/events/model.js';
+import { getDocumentStorage, readDocuments } from '../storage/service.js';
+import { selectedStorageBackend } from '../storage/factory.js';
+import { projectPath, projectsPath } from '../workflows/projects/util.js';
+import { userScopedCollectionPath } from '../workflows/utils.js';
 
 export const digest = value => createHash('sha256').update(value).digest('hex');
 export function fail(message) { throw Object.assign(new Error(message), { publicMessage: message }); }
@@ -247,13 +251,23 @@ export class ExecutionService {
 
     const request = ref.collection('mcpRequests').doc(requestDocId(transaction.seq));
     const callbackId = randomBytes(16).toString('hex');
-    const callback = this.db.collection('users').doc(userId).collection('callbacks').doc(callbackId);
-    await callback.set({
+    const callbackData = {
       kind: 'mcp_request',
       mcp: { projectId: ws.projectId, workspaceId, requestId: transaction.seq },
       created_at: Date.now(),
-      expires_at: new Date(Date.now() + REQUEST_RETENTION_MS),
-    });
+      expires_at: new Date(Date.now() + REQUEST_RETENTION_MS).toISOString(),
+    };
+    // Request sequencing remains in the explicit Firestore control plane;
+    // callback delivery follows the same data-plane provider as Jobs/events.
+    if (selectedStorageBackend() === 'postgres') {
+      await (await getDocumentStorage()).put(
+        userScopedCollectionPath(userId, 'callbacks/' + callbackId), callbackData);
+    } else {
+      await this.db.collection('users').doc(userId)
+        .collection('callbacks').doc(callbackId).set({
+          ...callbackData, expires_at: new Date(Date.now() + REQUEST_RETENTION_MS),
+        });
+    }
     await request.update({ callbackId });
     let toolArgs;
     if (name === 'run_command') {
@@ -608,15 +622,18 @@ export class ExecutionService {
   async listProjects(userId, { limit = 50 } = {}) {
     // Project records are already scoped to the authenticated owner. Sort in
     // memory to support older records without an 'updated' field or new indexes.
-    const snap = await this.db.collection('users').doc(userId).collection('projects').get();
+    const docs = selectedStorageBackend() === 'postgres'
+      ? await readDocuments(await getDocumentStorage(), {collection:projectsPath(userId)}, {maxDocs:5000})
+      : (await this.db.collection('users').doc(userId).collection('projects').get()).docs
+        .map(doc=>({id:doc.id,data:doc.data()}));
     const timestamp = value => {
       if (typeof value === 'number') return value;
       if (value?.toMillis) return value.toMillis();
       if (typeof value === 'string') return Date.parse(value) || 0;
       return 0;
     };
-    const projects = snap.docs.map(doc => {
-      const data = doc.data();
+    const projects = docs.map(doc => {
+      const data = doc.data;
       return {
         id: doc.id,
         name: data.name || null,
@@ -634,8 +651,10 @@ export class ExecutionService {
     // Do not silently select a random project as the earlier MCP implementation did.
     const projectId = typeof args.project_id === 'string' ? args.project_id.trim() : '';
     if (!projectId) fail('project_id is required');
-    const project = await this.db.collection('users').doc(userId).collection('projects').doc(projectId).get();
-    if (!project.exists) fail('Project not found');
+    const projectExists = selectedStorageBackend() === 'postgres'
+      ? Boolean(await (await getDocumentStorage()).get(projectPath(userId,projectId)))
+      : (await this.db.collection('users').doc(userId).collection('projects').doc(projectId).get()).exists;
+    if (!projectExists) fail('Project not found');
     let consumer;
     try {
       consumer = await this.startConsumer({

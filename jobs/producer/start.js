@@ -1,5 +1,6 @@
 import { randomBytes, createHash } from 'node:crypto';
-import { projectDoc } from '../../workflows/projects/util.js';
+import { projectPath } from '../../workflows/projects/util.js';
+import { getDocumentStorage } from '../../storage/service.js';
 import { requiredEnv, randomId } from './utils.js';
 import { ensureWorkspaceId } from '../../workflows/workspace/service.js';
 import { acquireConsumerLock, releaseConsumerLock, getConsumerLock } from '../../workflows/projects/lock.js';
@@ -103,7 +104,9 @@ export async function startProjectConsumer({ userId, projectId, body = {} }) {
       return { status: 202, body: { message: 'Lock held by another consumer', details: lock } };
     }
     lockAcquired = true;
-    await projectDoc(userId, projectId).set({ consumerCredentialRefresh: { consumerId, hash: createHash('sha256').update(credentialRefreshToken).digest('hex') } }, { merge: true });
+    await (await getDocumentStorage()).put(projectPath(userId,projectId),
+      {consumerCredentialRefresh:{consumerId,hash:createHash('sha256').update(credentialRefreshToken).digest('hex')}},
+      {merge:true});
 
     const sidecarEnabled = String(process.env.PRODUCER_SIDECAR_ENABLE || '').trim() === '1';
     const sidecarDefaultImage = process.env.PRODUCER_SIDECAR_CONSUMER_IMAGE || 'awfl-consumer:dev';

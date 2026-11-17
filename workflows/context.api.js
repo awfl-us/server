@@ -1,10 +1,11 @@
+import { providerDocumentDb } from '../storage/legacyBridge.js';
 import express from 'express';
 import { getFirestore, Timestamp } from 'firebase-admin/firestore';
 import topicContextYojRouter from './context/topicContextYoj.js';
 import collapseIndexerRouter from './context/collapseIndexer.js';
 import { getUserIdFromReq, projectScopedCollectionPath } from './utils.js';
 
-const db = getFirestore();
+const db = providerDocumentDb(getFirestore);
 const router = express.Router();
 
 // Reuse the existing TopicContextYoj router under /context
@@ -52,7 +53,7 @@ router.post('/sessions/list', async (req, res) => {
       if (fieldType === 'timestamp') {
         const n = typeof v === 'string' ? parseInt(v, 10) : v;
         const secs = Number.isFinite(n) ? Number(n) : 0;
-        return Timestamp.fromMillis(secs * 1000);
+        return process.env.AWFL_DOCUMENT_STORAGE_BACKEND === 'postgres' ? new Date(secs*1000).toISOString() : Timestamp.fromMillis(secs * 1000);
       }
       return v;
     };

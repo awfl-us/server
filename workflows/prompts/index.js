@@ -1,3 +1,4 @@
+import { providerDocumentDb } from '../../storage/legacyBridge.js';
 import express from 'express';
 import { getFirestore } from 'firebase-admin/firestore';
 import { initializeApp, getApps } from 'firebase-admin/app';
@@ -66,7 +67,7 @@ function normalizePromptRaw(raw) {
 async function listFromFirestore(userId) {
   const out = [];
   try {
-    const db = getFirestore();
+    const db = providerDocumentDb(getFirestore);
 
     // User-scoped docs
     if (userId) {
@@ -148,7 +149,7 @@ router.get('/:id', async (req, res) => {
   try {
     const userId = req.userId || null;
     const { id } = req.params;
-    const db = getFirestore();
+    const db = providerDocumentDb(getFirestore);
 
     // Try user doc by id
     if (userId) {
@@ -212,7 +213,7 @@ router.post('/', async (req, res) => {
     const { errors, payload } = validatePromptBody(req.body);
     if (errors.length) return res.status(400).json({ error: errors.join('; ') });
 
-    const db = getFirestore();
+    const db = providerDocumentDb(getFirestore);
     const colRef = db.collection(`users/${userId}/prompts/defs`);
     const docRef = colRef.doc();
     const now = Date.now();
@@ -234,7 +235,7 @@ router.patch('/:id', async (req, res) => {
 
     const { id } = req.params;
 
-    const db = getFirestore();
+    const db = providerDocumentDb(getFirestore);
     const docRef = db.doc(`users/${userId}/prompts/defs/${id}`);
     const snap = await docRef.get();
     if (!snap.exists) return res.status(404).json({ error: 'Prompt not found' });
@@ -264,7 +265,7 @@ router.delete('/:id', async (req, res) => {
 
     const { id } = req.params;
 
-    const db = getFirestore();
+    const db = providerDocumentDb(getFirestore);
     const docRef = db.doc(`users/${userId}/prompts/defs/${id}`);
     const snap = await docRef.get();
     if (!snap.exists) return res.status(404).json({ error: 'Prompt not found' });

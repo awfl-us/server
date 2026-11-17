@@ -1,5 +1,5 @@
 import express from 'express';
-import { getFirestore } from 'firebase-admin/firestore';
+import { getDocumentStorage } from '../storage/service.js';
 import { getUserIdFromReq, userScopedCollectionPath } from '../workflows/utils.js';
 import { decryptString } from '../workflows/crypto.js';
 
@@ -14,7 +14,6 @@ import { incrementUsage } from './llm/usage.js';
 import { calculateOpenAiCost } from './llm/cost.js';
 
 const router = express.Router();
-const db = getFirestore();
 
 // Pricing per 1,000,000 tokens in USD (OpenAI only for now)
 // USD per 1,000,000 tokens
@@ -116,10 +115,10 @@ function inferProvider(model = '') {
 }
 
 async function getApiKeyForUser(userId, providerId) {
-  const docRef = db.collection(userScopedCollectionPath(userId, 'creds')).doc(providerId);
-  const snap = await docRef.get();
-  if (!snap.exists) return null;
-  const data = snap.data() || {};
+  const db = await getDocumentStorage();
+  const snap = await db.get(userScopedCollectionPath(userId, 'creds') + '/' + providerId);
+  if (!snap) return null;
+  const data = snap.data || {};
   try {
     return decryptString(data.enc);
   } catch (e) {

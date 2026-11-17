@@ -38,13 +38,13 @@ function toDoc(snap) {
     return fail('INVALID_DATA', 'invalid document revision');
   }
   return {
-    id: snap.id, path: snap.ref.path, data: objectValue(data), revision,
+    id: snap.id, path: snap.ref.path, data: objectValue(JSON.parse(JSON.stringify(data))), revision,
     createdAt: snap.createTime?.toDate().toISOString() ?? null,
     updatedAt: snap.updateTime?.toDate().toISOString() ?? null,
   };
 }
 function docRef(db, path) { return db.doc(validatePath(path)); }
-function firestoreQuery(db, spec) {
+async function firestoreQuery(db, spec) {
   const q = validateQuery(spec);
   let result = q.collection ? db.collection(q.collection) : db.collectionGroup(q.collectionGroup);
   for (const filter of q.where) {
@@ -57,18 +57,20 @@ function firestoreQuery(db, spec) {
   result = result.orderBy(order, q.orderBy.direction);
   if (!nameOrder) result = result.orderBy(FieldPath.documentId(), q.orderBy.direction);
   if (q.startAfter !== undefined || q.endBefore !== undefined) {
-    if (!nameOrder) return fail('INVALID_QUERY', 'non-name cursors not yet implemented');
-    const cursor = x => {
+    const cursor = async x => {
       validatePath(x);
       if (q.collection) {
         const p = partsOf(x);
-        if (p.collectionPath !== q.collection) return fail('INVALID_QUERY', 'cursor belongs to another collection');
-        return p.documentId;
+        if (p.collectionPath !== q.collection)
+          return fail('INVALID_QUERY', 'cursor belongs to another collection');
       }
-      return x;
+      if (nameOrder) return q.collection ? partsOf(x).documentId : x;
+      const snapshot = await db.doc(x).get();
+      if (!snapshot.exists) return fail('INVALID_QUERY', 'cursor document not found');
+      return snapshot;
     };
-    if (q.startAfter !== undefined) result = result.startAfter(cursor(q.startAfter));
-    if (q.endBefore !== undefined) result = result.endBefore(cursor(q.endBefore));
+    if (q.startAfter !== undefined) result = result.startAfter(await cursor(q.startAfter));
+    if (q.endBefore !== undefined) result = result.endBefore(await cursor(q.endBefore));
   }
   return { query: result.limit(q.limit), unlimited: result, spec: q };
 }
@@ -116,13 +118,13 @@ export class FirestoreStorage {
   }
   async query(spec) {
     try {
-      const { query } = firestoreQuery(this.db, spec);
+      const { query } = await firestoreQuery(this.db, spec);
       return (await query.get()).docs.map(toDoc);
     } catch (error) { throw asError(error); }
   }
   async count(spec) {
     try {
-      const { unlimited } = firestoreQuery(this.db, spec);
+      const { unlimited } = await firestoreQuery(this.db, spec);
       return (await unlimited.count().get()).data().count;
     } catch (error) { throw asError(error); }
   }
@@ -167,7 +169,7 @@ export class FirestoreStorage {
           get: async path => clone(await load(path)),
           query: async spec => {
             if (pending.size) return fail('UNSUPPORTED', 'transactional queries after writes are not supported');
-            return (await firestoreTx.get(firestoreQuery(this.db, spec).query)).docs.map(toDoc);
+            return (await firestoreTx.get((await firestoreQuery(this.db, spec)).query)).docs.map(toDoc);
           },
           create: async (path, value) => {
             validatePath(path);
@@ -221,7 +223,7 @@ export class FirestoreStorage {
       return fail('UNSUPPORTED', 'Firestore subscriptions cannot replay from a durable cursor');
     }
     const path = typeof target === 'string' ? validatePath(target) : null;
-    const source = path ? docRef(this.db, path) : firestoreQuery(this.db, target).query;
+    const source = path ? docRef(this.db, path) : (await firestoreQuery(this.db, target)).query;
     let initial = true;
     let previousExists = false;
     let sequence = 0;

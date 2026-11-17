@@ -1,10 +1,11 @@
+import { providerDocumentDb } from '../../storage/legacyBridge.js';
 import express from 'express';
 import { getFirestore } from 'firebase-admin/firestore';
 import { userScopedCollectionPath } from '../utils.js';
 import { encryptString } from '../crypto.js';
 
 const router = express.Router();
-const db = getFirestore();
+const db = providerDocumentDb(getFirestore);
 
 function credsCollection(userId) {
   // User-scoped storage shared across projects

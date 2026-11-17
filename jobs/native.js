@@ -4,14 +4,16 @@
 import express from 'express';
 import { trace } from '@opentelemetry/api';
 import { getFirestore } from 'firebase-admin/firestore';
+import { getDocumentStorage } from '../storage/service.js';
 import { Storage } from '@google-cloud/storage';
 import { NativeExecutionStore } from '../workflows/native/executionStore.js';
 import { NativeGcsReleases } from '../workflows/native/gcsReleases.js';
 import { createJobsEffectHandlers } from '../workflows/native/jobsEffects.js';
 import { runNativeWorkflow, nativeAsyncSchedulerFor } from '../workflows/native/worker.js';
-import { runNativeMemoryWorkflow } from '../workflows/native/memoryWorker.js';
+import { runNativeMemoryWorkflow, nativeMemoryAsyncSchedulerFor } from '../workflows/native/memoryWorker.js';
 import { createNativeProfiler } from '../workflows/native/profiler.js';
 import { configuredNativeMemoryStore, nativeDocumentStoreEnabled } from '../storage/nativeMemory.js';
+import { nativeCallbacksUseLegacyFirestore } from '../workflows/native/callbackEffects.js';
 
 // Shared only by requests executing in the same trusted Jobs process.
 // GCS mappings remain authoritative and digest verification is repeated.
@@ -55,7 +57,10 @@ export function createNativeJobsRouter({
       });
       const nativeHandlers = handlers || createJobsEffectHandlers({
         jobsOrigin: process.env.AWFL_NATIVE_JOBS_URL,
-        profiler, storage: new Storage(), callbackDb: getFirestore(),
+        profiler, storage: new Storage(),
+        ...(nativeCallbacksUseLegacyFirestore()
+          ? { callbackDb: getFirestore() }
+          : { callbackStorage: await getDocumentStorage() }),
       });
       const span = trace.getActiveSpan();
       if (span?.isRecording()) {
@@ -99,16 +104,27 @@ export function startNativeDetachedRecovery({ store, releases, handlers } = {}) 
   if (process.env.AWFL_NATIVE_EXECUTION_ENABLED !== '1' ||
       process.env.AWFL_NATIVE_DETACHED_GKE_ENABLED !== '1' ||
       process.env.AWFL_NATIVE_PERSISTENT_WORKER !== '1') return null;
-  // The pilot document store has no detached recovery scan. Never scan
-  // Firestore when new roots are configured in another backend.
-  if (nativeDocumentStoreEnabled()) {
-    throw new Error('detached recovery is not supported with experimental document Storage');
-  }
-  const nativeStore = store || new NativeExecutionStore({ db: getFirestore() });
   const nativeReleases = releases || new NativeGcsReleases({
     storage: new Storage(), bucket: process.env.AWFL_NATIVE_ARTIFACT_BUCKET,
     verifiedCache: verifiedNativeArtifacts,
   });
+  if (nativeDocumentStoreEnabled()) {
+    // Native memory roots and detached children use the *same* selected
+    // Storage/pool, including callback records. No Firestore recovery scan.
+    return (async () => {
+      const nativeStore = store || await configuredNativeMemoryStore();
+      const nativeHandlers = handlers || createJobsEffectHandlers({
+        jobsOrigin: process.env.AWFL_NATIVE_JOBS_URL,
+        storage: new Storage(), callbackStorage: await getDocumentStorage(),
+      });
+      return nativeMemoryAsyncSchedulerFor({
+        store: nativeStore, releases: nativeReleases, handlers: nativeHandlers,
+      });
+    })();
+  }
+  const nativeStore = store || new NativeExecutionStore({ db: getFirestore() });
+  // The existing durable Firestore execution journal remains supported only
+  // while the document-provider-native memory flag is disabled.
   const nativeHandlers = handlers || createJobsEffectHandlers({
     jobsOrigin: process.env.AWFL_NATIVE_JOBS_URL,
     storage: new Storage(), callbackDb: getFirestore(),

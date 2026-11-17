@@ -1,4 +1,5 @@
-import { getFirestore } from 'firebase-admin/firestore';
+import { getDocumentStorage } from '../../storage/service.js';
+import { selectedStorageBackend } from '../../storage/factory.js';
 import { projectScopedCollectionPath } from '../utils.js';
 
 function env(name, def) {
@@ -168,101 +169,68 @@ export function normalizeEnvelope(input) {
 //   }
 // }
 
-class FirestoreBackend {
-  constructor(userId, projectId) {
-    this.userId = userId;
-    this.projectId = projectId;
-    this.kind = 'firestore';
-    this.db = getFirestore();
-    this.ttlSec = Number(env('RELAY_FS_TTL_SECONDS', 86400));
+/** Relay events backed by the same document provider as other Jobs records. */
+class DocumentEventBackend {
+  constructor(userId,projectId) {
+    this.userId=userId;this.projectId=projectId;
+    this.kind=selectedStorageBackend();
+    this.ttlSec=Number(env('RELAY_FS_TTL_SECONDS',86400));
   }
-  collProject() {
-    const c = projectScopedCollectionPath(this.userId, this.projectId, 'relayEvents');
-    return this.db.collection(c);
+  projectCollection(){return projectScopedCollectionPath(this.userId,this.projectId,'relayEvents');}
+  sessionCollection(sessionId){return projectScopedCollectionPath(this.userId,this.projectId,
+    `relayEventsSessions/${sessionId}/items`);}
+  async append(record) {
+    const store=await getDocumentStorage();
+    const payload={...record,expires_at:new Date(Date.now()+this.ttlSec*1000).toISOString()};
+    const writes=[{op:'put',path:this.projectCollection()+'/'+record.id,data:payload}];
+    if(record.sessionId)writes.push({op:'put',path:this.sessionCollection(record.sessionId)+'/'+record.id,data:payload});
+    await store.batch(writes);
   }
-  collSession(sessionId) {
-    const c = projectScopedCollectionPath(this.userId, this.projectId, 'relayEventsSessions');
-    return this.db.collection(c).doc(sessionId).collection('items');
+  async queryRecent(collection,limit=100){
+    const store=await getDocumentStorage();
+    const docs=await store.query({collection,orderBy:{field:'create_time',direction:'desc'},
+      limit:Math.min(Math.max(Number(limit)||100,1),1000)});
+    return docs.map(d=>d.data).reverse();
   }
-  async append(env) {
-    const expiresAt = new Date(Date.now() + this.ttlSec * 1000);
-    const payload = { ...env, expires_at: expiresAt };
-    // Project-level write (required)
-    await this.collProject(env.projectId).doc(env.id).set(payload);
-    // Session-level write (optional for legacy consumers)
-    if (env.sessionId) {
-      await this.collSession(env.sessionId).doc(env.id).set(payload);
-    }
+  async queryAfter(collection,afterTime,limit=500,{inclusive=false}={}){
+    const store=await getDocumentStorage();
+    const docs=await store.query({collection,where:[{field:'create_time',
+      op:inclusive?'>=':'>',value:afterTime}],orderBy:{field:'create_time',direction:'asc'},
+      limit:Math.min(Math.max(Number(limit)||500,1),1000)});
+    return docs.map(d=>d.data);
   }
-  // Project-level APIs
-  async subscribeProject(onEvent, options = {}) {
-    const { after_time = null } = options || {};
-    let q = this.collProject().orderBy('create_time');
-    if (after_time) q = q.startAfter(after_time);
-    const unsub = q.onSnapshot((snap) => {
-      for (const doc of snap.docChanges()) {
-        if (doc.type !== 'added') continue;
-        const ev = doc.doc.data();
-        try { onEvent(ev); } catch {}
+  async subscribeCollection(collection,onEvent,{after_time=null}={}) {
+    const store=await getDocumentStorage();
+    const seen=new Set();
+    const query={collection,orderBy:{field:'create_time',direction:'asc'},limit:1000,
+      ...(after_time&&{where:[{field:'create_time',op:'>',value:after_time}]})};
+    return store.subscribe(query,event=>{
+      if(event.type==='error'){console.error('[relay document subscribe] error',event.error);return;}
+      const docs=Array.isArray(event.value)?event.value:[];
+      for(const doc of docs){
+        const record=doc.data;
+        if(seen.has(record.id))continue;
+        seen.add(record.id);
+        if(seen.size>3000)seen.clear();
+        try{onEvent(record);}catch{}
       }
-    }, (err) => console.error('[relay fs subscribeProject] error', err));
-    return unsub;
+    });
   }
-  async replayProjectByUlid(since_id, limit = 500) {
-    if (!since_id) return this.recentProject(limit);
-    const d = await this.collProject().doc(since_id).get();
-    console.log("[events/stream] Event: ", JSON.stringify(d), ", exists: ", d.exists)
-    if (!d.exists) return this.recentProject(limit);
-    const t = d.data().create_time;
-    return this.replayProjectByTime(t, limit), t;
+  async replayFromId(collection,id,limit=500){
+    if(!id)return this.queryRecent(collection,limit);
+    const store=await getDocumentStorage();
+    const old=await store.get(collection+'/'+id);
+    if(!old)return this.queryRecent(collection,limit);
+    return this.queryAfter(collection,old.data.create_time,limit);
   }
-  async replayProjectByTime(since_time, limit = 500) {
-    let q = this.collProject().orderBy('create_time').startAfter(since_time).limit(limit);
-    const snap = await q.get();
-    console.log("[events/stream], Snap: ", JSON.stringify(snap))
-    return snap.docs.map(d => d.data()), since_time;
-  }
-  async recentProject(limit = 100) {
-    const snap = await this.collProject().orderBy('create_time', 'desc').limit(limit).get();
-    const items = snap.docs.map(d => d.data());
-    return items.reverse();
-  }
-  // Session-level APIs (legacy)
-  async subscribe(sessionId, onEvent, options = {}) {
-    const { after_time = null } = options || {};
-    let q = this.collSession(sessionId).orderBy('create_time');
-    if (after_time) q = q.startAfter(after_time);
-    const unsub = q.onSnapshot((snap) => {
-      for (const doc of snap.docChanges()) {
-        if (doc.type !== 'added') continue;
-        const ev = doc.doc.data();
-        try { onEvent(ev); } catch {}
-      }
-    }, (err) => console.error('[relay fs subscribe] error', err));
-    return unsub;
-  }
-  async replayByUlid(sessionId, since_id, limit = 500) {
-    if (!since_id) return this.recent(sessionId, limit);
-    const d = await this.collSession(sessionId).doc(since_id).get();
-    if (!d.exists) return this.recent(sessionId, limit);
-    const t = d.data().create_time;
-    return this.replayByTime(sessionId, t, limit);
-  }
-  async replayByTime(sessionId, since_time, limit = 500) {
-    let q = this.collSession(sessionId).orderBy('create_time').startAt(since_time).limit(limit);
-    const snap = await q.get();
-    return snap.docs.map(d => d.data());
-  }
-  async recent(sessionId, limit = 100) {
-    const snap = await this.collSession(sessionId).orderBy('create_time', 'desc').limit(limit).get();
-    const items = snap.docs.map(d => d.data());
-    return items.reverse();
-  }
+  subscribeProject(onEvent,options={}){return this.subscribeCollection(this.projectCollection(),onEvent,options);}
+  replayProjectByUlid(id,limit=500){return this.replayFromId(this.projectCollection(),id,limit);}
+  replayProjectByTime(time,limit=500){return this.queryAfter(this.projectCollection(),time,limit);}
+  recentProject(limit=100){return this.queryRecent(this.projectCollection(),limit);}
+  subscribe(sessionId,onEvent,options={}){return this.subscribeCollection(this.sessionCollection(sessionId),onEvent,options);}
+  replayByUlid(sessionId,id,limit=500){return this.replayFromId(this.sessionCollection(sessionId),id,limit);}
+  replayByTime(sessionId,time,limit=500){return this.queryAfter(this.sessionCollection(sessionId),time,limit,{inclusive:true});}
+  recent(sessionId,limit=100){return this.queryRecent(this.sessionCollection(sessionId),limit);}
 }
 
-export function pickBackend(userId, projectId) {
-  // const kind = String(env('RELAY_BACKEND', 'memory')).toLowerCase();
-  // if (kind === 'firestore') return new FirestoreBackend();
-  // return new MemoryBackend();
-  return new FirestoreBackend(userId, projectId);
-}
+export function pickBackend(userId,projectId){return new DocumentEventBackend(userId,projectId);}

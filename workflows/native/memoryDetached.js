@@ -1,6 +1,6 @@
 // A memory-root workflow can launch an independent detached child. Unlike
 // in-memory parallel lanes, a detached workflow outlives its parent and
-// therefore has its *own* durable Firestore root record and GKE scheduling.
+// therefore has its *own* durable provider-neutral root record and GKE scheduling.
 // Keep the same pinned-id and replay contract as the durable launcher.
 import { createHash } from 'node:crypto';
 import { nativeAsyncSchedulerFor } from './worker.js';
@@ -18,11 +18,6 @@ export function createMemoryDetachedLauncher({
   }
 
   return async ({ name, args, path, effectId }) => {
-    // NativeDocumentStore M1 does not yet implement durable detached-root
-    // recovery after worker restart; reject before creating a child record.
-    if (process.env.AWFL_NATIVE_DOCUMENT_STORE_ENABLED === '1') {
-      throw new Error('detached children require durable storage support');
-    }
     if (typeof path !== 'string' || !path ||
         !/^[A-Za-z0-9_-]{1,120}$/.test(effectId || '') ||
         !args || !Object.hasOwn(args, 'argument')) {
@@ -58,7 +53,7 @@ export function createMemoryDetachedLauncher({
         asyncLaunch: true, input: args.argument,
       });
     } catch (error) {
-      if (error.code !== 'CONFLICT') throw error;
+      if (error.code !== 'CONFLICT' && error.code !== 'ALREADY_EXISTS') throw error;
       const existing = await store.get(childId);
       if (!existing || existing.userId !== userId ||
           existing.projectId !== projectId ||

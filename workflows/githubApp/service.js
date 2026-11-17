@@ -1,4 +1,4 @@
-import { getFirestore } from 'firebase-admin/firestore';
+import { credentialStorageDb } from '../../storage/legacyBridge.js';
 import { appJwt, githubAppConfigured, githubAppInstallUrl, oauthAuthorizeUrl, parseGithubRemote, newOAuthState } from './core.js';
 import { createHash } from 'node:crypto';
 
@@ -39,7 +39,8 @@ async function githubRequest(path, token, { method = 'GET', body, fetcher = fetc
   return response.json();
 }
 
-export async function getGithubAppStatus({ userId, projectId, db = getFirestore() }) {
+export async function getGithubAppStatus({ userId, projectId, db = null }) {
+  db ||= await credentialStorageDb();
   const project = await projectRef(db, userId, projectId).get();
   if (!project.exists) throw new Error('Project not found');
   const parsed = parseGithubRemote(project.data()?.remote);
@@ -56,7 +57,8 @@ export async function getGithubAppStatus({ userId, projectId, db = getFirestore(
   };
 }
 
-export async function beginGithubAppOAuth({ userId, projectId, db = getFirestore() }) {
+export async function beginGithubAppOAuth({ userId, projectId, db = null }) {
+  db ||= await credentialStorageDb();
   if (!githubAppConfigured()) throw new Error('GitHub App not configured');
   const project = await projectRef(db, userId, projectId).get();
   if (!project.exists) throw new Error('Project not found');
@@ -131,7 +133,8 @@ async function findAccessibleInstallation(userToken, targetFullName, { fetcher =
   return null;
 }
 
-export async function finishGithubAppOAuth({ state, code, db = getFirestore(), fetcher = fetch }) {
+export async function finishGithubAppOAuth({ state, code, db = null, fetcher = fetch }) {
+  db ||= await credentialStorageDb();
   const pending = await consumeState(state, db);
   if (!/^[A-Za-z0-9_-]{4,256}$/.test(code || '')) throw new Error('Authorization code missing');
   const project = await projectRef(db, pending.userId, pending.projectId).get();
@@ -155,7 +158,8 @@ export async function finishGithubAppOAuth({ state, code, db = getFirestore(), f
   return { projectId: pending.projectId, result: 'connected' };
 }
 
-export async function disconnectGithubApp({ userId, projectId, db = getFirestore() }) {
+export async function disconnectGithubApp({ userId, projectId, db = null }) {
+  db ||= await credentialStorageDb();
   const project = await projectRef(db, userId, projectId).get();
   if (!project.exists) throw new Error('Project not found');
   await linkRef(db, userId, projectId).delete();
@@ -163,7 +167,8 @@ export async function disconnectGithubApp({ userId, projectId, db = getFirestore
   return { ok: true };
 }
 
-export async function resolveGithubAppCredential({ userId, projectId, db = getFirestore(), fetcher = fetch }) {
+export async function resolveGithubAppCredential({ userId, projectId, db = null, fetcher = fetch }) {
+  db ||= await credentialStorageDb();
   if (!userId || !projectId) return null;
   const snap = await linkRef(db, userId, projectId).get();
   if (!snap.exists) return null;

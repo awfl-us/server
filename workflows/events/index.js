@@ -2,7 +2,7 @@ import express from 'express';
 import { normalizeEnvelope, parseBool, pickBackend } from './model.js';
 import { createSSEConnection } from './sse.js';
 import { metrics, incCounter } from './metrics.js';
-import { getFirestore } from 'firebase-admin/firestore';
+import { getDocumentStorage } from '../../storage/service.js';
 import { projectScopedCollectionPath } from '../userAuth.js';
 import cursorsRouter from './cursors.js';
 
@@ -123,15 +123,14 @@ router.get('/stream', async (req, res) => {
         return;
       }
 
-      const db = getFirestore();
+      const db = await getDocumentStorage();
       const wsPath = projectScopedCollectionPath(userId, req.projectId, `workspaces/${workspaceId}`);
-      const wsRef = db.doc(wsPath);
-      const wsSnap = await wsRef.get();
-      if (!wsSnap.exists) {
+      const wsSnap = await db.get(wsPath);
+      if (!wsSnap) {
         res.status(404).end('event: error\ndata: {"error":"workspace not found"}\n\n');
         return;
       }
-      const ws = wsSnap.data() || {};
+      const ws = wsSnap.data || {};
       const ttlMs = parseTtlMs(req.query || {});
       const cutoff = Date.now() - ttlMs;
       if (!ws.live_at || ws.live_at < cutoff) {
@@ -155,7 +154,7 @@ router.get('/stream', async (req, res) => {
         // Rate-limit to ~cadence; skip if we already wrote recently
         if (now - lastHeartbeatWriteAt < (heartbeatCadenceMs - 250)) return;
         try {
-          await wsRef.update({ live_at: now });
+          await db.update(wsPath, { live_at: now });
           lastHeartbeatWriteAt = now;
           incCounter('relay_workspace_heartbeat_writes_total');
         } catch (e) {
@@ -177,14 +176,15 @@ router.get('/stream', async (req, res) => {
       // Prepare initial replay for project scope
       let replayItems = [];
       let lastSeenTime = null;
-      // These comma return logic are wrong!
+      const replayLimit = Number(process.env.RELAY_REPLAY_LIMIT || 500);
       if (lastEventId) {
-        replayItems, lastSeenTime = await backend.replayProjectByUlid(lastEventId, Number(process.env.RELAY_REPLAY_LIMIT || 500));
+        replayItems = await backend.replayProjectByUlid(lastEventId, replayLimit);
       } else if (since_id) {
-        replayItems, lastSeenTime = await backend.replayProjectByUlid(since_id, Number(process.env.RELAY_REPLAY_LIMIT || 500));
+        replayItems = await backend.replayProjectByUlid(since_id, replayLimit);
       } else if (since_time) {
-        replayItems, lastSeenTime = await backend.replayProjectByTime(since_time, Number(process.env.RELAY_REPLAY_LIMIT || 500));
+        replayItems = await backend.replayProjectByTime(since_time, replayLimit);
       }
+      lastSeenTime = replayItems.at(-1)?.create_time ?? since_time;
 
       console.log("[events/stream] Last seen time: ", lastSeenTime, ", since_id: ", since_id, ", since_time: ", since_time)
       console.log("[events/stream] Replay items: ", JSON.stringify(replayItems))
