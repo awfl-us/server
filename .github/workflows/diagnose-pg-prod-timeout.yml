@@ -29,8 +29,7 @@ jobs:
               jq -c '[.metadata.name,.status.traffic,
                 [.spec.template.spec.containers[0].env[]? | select(.name == "AWFL_DOCUMENT_STORAGE_BACKEND")]]'
           done
-          gcloud sql instances describe awfl-native-storage-bench --project=awfl-us --format=json |
-            jq '{name, state, tier: .settings.tier, flags: .settings.databaseFlags, connectionName}'
+          echo 'Cloud SQL instance describe unavailable to deployer; SQL diagnostics run under runtime identity.'
           gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="api" AND timestamp>="2026-11-17T12:55:00Z" AND (severity>=WARNING OR textPayload:"timeout" OR textPayload:"pool" OR textPayload:"postgres")' --project=awfl-us --limit=400 --format=json > /tmp/api-logs.json
           python3 - <<'PY'
           import json,collections
@@ -59,6 +58,7 @@ jobs:
           for msg,n in c.most_common(20):print('JOBS_LOG',n,msg.replace('\n',' '))
           PY
   sql:
+    if: false # Original SQL diagnostic is already running; avoid duplicate Cloud Run job creation.
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
