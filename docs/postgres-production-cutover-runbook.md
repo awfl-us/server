@@ -1,10 +1,10 @@
 # AWFL PostgreSQL production cutover — operational runbook
 
-**Current state (November 16, 2026 ET):** The existing Cloud SQL instance
-awfl-native-storage-bench runs PostgreSQL 15 and contains the logical
-databases awfl_prod and awfl_bench. Production API, Jobs and native GKE still
-use Firestore; Firebase Auth and the explicitly separate MCP OAuth/workspace
-control plane remain in Firestore after cutover.
+**Current state (November 17, 2026 at 12:56 UTC):** The existing Cloud SQL instance
+awfl-native-storage-bench hosts logical databases awfl_prod and awfl_bench.
+Production API, Jobs and the GKE document provider now use PostgreSQL awfl_prod.
+Firebase Auth, MCP OAuth/workspace control plane, and the legacy native execution
+journal and callbacks intentionally remain in Firestore.
 
 ## Applied infrastructure
 
@@ -19,7 +19,7 @@ control plane remain in Firestore after cutover.
   TF_VAR_benchmark_user_email to its current Cloud SQL IAM username.
 - API/Jobs provider flags are in .github/actions-variables.json and the
   Cloud Run deployment workflow. Native GKE's flags are in
-  infra/native-execution/gke-native-jobs.tf and default to Firestore.
+  infra/native-execution/gke-native-jobs.tf and default to PostgreSQL.
 - The Cloud SQL Node connector provides automatic IAM authentication and
   bounded pools, with no separate always-on proxy service.
 
@@ -121,3 +121,32 @@ The script checks expected database, owner and table ownership, and grants
 only the existing AWFL data/stream tables plus default table privileges for
 future tables created by the same migration owner. Keep Auth and the MCP
 control-plane persistence in Firestore.
+
+## Production cutover completed — 2026-11-17 12:56 UTC
+
+The successful final differential sync examined **269,263 Firestore documents**
+across 30 collection groups, updating 326 records and finding 268,937
+unchanged and no extra SQL records. Live GKE native scheduler configuration
+was switched to the PostgreSQL document backend, but native memory execution
+stayed disabled (the legacy Firestore native journal and callbacks remain).
+
+Verified release (GitHub Actions run 44087709682):
+
+- API: **api-00214-qen**, 100% production traffic; PostgreSQL selected.
+- Jobs: **jobs-00221-jad**, 100% production traffic; PostgreSQL selected.
+- GKE: native-jobs deployment rolled out and ready with PostgreSQL selected
+  for documents and AWFL_NATIVE_DOCUMENT_STORE_ENABLED=0.
+- HTTPS: live /health returned 200; unauthenticated /mcp and /mcp/agents
+  returned expected OAuth/authentication 401, not maintenance 503.
+- AWFL live project-list tool successfully returned the real projects after
+  the cutover. Production SQL IAM grants and read/write canary were verified
+  prior to traffic promotion.
+
+Last-known-working Firestore rollback revisions are API **api-00207-9bd**
+and Jobs **jobs-00202-dh8**. The original Firestore data was not removed.
+This rollout's GKE environment update was performed by the authenticated
+GitHub deployer with its existing scoped Kubernetes permission; the Terraform
+desired default in this commit is synchronized to PostgreSQL. A future
+Terraform plan should be run with an identity that already has the remote
+state bucket permissions; do not widen the general GitHub deployer's access
+solely to operate state.
