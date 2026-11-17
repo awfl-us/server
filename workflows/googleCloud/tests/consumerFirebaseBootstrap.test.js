@@ -4,6 +4,7 @@ import express from 'express';
 import request from 'supertest';
 import { createHash } from 'node:crypto';
 import { createConsumerCredentialsRouter } from '../consumerRefresh.js';
+import { classifyK8sJob } from '../../../jobs/producer/jobStatus.js';
 
 const capability = 'a'.repeat(64);
 const consumerId = 'consumer-example';
@@ -12,7 +13,7 @@ const projectId = 'project-example';
 const jobName = 'consumer-consumer-example';
 
 function setup({ lock = null, grantConsumerId = consumerId, grantHash = createHash('sha256').update(capability).digest('hex'),
-  jobState = 'active', mintFailure = false } = {}) {
+  jobState = 'active', job = null, mintFailure = false } = {}) {
   const observed = { mintCalls: [], inspectedJobs: [], readProjects: [], google: 0 };
   const app = express();
   app.use(express.json());
@@ -24,7 +25,7 @@ function setup({ lock = null, grantConsumerId = consumerId, grantHash = createHa
     },
     inspectJob: async args => {
       observed.inspectedJobs.push(args);
-      return { state: jobState };
+      return { state: job ? classifyK8sJob(job) : jobState };
     },
     mintFirebase: async ({ uid }) => {
       observed.mintCalls.push(uid);
@@ -106,4 +107,25 @@ test('broker never exposes minting failures or secrets to caller', async () => {
 test('live job may bootstrap even while new pod is pending', async () => {
   const { call } = setup({jobState:'pending'});
   assert.equal((await call()).status,200);
+});
+
+test('evicted GKE Job may mint a new token while replacement pod is active', async () => {
+  const { call, observed } = setup({ job: {
+    status: { failed: 1, active: 1 },
+    spec: { backoffLimit: 3 },
+  } });
+  const res = await call();
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.deepEqual(observed.mintCalls, [userId]);
+});
+
+test('a genuinely failed GKE Job cannot mint a replacement token', async () => {
+  const { call, observed } = setup({ job: {
+    status: { failed: 4, active: 0, conditions: [
+      { type: 'Failed', status: 'True' },
+    ] },
+    spec: { backoffLimit: 3 },
+  } });
+  assert.equal((await call()).status, 403);
+  assert.deepEqual(observed.mintCalls, []);
 });
