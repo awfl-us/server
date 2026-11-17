@@ -17,7 +17,7 @@ export function createMemoryDetachedLauncher({
     throw new Error('trusted memory detached launch context required');
   }
 
-  return async ({ name, args, path, effectId }) => {
+  return async ({ name, args, path, effectId, identity: childIdentity = { userId, projectId } }) => {
     if (typeof path !== 'string' || !path ||
         !/^[A-Za-z0-9_-]{1,120}$/.test(effectId || '') ||
         !args || !Object.hasOwn(args, 'argument')) {
@@ -39,12 +39,16 @@ export function createMemoryDetachedLauncher({
 
     // Stable across restart/branch execution order. Unlike childCalls,
     // path contains the input-index and parent fork generation.
+    if (childIdentity.userId !== userId || !childIdentity.projectId) {
+      throw new Error('native detached child identity mismatch');
+    }
+    const childProjectId = childIdentity.projectId;
     const childId = 'native_' + createHash('sha256')
       .update(JSON.stringify([executionId, path, effectId, name]))
       .digest('hex').slice(0, 32);
     try {
       await store.create({
-        executionId: childId, userId, projectId,
+        executionId: childId, userId, projectId: childProjectId,
         workflowName: name, artifactSha256: release.sha256,
         protocolVersion: 2, allowedOperations: release.allowedOperations,
         ...(release.trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
@@ -56,7 +60,7 @@ export function createMemoryDetachedLauncher({
       if (error.code !== 'CONFLICT' && error.code !== 'ALREADY_EXISTS') throw error;
       const existing = await store.get(childId);
       if (!existing || existing.userId !== userId ||
-          existing.projectId !== projectId ||
+          existing.projectId !== childProjectId ||
           existing.workflowName !== name ||
           existing.artifactSha256 !== release.sha256 ||
           existing.protocolVersion !== 2 ||
@@ -70,7 +74,7 @@ export function createMemoryDetachedLauncher({
     if (typeof scheduler?.enqueue !== 'function') {
       throw new Error('native detached scheduler unavailable');
     }
-    scheduler.enqueue({ executionId: childId, userId, projectId });
+    scheduler.enqueue({ executionId: childId, userId, projectId: childProjectId });
     return { name: 'native/' + childId, state: 'ACTIVE' };
   };
 }

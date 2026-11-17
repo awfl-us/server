@@ -6,6 +6,7 @@ import { runNativeArtifact, buildNativeTrustedGlobals,
 import { tagNativeValue } from './executionStore.js';
 import { NativeConfirmedWorkflowFailure } from './effectErrors.js';
 import { createMemoryParallelScheduler, NativeMemoryParallelStopped } from './memoryParallel.js';
+import { resolveNativeProjectIdentity } from './projectScope.js';
 
 const NAME = /^[A-Za-z][A-Za-z0-9_-]{0,99}$/;
 const SLOT = /^s[0-9]+$/;
@@ -47,6 +48,7 @@ export function createNativeLocalRunner({
   releases, handlers, rootExecutionId, identity, profiler = null,
   runArtifact = runNativeArtifact, onProgress = () => {},
   runDetached = null,
+  getProjectStorage,
   gcpProject = process.env.GCP_PROJECT || process.env.GCLOUD_PROJECT,
   region = process.env.WORKFLOWS_LOCATION || 'us-central1',
 }) {
@@ -92,7 +94,15 @@ export function createNativeLocalRunner({
   async function run({ workflowName, release, artifact, input, executionId,
                         globals = null, depth = 0, path = 'root',
                         forkDepth = 0, initialContinuation = null,
-                        shouldStop = () => false }) {
+                        shouldStop = () => false, scopedIdentity = identity }) {
+    if (scopedIdentity?.userId !== identity.userId ||
+        !scopedIdentity.projectId) {
+      throw new Error('native child cannot change authenticated user');
+    }
+    // Even internal entrypoints must not accept an unverified project identity.
+    scopedIdentity = await resolveNativeProjectIdentity(identity, {
+      projectId: scopedIdentity.projectId, getStorage: getProjectStorage,
+    });
     if (closed || depth > MAX_DEPTH) throw new Error('native subworkflow depth limit reached');
     if (!NAME.test(workflowName || '') ||
         !Array.isArray(release.allowedOperations) ||
@@ -193,6 +203,7 @@ export function createNativeLocalRunner({
                           forkDepth: nextDepth, shouldStop: laneStopped }) =>
                 run({ workflowName, release, artifact, input,
                   executionId: laneId, globals, depth,
+                  scopedIdentity,
                   path: path + ':lane:' + laneId.slice(7),
                   forkDepth: nextDepth, shouldStop: laneStopped,
                   initialContinuation: { next_step: entry, slots, frames: [] },
@@ -202,17 +213,23 @@ export function createNativeLocalRunner({
           if (effect.operation !== 'workflow.run') {
             return parallel.withEffectPermit(() =>
               handlers[effect.operation]({
-                args: effect.args, identity,
+                args: effect.args, identity: scopedIdentity,
                 idempotencyKey: rootId + ':' + effectPath + ':' + effect.effect_id,
               }), shouldStop);
           }
           const name = checkedChildArgs(effect.args, gcpProject, region);
+          const env = effect.args.argument?.env;
+          const childIdentity = await resolveNativeProjectIdentity(scopedIdentity, {
+            projectId: env?.projectId, userId: env?.userId,
+            getStorage: getProjectStorage,
+          });
           if (effect.args.connector_params?.skip_polling === true) {
             if (typeof runDetached !== 'function') {
               throw new Error('memory detached scheduler unavailable');
             }
             return runDetached({
               name, args: effect.args, path: effectPath, effectId: effect.effect_id,
+              identity: childIdentity,
             });
           }
           if (++childCalls > MAX_CHILD_CALLS || depth >= MAX_DEPTH) {
@@ -230,6 +247,7 @@ export function createNativeLocalRunner({
           return run({
             workflowName: name, release: child, artifact: childArtifact,
             input: effect.args.argument, executionId: childId,
+            scopedIdentity: childIdentity,
             globals: childGlobals, depth: depth + 1,
             path: effectPath + ':call:' + effect.effect_id, forkDepth, shouldStop,
           });

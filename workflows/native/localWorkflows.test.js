@@ -194,6 +194,90 @@ test('recursive local workflow.run is bounded by depth and cannot schedule indef
   } finally { await runner.close(); }
 });
 
+test('benchmark ProjectManager child uses validated project for HTTP and callback effects', async () => {
+  const calls = [], checks = [];
+  const env = { userId: identity.userId, projectId: 'benchmark-temp' };
+  const root = { sha256: sha, allowedOperations: ['workflow.run'] };
+  const child = { sha256: childSha, protocolVersion: 2,
+    allowedOperations: ['http.post', 'callback.create'] };
+  const runner = createNativeLocalRunner({
+    identity, rootExecutionId: rootId,
+    gcpProject: 'awfl-us', region: 'us-central1',
+    getProjectStorage: async () => ({
+      get: async path => {
+        checks.push(path);
+        return path === 'users/owner/projects/benchmark-temp'
+          ? { data: { id: 'benchmark-temp' } } : null;
+      },
+    }),
+    releases: {
+      active: async () => child,
+      materialize: async () => ({
+        sha256: childSha, executable: '/test/agent', cleanup: async () => {},
+      }),
+    },
+    handlers: {
+      'http.post': async ({ identity: scoped }) => {
+        calls.push(['http.post', scoped]);
+        return { code: 200, body: { ok: true } };
+      },
+      'callback.create': async ({ identity: scoped }) => {
+        calls.push(['callback.create', scoped]);
+        return { url: 'https://jobs.example.org/jobs/native/callback/n123' };
+      },
+    },
+    runArtifact: async ({ executable, input }) => {
+      if (executable === '/test/agent') {
+        if (!input.continuation) return suspend('http.post',
+          { url: 'https://jobs.example.org/agents/session/update' });
+        if (input.continuation.next_step === 1) return {
+          ...suspend('callback.create', { http_callback_method: 'POST' }),
+          continuation: { next_step: 2, slots: {}, frames: [] },
+        };
+        return { protocol_version: 2, status: 'completed', result: 'done' };
+      }
+      if (!input.continuation) return suspend('workflow.run',
+        localArgs('ProjectManager', { env }));
+      return { protocol_version: 2, status: 'completed', result: 'done' };
+    },
+  });
+  try {
+    assert.equal(await runner.run({ workflowName: 'EvalParent',
+      release: root, artifact: { executable: '/test/eval', sha256: sha },
+      executionId: rootId, input: {} }), 'done');
+    assert.deepEqual(checks, [
+      'users/owner/projects/benchmark-temp',
+      'users/owner/projects/benchmark-temp',
+    ]);
+    assert.deepEqual(calls, [
+      ['http.post', { userId: 'owner', projectId: 'benchmark-temp' }],
+      ['callback.create', { userId: 'owner', projectId: 'benchmark-temp' }],
+    ]);
+  } finally { await runner.close(); }
+});
+
+test('unowned nested projects are rejected before any business effect', async () => {
+  let effects = 0;
+  const runner = createNativeLocalRunner({
+    identity, rootExecutionId: rootId,
+    gcpProject: 'awfl-us', region: 'us-central1',
+    getProjectStorage: async () => ({ get: async () => null }),
+    handlers: { 'http.post': async () => { effects++; } },
+    releases: {
+      active: async () => { throw Error('should not load a child release'); },
+    },
+    runArtifact: async () => suspend('workflow.run',
+      localArgs('ProjectManager', { env: { userId: 'owner', projectId: 'foreign' } })),
+  });
+  try {
+    await assert.rejects(runner.run({ workflowName: 'EvalParent',
+      release: { sha256: sha, allowedOperations: ['workflow.run'] },
+      artifact: { executable: '/test/eval', sha256: sha },
+      executionId: rootId, input: {} }), /not owned/);
+    assert.equal(effects, 0);
+  } finally { await runner.close(); }
+});
+
 const realParent = process.env.AWFL_NATIVE_LOCAL_PARENT_BINARY;
 const realChild = process.env.AWFL_NATIVE_LOCAL_CHILD_BINARY;
 const realLeaf = process.env.AWFL_NATIVE_LOCAL_LEAF_BINARY;
