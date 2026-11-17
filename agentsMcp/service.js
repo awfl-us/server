@@ -1,5 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { getFirestore } from 'firebase-admin/firestore';
+import { getDocumentStorage } from '../storage/service.js';
+import { selectedStorageBackend } from '../storage/factory.js';
+import { credentialStorageDb } from '../storage/legacyBridge.js';
 import { projectScopedCollectionPath, userScopedCollectionPath } from '../workflows/utils.js';
 import { sessionMapDocPath, loadFileDefinedAgents, resolveAgent, createAgentRecord, linkAgentSession } from '../workflows/agents/common.js';
 import { latestSessionExecutions } from '../workflows/exec/statusService.js';
@@ -67,18 +70,44 @@ function messageText(message) {
 }
 
 export class AgentSessionService {
-  constructor({ db = getFirestore(), execute = createWorkflowExecution,
+  constructor({ db, storage = null, execute = createWorkflowExecution,
     getStatuses = latestSessionExecutions, cancel = cancelExecutionChain } = {}) {
-    Object.assign(this, { db, execute, getStatuses, cancel });
+    this.injectedDb = Boolean(db);
+    Object.assign(this, { db: db || getFirestore(), storage, execute, getStatuses, cancel });
+  }
+  async dataDb() {
+    // Firestore test mocks and intentionally selected Firestore mode preserve
+    // their existing API. PostgreSQL uses Storage-backed snapshots/queries.
+    return this.injectedDb || selectedStorageBackend() === 'firestore'
+      ? this.db : credentialStorageDb();
+  }
+  async agentStorage() {
+    if (this.storage) return this.storage;
+    if (!this.injectedDb && selectedStorageBackend() === 'postgres') return getDocumentStorage();
+    // Preserve the injectible Firestore-shaped test/legacy API while shared
+    // agent functions now use the provider-neutral get/create/put contract.
+    const db = this.db;
+    return {
+      get: async path => {
+        const snap = await db.doc(path).get();
+        return snap.exists ? { path, data: snap.data() } : null;
+      },
+      create: async (path, value) => {
+        const doc = db.doc(path);
+        return typeof doc.create === 'function' ? doc.create(value) : doc.set(value);
+      },
+      put: (path, value, options) => db.doc(path).set(value, options),
+      delete: path => db.doc(path).delete(),
+    };
   }
   async ensureProject(userId, projectId) {
     if (!projectId) throw new Error('project_id is required');
-    const project = await this.db.doc(userScopedCollectionPath(userId, `projects/${projectId}`)).get();
+    const project = await (await this.dataDb()).doc(userScopedCollectionPath(userId, `projects/${projectId}`)).get();
     if (!project.exists) throw new Error('Project not found');
     return project.data() || {};
   }
   async listAgents(userId, { first = 50 } = {}) {
-    const snapshot = await this.db.collection(userScopedCollectionPath(userId, 'agents'))
+    const snapshot = await (await this.dataDb()).collection(userScopedCollectionPath(userId, 'agents'))
       .orderBy('created', 'desc').limit(first).get();
     const found = new Map(snapshot.docs.map(doc => [doc.id, { ...doc.data(), id: doc.id }]));
     for (const agent of await loadFileDefinedAgents()) if (!found.has(agent.id)) found.set(agent.id, agent);
@@ -88,14 +117,14 @@ export class AgentSessionService {
     await this.ensureProject(userId, project_id);
     const offset = parseCursor(after);
     const collection = projectScopedCollectionPath(userId, project_id, 'convo.sessions');
-    const docs = await this.db.collection(collection).orderBy('update_time', 'desc')
+    const docs = await (await this.dataDb()).collection(collection).orderBy('update_time', 'desc')
       .offset(offset).limit(first + 1).get();
     return { project_id, ...page(docs.docs.map(mapSession), offset, first, 'sessions') };
   }
   async sessionRecord(userId, projectId, sessionId) {
     const [session, mapping] = await Promise.all([
-      this.db.doc(projectScopedCollectionPath(userId, projectId, `convo.sessions/${sessionId}`)).get(),
-      this.db.doc(sessionMapDocPath(userId, projectId, sessionId)).get(),
+      (await this.dataDb()).doc(projectScopedCollectionPath(userId, projectId, `convo.sessions/${sessionId}`)).get(),
+      (await this.dataDb()).doc(sessionMapDocPath(userId, projectId, sessionId)).get(),
     ]);
     if (!session.exists && !mapping.exists) throw new Error('Session not found');
     return { session, mapping, agentId: mapping.exists ? mapping.data().agentId : null };
@@ -103,8 +132,8 @@ export class AgentSessionService {
   async getSession(userId, { project_id, session_id }) {
     await this.ensureProject(userId, project_id);
     const { session, agentId } = await this.sessionRecord(userId, project_id, session_id);
-    const executions = await this.getStatuses({ db: this.db, userId, projectId: project_id, sessionId: session_id, limit: 1 });
-    let agent = agentId ? await resolveAgent(userId, agentId, this.db) : null;
+    const executions = await this.getStatuses({ db: await this.dataDb(), userId, projectId: project_id, sessionId: session_id, limit: 1 });
+    let agent = agentId ? await resolveAgent(userId, agentId, await this.agentStorage()) : null;
     return {
       project_id, session_id, session: session.exists ? mapSession(session) : null,
       agent_id: agentId, agent_name: agent?.name ?? null, workflow_name: agent?.workflowName ?? null,
@@ -117,7 +146,7 @@ export class AgentSessionService {
     await this.sessionRecord(userId, project_id, session_id);
     const offset = parseCursor(after);
     const path = projectScopedCollectionPath(userId, project_id, `convo.sessions/${session_id}/messages`);
-    const snapshot = await this.db.collection(path).orderBy('create_time', 'asc')
+    const snapshot = await (await this.dataDb()).collection(path).orderBy('create_time', 'asc')
       .offset(offset).limit(first + 1).get();
     return { session_id, ...page(snapshot.docs.map(mapMessage), offset, first, 'messages') };
   }
@@ -133,7 +162,7 @@ export class AgentSessionService {
     let agentId = agent_id, newlyCreatedAgent = null;
     if (!agentId && !workflow_name) throw new Error('agent_id or workflow_name is required');
     if (agentId) {
-      const agent = await resolveAgent(userId, agentId, this.db);
+      const agent = await resolveAgent(userId, agentId, await this.agentStorage());
       if (!agent?.workflowName) throw new Error('Agent not found or has no workflowName');
       if (workflow_name && workflow_name !== agent.workflowName) throw new Error('Agent workflow mismatch');
       workflow_name = agent.workflowName;
@@ -141,11 +170,11 @@ export class AgentSessionService {
       // Same pattern as the new-session UI: create a workflow-backed agent
       // and persist its mapping before launching the workflow.
       newlyCreatedAgent = await createAgentRecord(userId,
-        { name: workflow_name, workflowName: workflow_name }, this.db);
+        { name: workflow_name, workflowName: workflow_name }, await this.agentStorage());
       agentId = newlyCreatedAgent.id;
     }
     const sessionId = randomUUID();
-    const mapping = await linkAgentSession(userId, project_id, sessionId, agentId, this.db);
+    const mapping = await linkAgentSession(userId, project_id, sessionId, agentId, await this.agentStorage());
     if (!mapping) throw new Error('Unable to link session to agent');
     try {
       const { executionName } = await this.execute({
@@ -158,7 +187,7 @@ export class AgentSessionService {
     } catch (error) {
       // Session never launched; discard just-created mapping. Preserve
       // registered agents (as the web UI does) for future reuse.
-      await this.db.doc(sessionMapDocPath(userId, project_id, sessionId)).delete().catch(() => {});
+      await (await this.agentStorage()).delete(sessionMapDocPath(userId, project_id, sessionId)).catch(() => {});
       throw error;
     }
   }
@@ -167,7 +196,7 @@ export class AgentSessionService {
     await this.ensureProject(userId, project_id);
     const { agentId } = await this.sessionRecord(userId, project_id, session_id);
     if (!agentId) throw new Error('Session has no linked agent');
-    const agent = await resolveAgent(userId, agentId, this.db);
+    const agent = await resolveAgent(userId, agentId, await this.agentStorage());
     if (!agent?.workflowName) throw new Error('Linked agent or workflow unavailable');
     const { executionName } = await this.execute({
       userId, projectId: project_id, workflowName: agent.workflowName,
