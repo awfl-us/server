@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   createNativeCallbackEffects, nativeCallbackIdFromUrl,
   registerNativeCallback, recordNativeCallbackDelivery,
+  nativeCallbacksUseLegacyFirestore,
 } from './callbackEffects.js';
 
 const origin = 'https://jobs.example.org';
@@ -154,4 +155,20 @@ test('existing Jobs callback route records one delivery; duplicate is idempotent
   await assert.rejects(recordNativeCallbackDelivery({
     db, ref, body, identity: { ...identity, projectId: 'other' },
   }), /inaccessible/);
+});
+
+
+test('native callbacks keep Firestore root provenance during the PostgreSQL CRUD transition', () => {
+  assert.equal(nativeCallbacksUseLegacyFirestore({
+    AWFL_DOCUMENT_STORAGE_BACKEND:'postgres',
+    AWFL_NATIVE_DOCUMENT_STORE_ENABLED:'0',
+  }), true);
+  assert.equal(nativeCallbacksUseLegacyFirestore({
+    AWFL_DOCUMENT_STORAGE_BACKEND:'firestore',
+    AWFL_NATIVE_DOCUMENT_STORE_ENABLED:'0',
+  }), true);
+  assert.equal(nativeCallbacksUseLegacyFirestore({
+    AWFL_DOCUMENT_STORAGE_BACKEND:'postgres',
+    AWFL_NATIVE_DOCUMENT_STORE_ENABLED:'1',
+  }), false);
 });

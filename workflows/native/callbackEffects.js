@@ -9,6 +9,13 @@ const EXECUTION = /^native_[a-f0-9]{32}$/;
 const MAX_WAIT_MS = 25 * 60 * 1000; // below Cloud Tasks' 30-minute deadline
 const CALLBACK_PATH = '/jobs/native/callback/';
 
+// Keep all callbacks for existing Firestore native roots in the same journal
+// until those roots drain. Other Jobs CRUD records may switch to PostgreSQL
+// independently, but a single native root must never split its data plane.
+export function nativeCallbacksUseLegacyFirestore(env = process.env) {
+  return env.AWFL_NATIVE_DOCUMENT_STORE_ENABLED !== '1';
+}
+
 function scope(identity) {
   if (!identity || typeof identity.userId !== 'string' ||
       !identity.userId || identity.userId.includes('/') ||

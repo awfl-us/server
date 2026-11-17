@@ -9,6 +9,7 @@ on:
       - 'scripts/benchmarks/**'
       - 'scripts/migrations/**'
       - 'infra/storage-benchmark/**'
+      - 'infra/native-execution/**'
       - '.github/workflows/test-storage-pilot.yml'
   pull_request:
     paths:
@@ -18,6 +19,7 @@ on:
       - 'scripts/benchmarks/**'
       - 'scripts/migrations/**'
       - 'infra/storage-benchmark/**'
+      - 'infra/native-execution/**'
       - '.github/workflows/test-storage-pilot.yml'
   workflow_dispatch: {}
 permissions:
@@ -52,6 +54,8 @@ jobs:
         run: node --test --test-concurrency=1 test/storage/*.test.mjs
       - name: Test finite Firestore migration codecs and missing-parent traversal
         run: python3 -m unittest discover -s scripts/migrations -p '*_test.py' -v
+      - name: Verify native callback backend ownership during staged cutover
+        run: node --test workflows/native/callbackEffects.test.js
       - name: Benchmark old global-cursor vs scoped-streams on same PostgreSQL service
         env:
           PGTEST_URL: postgres://benchmark-ci:benchmark-ci@127.0.0.1:5432/benchmark_ci
@@ -66,6 +70,13 @@ jobs:
           terraform_version: '1.13.5'
       - name: Validate benchmark Terraform (no credentials or state access required)
         working-directory: infra/storage-benchmark
+        run: |
+          terraform fmt -check
+          terraform init -backend=false -input=false
+          terraform validate
+
+      - name: Validate native GKE scheduler Terraform with provider selections
+        working-directory: infra/native-execution
         run: |
           terraform fmt -check
           terraform init -backend=false -input=false

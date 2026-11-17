@@ -1,8 +1,10 @@
 import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { getDocumentStorage } from '../../storage/service.js';
+import { getFirestore } from 'firebase-admin/firestore';
 import { userScopedCollectionPath } from '../../workflows/utils.js';
-import { nativeCallbackIdFromUrl, registerNativeCallback } from '../../workflows/native/callbackEffects.js';
+import { nativeCallbackIdFromUrl, registerNativeCallback,
+  nativeCallbacksUseLegacyFirestore } from '../../workflows/native/callbackEffects.js';
 
 const router = express.Router();
 router.use(express.json());
@@ -40,7 +42,10 @@ router.post('/', async (req, res) => {
     if (nativeId) {
       try {
         const existing = await registerNativeCallback({
-          storage: documents, callbackUrl: callback_url,
+          ...(nativeCallbacksUseLegacyFirestore()
+            ? { db: getFirestore() }
+            : { storage: documents }),
+          callbackUrl: callback_url,
           jobsOrigin: process.env.AWFL_NATIVE_JOBS_URL,
           identity: { userId, projectId: req.projectId },
         });

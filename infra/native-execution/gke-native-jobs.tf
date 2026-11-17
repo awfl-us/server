@@ -12,6 +12,25 @@ variable "native_jobs_image" {
   }
 }
 
+# Keep native execution on its original Firestore journal while existing
+# legacy roots drain. Document-provider cutover is an explicit second flag.
+# Terraform owns both values; do not patch the GKE Deployment by hand.
+variable "native_jobs_document_backend" {
+  type        = string
+  description = "Shared Jobs document provider: firestore or postgres"
+  default     = "firestore"
+  validation {
+    condition     = contains(["firestore", "postgres"], var.native_jobs_document_backend)
+    error_message = "native_jobs_document_backend must be firestore or postgres"
+  }
+}
+
+variable "native_jobs_document_store_enabled" {
+  type        = bool
+  description = "Enable provider-neutral native-memory execution after legacy roots drain"
+  default     = false
+}
+
 data "google_client_config" "native_scheduler" {}
 
 data "google_container_cluster" "native_scheduler" {
@@ -153,11 +172,11 @@ resource "kubernetes_deployment_v1" "native_scheduler" {
           # Backend stays Firestore until data migration/recovery tests pass.
           env {
             name  = "AWFL_DOCUMENT_STORAGE_BACKEND"
-            value = "firestore"
+            value = var.native_jobs_document_backend
           }
           env {
             name  = "AWFL_NATIVE_DOCUMENT_STORE_ENABLED"
-            value = "0"
+            value = var.native_jobs_document_store_enabled ? "1" : "0"
           }
           env {
             name  = "AWFL_CLOUD_SQL_INSTANCE"

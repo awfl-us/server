@@ -61,3 +61,27 @@ gcloud sql users list --instance awfl-native-storage-bench --project=awfl-us
 --filter=type=CLOUD_IAM_USER --format=value(name).
 Confirm the plan has zero deletions before applying. A verified safe plan
 was applied with 4 additions, 1 in-place Cloud SQL change, and 0 destroys.
+
+## Later migration checkpoint (supersedes the historical pre-change audit)
+
+The original sections above describe a pre-change snapshot. In subsequent
+work, main was merged to the feature branch in commit 3e7a226, all four
+GitHub test workflows passed, and safe SQL Terraform was applied:
+four additions, one in-place SQL update, zero deletions.
+The logical production database awfl_prod is provisioned on the existing
+SQL instance with IAM, backups, PITR, disk auto-growth and deletion protection.
+Production services are **still on Firestore**, not yet switched.
+
+An optimized collection-group importer, discoverer and verifier is now in
+scripts/migrations/firestore_group_migration.py and supersedes the slow
+per-document REST inventory. Full read-only inventory: 30 collection groups,
+266,250 documents, eight JSON-compatible value kinds. Five immutable
+benchmark documents passed actual SQL copy/verify with zero mismatches.
+Bulk staging copy is underway. Final source-drained sync/verify is mandatory
+before traffic cutover. See postgres-production-cutover-runbook.md.
+
+Existing native callback records stay in their original Firestore journal
+until the native document-store flag is enabled after draining legacy roots;
+the PG document migration must not split one root's state and callbacks.
+Firestore will remain available for Firebase Auth, MCP control-plane
+records and legacy execution history.

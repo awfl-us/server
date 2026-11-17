@@ -13,6 +13,7 @@ import { runNativeWorkflow, nativeAsyncSchedulerFor } from '../workflows/native/
 import { runNativeMemoryWorkflow, nativeMemoryAsyncSchedulerFor } from '../workflows/native/memoryWorker.js';
 import { createNativeProfiler } from '../workflows/native/profiler.js';
 import { configuredNativeMemoryStore, nativeDocumentStoreEnabled } from '../storage/nativeMemory.js';
+import { nativeCallbacksUseLegacyFirestore } from '../workflows/native/callbackEffects.js';
 
 // Shared only by requests executing in the same trusted Jobs process.
 // GCS mappings remain authoritative and digest verification is repeated.
@@ -56,7 +57,10 @@ export function createNativeJobsRouter({
       });
       const nativeHandlers = handlers || createJobsEffectHandlers({
         jobsOrigin: process.env.AWFL_NATIVE_JOBS_URL,
-        profiler, storage: new Storage(), callbackStorage: await getDocumentStorage(),
+        profiler, storage: new Storage(),
+        ...(nativeCallbacksUseLegacyFirestore()
+          ? { callbackDb: getFirestore() }
+          : { callbackStorage: await getDocumentStorage() }),
       });
       const span = trace.getActiveSpan();
       if (span?.isRecording()) {
