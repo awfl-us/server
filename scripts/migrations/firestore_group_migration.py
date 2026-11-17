@@ -179,6 +179,9 @@ def migrate_group(reader, group, mode, db=None, page_size=400,
     checksum=hashlib.sha256()
     queued=[]
     errors=0
+    absent=0
+    changed_since_copy=0
+    equal_timestamp_mismatch=0
     changed=0
     unchanged=0
     fenced=0
@@ -212,7 +215,16 @@ def migrate_group(reader, group, mode, db=None, page_size=400,
             if cutover_at and target and target[1]>=cutover_at:
                 fenced+=1
             elif mode=='verify':
-                if target is None or target[0]!=source_hash:errors+=1
+                if target is None:
+                    errors+=1
+                    absent+=1
+                elif target[0]!=source_hash:
+                    errors+=1
+                    source_updated_at=parse_cutover_timestamp(doc.get('updateTime'))
+                    if source_updated_at and source_updated_at>target[1]:
+                        changed_since_copy+=1
+                    else:
+                        equal_timestamp_mismatch+=1
             elif target and target[0]==source_hash:
                 unchanged+=1
             else:
@@ -231,7 +243,9 @@ def migrate_group(reader, group, mode, db=None, page_size=400,
     if mode=='verify':errors+=extras
     record={'group':group,'count':num,'digest':checksum.hexdigest(),
         'value_types':dict(sorted(kinds.items()))}
-    if mode=='verify':record.update(mismatched=errors,fenced=fenced,extras=extras)
+    if mode=='verify':record.update(mismatched=errors,fenced=fenced,extras=extras,
+        absent=absent,source_updated_since_copy=changed_since_copy,
+        unresolved_data_mismatch=equal_timestamp_mismatch)
     if mode=='sync':record.update(changed=changed,unchanged=unchanged,
         fenced=fenced,extras=extras)
     return record

@@ -114,4 +114,24 @@ class SQLFenceTests(unittest.TestCase):
         b=m.migrate_group(src,'messages','verify',DB(older),
             page_size=1,cutover_at=cutoff)
         self.assertEqual((b['mismatched'],b['fenced']),(1,0))
+        self.assertEqual(b['unresolved_data_mismatch'],1)
+        self.assertEqual(b['source_updated_since_copy'],0)
+
+    def test_verify_classifies_live_source_drift_separately_from_missing_sql(self):
+        path='users/u/projects/p/convo.sessions/s/messages/a'
+        reader=FakeReader([path])
+        class Cursor:
+            def __enter__(self):return self
+            def __exit__(self,*args):return False
+            def execute(self,*args):pass
+            def __iter__(self):
+                return iter([(path,{'count':999},
+                    m.parse_cutover_timestamp('2026-10-31T23:00:00Z'))])
+        class DB:
+            def cursor(self,**kwargs):return Cursor()
+        record=m.migrate_group(reader,'messages','verify',DB(),page_size=1)
+        self.assertEqual(record['mismatched'],1)
+        self.assertEqual(record['source_updated_since_copy'],1)
+        self.assertEqual(record['unresolved_data_mismatch'],0)
+        self.assertEqual(record['absent'],0)
 if __name__=='__main__':unittest.main()
