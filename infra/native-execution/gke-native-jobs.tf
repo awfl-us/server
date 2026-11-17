@@ -18,7 +18,7 @@ variable "native_jobs_image" {
 variable "native_jobs_document_backend" {
   type        = string
   description = "Shared Jobs document provider: firestore or postgres"
-  default     = "postgres"
+  default     = "firestore"
   validation {
     condition     = contains(["firestore", "postgres"], var.native_jobs_document_backend)
     error_message = "native_jobs_document_backend must be firestore or postgres"
