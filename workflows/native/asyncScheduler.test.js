@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createNativeAsyncScheduler } from './asyncScheduler.js';
+import { createNativeAsyncScheduler, needsNativeEffectReconciliation } from './asyncScheduler.js';
 
 const a = 'native_' + 'a'.repeat(32);
 const b = 'native_' + 'b'.repeat(32);
@@ -75,4 +75,51 @@ test('no unobserved rejection when a detached execution fails, and queue continu
   assert.deepEqual(failures, ['simulated transient child failure']);
   assert.deepEqual(successes, [b]);
   await scheduler.close();
+});
+
+test('recovery prioritizes new ready children over more than 100 stale HTTP intents', async () => {
+  const calls = [];
+  let requestedLimit;
+  const now = Date.now();
+  const stale = Array.from({length: 130}, (_, i) => ({
+    executionId: 'native_' + String(i).padStart(32, '0'),
+    ...owner, asyncLaunch: true, status: 'waiting_effect',
+    epoch: 13, owner: 'expired', leaseUntil: now - 20_000,
+    updatedAt: now - 1000,
+    pendingEffect: {operation: 'http.post', preparedAt: now - 60_000},
+  }));
+  const scheduler = createNativeAsyncScheduler({
+    store: {
+      get: async () => null,
+      listPendingAsync: async limit => {
+        requestedLimit = limit;
+        return [...stale, {executionId: a, ...owner, asyncLaunch: true,
+          status: 'ready', epoch: 0, owner: null, leaseUntil: 0}];
+      },
+    },
+    execute: async request => { calls.push(request.executionId); },
+  });
+  await scheduler.scan();
+  await scheduler.drain();
+  assert.equal(requestedLimit, 500);
+  assert.deepEqual(calls, [a], 'stale network requests cannot starve a new child');
+  await scheduler.close();
+});
+
+test('only old unresolved remote intents are quarantined', () => {
+  const now = Date.now();
+  const base = {status: 'waiting_effect', updatedAt: now,
+    pendingEffect: {operation: 'http.post', preparedAt: now - 3000}};
+  assert.equal(needsNativeEffectReconciliation({...base, epoch: 1}), false,
+    'first claimed HTTP effect remains dispatchable');
+  assert.equal(needsNativeEffectReconciliation({...base, epoch: 2}), true,
+    'reclaimed unjournaled HTTP effects need reconciliation');
+  assert.equal(needsNativeEffectReconciliation({...base, epoch: 2,
+    pendingEffect: {operation: 'native.parallel', preparedAt: now - 3000}}), false,
+    'native.parallel has a deterministic reconciliation handler');
+  assert.equal(needsNativeEffectReconciliation({...base, epoch: 2,
+    pendingEffect: {operation: 'log.write', preparedAt: now - 3000}}), false);
+  assert.equal(needsNativeEffectReconciliation({...base, epoch: 2,
+    updatedAt: now - 6000}), false,
+    'an effect prepared after the last update is not stale');
 });

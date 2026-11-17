@@ -4,6 +4,24 @@
 // The existing execution store fences racing consumers and external effects.
 const EXEC_ID = /^native_[a-f0-9]{32}$/;
 const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
+// The worker has no reconciliation handler for these operations. Once a
+// prepared remote intent has survived a lease takeover, calling it again
+// could duplicate an external side effect. Leave it pending for explicit
+// reconciliation, but do not consume recovery worker capacity indefinitely.
+const UNRECONCILABLE = new Set([
+  'http.get', 'http.post', 'http.patch', 'http.delete',
+  'workflow.run', 'callback.create', 'callback.await', 'storage.object_get',
+]);
+
+export function needsNativeEffectReconciliation(state) {
+  const intent = state?.pendingEffect;
+  return state?.status === 'waiting_effect' &&
+    UNRECONCILABLE.has(intent?.operation) &&
+    Number(state.epoch) > 1 &&
+    Number.isFinite(Number(intent?.preparedAt)) &&
+    Number.isFinite(Number(state.updatedAt)) &&
+    Number(intent.preparedAt) < Number(state.updatedAt);
+}
 
 export function createNativeAsyncScheduler({
   store, execute, concurrency = 4, pollIntervalMs = 15_000,
@@ -50,11 +68,18 @@ export function createNativeAsyncScheduler({
     if (closed || scanning || !store.listPendingAsync) return;
     scanning = true;
     try {
-      const states = await store.listPendingAsync(100);
+      // The first 100 documents can all be old, unreconcilable HTTP effects.
+      // Read the store's bounded 500-record scan and give recoverable "ready"
+      // launches priority, including those created after the stale records.
+      const states = await store.listPendingAsync(500);
       const now = Date.now();
-      for (const state of states) {
-        if (!state.asyncLaunch || TERMINAL.has(state.status) ||
-            (state.owner && state.leaseUntil > now)) continue;
+      const eligible = states.filter(state =>
+        state.asyncLaunch && !TERMINAL.has(state.status) &&
+        !(state.owner && state.leaseUntil > now) &&
+        !needsNativeEffectReconciliation(state));
+      eligible.sort((a, b) =>
+        Number(b.status === 'ready') - Number(a.status === 'ready'));
+      for (const state of eligible) {
         enqueue({ executionId: state.executionId,
           userId: state.userId, projectId: state.projectId });
       }
