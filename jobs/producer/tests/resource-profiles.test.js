@@ -9,11 +9,11 @@ test('Autopilot admission must not reduce ephemeral-storage limits', () => {
   }
 });
 
-test('lightweight keeps low-cost storage while browser and Scala get working space', () => {
-  assert.equal(consumerResourcesForProfile('lightweight').requests['ephemeral-storage'], '1Gi');
-  assert.equal(consumerResourcesForProfile('browser').requests['ephemeral-storage'], '2Gi');
+test('every consumer profile has sufficient per-pod ephemeral storage', () => {
+  assert.equal(consumerResourcesForProfile('lightweight').requests['ephemeral-storage'], '4Gi');
+  assert.equal(consumerResourcesForProfile('browser').requests['ephemeral-storage'], '4Gi');
   assert.equal(consumerResourcesForProfile('scala').requests['ephemeral-storage'], '4Gi');
-  assert.equal(consumerResourcesForProfile(null).requests['ephemeral-storage'], '2Gi');
+  assert.equal(consumerResourcesForProfile(null).requests['ephemeral-storage'], '4Gi');
 });
 
 test('existing per-profile CPU and memory settings are unchanged', () => {
@@ -21,9 +21,9 @@ test('existing per-profile CPU and memory settings are unchanged', () => {
     cpu: '1', memory: '2Gi', 'ephemeral-storage': '4Gi',
   });
   assert.deepEqual(consumerResourcesForProfile('lightweight').requests, {
-    cpu: '250m', memory: '1Gi', 'ephemeral-storage': '1Gi',
+    cpu: '250m', memory: '1Gi', 'ephemeral-storage': '4Gi',
   });
   assert.deepEqual(consumerResourcesForProfile('browser').requests, {
-    cpu: '500m', memory: '1536Mi', 'ephemeral-storage': '2Gi',
+    cpu: '500m', memory: '1536Mi', 'ephemeral-storage': '4Gi',
   });
 });
