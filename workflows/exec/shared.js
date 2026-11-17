@@ -14,7 +14,12 @@ export const toSeconds = (v) => {
   if (v instanceof Timestamp) return v.seconds;
   if (typeof v === 'number') return v;
   const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
+  if (Number.isFinite(n)) return n;
+  if (typeof v === 'string') {
+    const iso = Date.parse(v);
+    if (Number.isFinite(iso)) return iso / 1000;
+  }
+  return 0;
 };
 
 // Ensure workflow name matches execution naming used by /workflows/execute

@@ -29,3 +29,35 @@ The GKE cloud consumer terminated during a multi-test command. One real Python H
 7. Only then instrument every provider-neutral Storage call and run the production end-to-end latency analysis described in the handoff. Local median native-store ~9× improvement **is not** a full Jobs database timing comparison.
 
 No production infrastructure or backend setting was changed by this audit.
+
+## Finite migration implementation (new checkpoint)
+
+- A one-time Firestore REST traversal script is in
+  scripts/migrations/firestore_to_postgres.py, with inventory, explicit schema
+  initialization on an empty PostgreSQL database, copy and verify modes.
+  It enumerates missing parent documents (two virtual users observed), all
+  nested project/session collections, and explicitly excludes the separate MCP
+  OAuth/workspace control plane and legacy durable native journals.
+- Migration comparisons use stable document paths and JSON digests. The codec
+  converts timestamps to ISO strings, rejects unsafe integers, nonfinite floats,
+  and unreviewed bytes/reference/GeoPoint types rather than silently losing
+  information. Values/credentials are never included in inventory logs.
+- The script is not an ongoing dual-writer. For the final import, quiesce
+  Firestore writes, preserve old database/archive access, initialize SQL schema
+  explicitly, copy, verify, then switch API/Jobs/persistent GKE as a unit.
+  Avoid rerunning the insert-only copy after application traffic is on PG.
+- Database infrastructure has been applied from the existing
+  infra/storage-benchmark Terraform GCS state: four additions, one in-place
+  update, zero deletions. This created awfl_prod and runtime IAM access,
+  enabled backups/PITR/disk auto-growth and deletion protection. It did
+  **not** change API/Jobs backend selection; those remain Firestore.
+
+**Terraform state safety:** Always supply the existing Cloud SQL human IAM
+user when planning/applying the storage-benchmark Terraform root, or its
+existing SQL user and two IAM grants would be scheduled for deletion.
+The variable is required rather than defaulting to empty.
+Populate TF_VAR_benchmark_user_email from:
+gcloud sql users list --instance awfl-native-storage-bench --project=awfl-us
+--filter=type=CLOUD_IAM_USER --format=value(name).
+Confirm the plan has zero deletions before applying. A verified safe plan
+was applied with 4 additions, 1 in-place Cloud SQL change, and 0 destroys.

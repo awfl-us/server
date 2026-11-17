@@ -13,9 +13,13 @@ class CompatDocument {
     this.id=path.split('/').at(-1);
   }
   collection(name) { return new CompatCollection(this.storage,this.path+'/'+name); }
+  async listCollections() {
+    return (await this.storage.listCollections(this.path)).map(id=>({id}));
+  }
   async get() {
     const doc=await this.storage.get(this.path);
-    return {exists:!!doc,id:this.id,ref:this,data:()=>doc?.data};
+    return {exists:!!doc,id:this.id,ref:this,data:()=>doc?.data,
+      get:field=>field.split('.').reduce((value,key)=>value?.[key],doc?.data)};
   }
   async create(data) { return this.storage.create(this.path,json(data)); }
   async set(data,{merge=false}={}) { return this.storage.put(this.path,json(data),{merge}); }
@@ -75,8 +79,10 @@ class CompatQuery {
     const selected=docs.slice(this.skip,need).map(doc=>({
       id:doc.id,exists:true,ref:new CompatDocument(this.storage,doc.path),
       data:()=>json(doc.data),
+      get:field=>field.split('.').reduce((value,key)=>value?.[key],doc.data),
     }));
-    return {docs:selected,empty:selected.length===0,size:selected.length};
+    return {docs:selected,empty:selected.length===0,size:selected.length,
+      forEach:callback=>selected.forEach(callback)};
   }
   count() {
     return {get:async()=>{
@@ -123,4 +129,22 @@ export async function credentialStorageDb(){
     .then(({getDocumentStorage})=>getDocumentStorage())
     .then(storage=>new StorageCompatFirestore(storage));
   return singleton;
+}
+
+// Synchronous Firestore-shaped facade for older Express route modules. The
+// underlying Storage is resolved lazily, so imports never open extra SQL pools
+// or add an HTTP hop; Firebase Auth and MCP control-plane retain real Firestore.
+const lazilyResolvedStorage = Object.freeze(Object.fromEntries(
+  ['get','create','put','update','delete','query','count','listCollections','transaction']
+    .map(method=>[method,async(...args)=>{
+      const {getDocumentStorage}=await import('./service.js');
+      return (await getDocumentStorage())[method](...args);
+    }]),
+));
+let compatForRoutes;
+export function providerDocumentDb(firestoreFactory) {
+  if (typeof firestoreFactory!=='function') throw new TypeError('Firestore factory required');
+  if ((process.env.AWFL_DOCUMENT_STORAGE_BACKEND||'firestore')!=='postgres')
+    return firestoreFactory();
+  return compatForRoutes ||= new StorageCompatFirestore(lazilyResolvedStorage);
 }

@@ -28,8 +28,12 @@ variable "runtime_service_account" {
 }
 variable "benchmark_user_email" {
   type        = string
-  description = "Optional Google account permitted to connect via Cloud SQL IAM authentication"
-  default     = ""
+  description = "Existing human IAM database user (required to preserve prior Terraform state)"
+  nullable    = false
+  validation {
+    condition     = can(regex("^[^@]+@[^@]+$", var.benchmark_user_email))
+    error_message = "Supply the existing Cloud SQL IAM_USER email via TF_VAR_benchmark_user_email."
+  }
 }
 
 provider "google" {
