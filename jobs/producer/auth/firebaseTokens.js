@@ -74,14 +74,20 @@ function getTokenApp() {
   return tokenApp;
 }
 
+
+/** Create a one-hour Firebase exchange token at the moment a pod starts. */
+export async function mintUserCustomToken({ uid }) {
+  if (!uid) throw new Error('mintUserCustomToken: missing uid');
+  if (String(uid).length > 128) throw new Error('mintUserCustomToken: uid too long (>128 chars)');
+  return getTokenApp().auth().createCustomToken(String(uid));
+}
+
 export async function mintUserTokens({ uid }) {
   if (!uid) throw new Error('mintUserTokens: missing uid');
   if (String(uid).length > 128) throw new Error('mintUserTokens: uid too long (>128 chars)');
 
-  const app = getTokenApp();
-
-  // Create a Firebase Custom Token for the user
-  const customToken = await app.auth().createCustomToken(String(uid));
+  // Minting a custom token is also used by the GKE pod-restart broker.
+  const customToken = await mintUserCustomToken({ uid });
 
   // Optionally exchange for an ID token via Identity Toolkit if API key is provided
   const apiKey = process.env.FIREBASE_API_KEY || '';
