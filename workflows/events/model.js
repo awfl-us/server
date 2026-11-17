@@ -202,11 +202,15 @@ class DocumentEventBackend {
   async subscribeCollection(collection,onEvent,{after_time=null}={}) {
     const store=await getDocumentStorage();
     const seen=new Set();
-    const query={collection,orderBy:{field:'create_time',direction:'asc'},limit:1000,
+    // A live bounded subscription must track the newest page. An ascending
+    // LIMIT 1000 becomes permanently pinned to historical records once the
+    // collection grows; new MCP commands and agent events are never delivered.
+    const query={collection,orderBy:{field:'create_time',direction:'desc'},limit:1000,
       ...(after_time&&{where:[{field:'create_time',op:'>',value:after_time}]})};
     return store.subscribe(query,event=>{
       if(event.type==='error'){console.error('[relay document subscribe] error',event.error);return;}
-      const docs=Array.isArray(event.value)?event.value:[];
+      // The SQL query selects the newest page, but deliver events in time order.
+      const docs=Array.isArray(event.value)?[...event.value].reverse():[];
       for(const doc of docs){
         const record=doc.data;
         if(seen.has(record.id))continue;
