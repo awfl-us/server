@@ -1,0 +1,57 @@
+name: Diagnose AWFL MCP 503 (read-only)
+on:
+  push:
+    branches:
+      - diagnose/mcp-503-20261117
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/323709301334/locations/global/workloadIdentityPools/github-oidc/providers/github
+          service_account: github-deployer@awfl-us.iam.gserviceaccount.com
+          project_id: awfl-us
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Check public endpoint statuses
+        run: |
+          for path in /health /mcp /mcp/agents /robots.txt; do
+            status="$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' "https://api.awfl.us$path" || true)"
+            echo "api.awfl.us$path HTTP ${status}"
+          done
+      - name: Inspect API and Jobs revision health
+        run: |
+          set -euo pipefail
+          for svc in api jobs; do
+            echo "SERVICE $svc"
+            gcloud run services describe "$svc" --project awfl-us --region us-central1 --format='json(status.conditions,status.latestReadyRevisionName,status.traffic)' > "/tmp/$svc.json"
+            python3 - "$svc" <<'PY'
+          import json,sys
+          s=sys.argv[1]
+          d=json.load(open("/tmp/"+s+".json"))
+          st=d.get("status",{})
+          print("latest_ready",st.get("latestReadyRevisionName"))
+          print("traffic",[(x.get("revisionName"),x.get("percent")) for x in st.get("traffic",[])])
+          print("conditions",[(x.get("type"),x.get("status"),x.get("reason")) for x in st.get("conditions",[])])
+          PY
+          done
+      - name: Inspect recent Cloud Run API errors without secrets
+        run: |
+          set -euo pipefail
+          gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="api" AND timestamp>="2026-11-17T12:16:00Z" AND (severity>=WARNING OR httpRequest.status>=500)' --project awfl-us --limit=100 --format=json > /tmp/api-errors.json
+          python3 - <<'PY'
+          import json,re
+          a=json.load(open('/tmp/api-errors.json'))
+          print('error_entry_count',len(a))
+          for e in a[:80]:
+              req=e.get('httpRequest') or {}
+              msg=e.get('textPayload') or (e.get('jsonPayload') or {}).get('message') or ''
+              msg=str(msg)
+              msg=re.sub(r'(?i)(bearer|token|password|secret|authorization)[=: ]+[^\s,;}]{8,}',r'\1=[REDACTED]',msg)
+              print(e.get('timestamp'),e.get('severity'),req.get('status'),msg.replace('\n',' ')[:240])
+          PY
