@@ -44,10 +44,14 @@ connection and run:
     python3 scripts/migrations/firestore_group_migration.py discover --threads 24
     python3 scripts/migrations/firestore_group_migration.py inventory --page-size 800
     python3 scripts/migrations/firestore_group_migration.py copy --page-size 800 --ack-copy
+    python3 scripts/migrations/firestore_group_migration.py sync --page-size 800 --ack-copy
     python3 scripts/migrations/firestore_group_migration.py verify --page-size 800
 
 A real Cloud SQL copy-and-verify of five immutable benchmark records passed
-with zero mismatches. Mutable project records differed between first copy
+with zero mismatches. A second SQL sync checked the same five records and
+reported changed=0, unchanged=5, extras=0 and zero verification mismatches.
+The sync mode loads SQL path/digests and writes only changed/missing documents,
+avoiding thousands of unnecessary SQL upserts during final reconciliation. Mutable project records differed between first copy
 and verify because the source was still being written. This is expected
 for the initial bulk staging pass, not acceptable for final cutover.
 
@@ -81,3 +85,19 @@ ephemeral locks.*. Those remain on their existing Firestore plane.
 **Do not delete Firestore.** Firebase Auth, MCP OAuth/workspace request
 control plane and legacy durable native histories intentionally remain.
 This does not require a second always-on SQL instance.
+
+## Optional post-cutover fenced reconciliation
+
+If a brief provider switch occurs while very old Firestore writes are
+finishing, record the exact UTC cutover timestamp. The sync and verify modes
+accept --cutover-at with an ISO 8601 timestamp, e.g.:
+
+    python3 scripts/migrations/firestore_group_migration.py sync --ack-copy --cutover-at 2026-11-17T04:00:00Z
+    python3 scripts/migrations/firestore_group_migration.py verify --cutover-at 2026-11-17T04:00:00Z
+
+This fences source reconciliation against PG documents updated since the
+cutover timestamp, **including at SQL statement execution time**, and excludes
+PG-owned post-cutover documents from legacy-source verification. The preferred
+path remains a quiescent final sync before switching; the fenced mode is
+additional recovery protection, not permission to split one native root
+between providers. Old Firestore writes are not deleted by this tool.

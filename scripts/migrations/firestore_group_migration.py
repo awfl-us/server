@@ -11,6 +11,7 @@ idempotent final pass while old writes are stopped. Never prints doc bodies.
 import argparse
 import collections
 import concurrent.futures
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -130,7 +131,7 @@ def discover(reader, *, threads=16):
         and name not in EXCLUDE_CHILD and not name.startswith('locks.'))
 
 
-def write_rows(db, rows, *, batch_size=100):
+def write_rows(db, rows, *, cutover_at=None):
     if not rows:return
     placeholders=','.join('(%s,%s,%s,%s,%s::jsonb,%s,%s,%s)'
         for _ in rows)
@@ -140,10 +141,25 @@ def write_rows(db, rows, *, batch_size=100):
         ' VALUES '+placeholders+' ON CONFLICT(path) DO UPDATE SET '
         'data=EXCLUDED.data,revision=EXCLUDED.revision,'
         'created_at=EXCLUDED.created_at,updated_at=EXCLUDED.updated_at '
-        'WHERE awfl_documents.data IS DISTINCT FROM EXCLUDED.data '
-        'OR awfl_documents.revision IS DISTINCT FROM EXCLUDED.revision')
+        'WHERE ')
+    if cutover_at:
+        # Fencing at SQL execution time protects concurrently committed
+        # post-cutover PG mutations from a delayed Firestore reconciliation.
+        statement+='awfl_documents.updated_at < %s::timestamptz AND '
+        params.append(cutover_at)
+    statement+=('(awfl_documents.data IS DISTINCT FROM EXCLUDED.data '
+        'OR awfl_documents.revision IS DISTINCT FROM EXCLUDED.revision)')
     with db.cursor() as cur:cur.execute(statement,params)
     db.commit()
+
+
+def parse_cutover_timestamp(value):
+    if value is None:return None
+    if not isinstance(value,str):raise ValueError('cutover timestamp required')
+    try:dt=datetime.fromisoformat(value.replace('Z','+00:00'))
+    except ValueError as ex:raise ValueError('invalid cutover timestamp') from ex
+    if dt.tzinfo is None:raise ValueError('cutover timestamp must include timezone')
+    return dt.astimezone(timezone.utc)
 
 
 def document_row(path,doc,value):
@@ -156,48 +172,74 @@ def document_row(path,doc,value):
         doc.get('updateTime','1970-01-01T00:00:00Z'))
 
 
-def migrate_group(reader, group, mode, db=None, page_size=400):
+def migrate_group(reader, group, mode, db=None, page_size=400,
+    cutover_at=None):
     kinds=collections.Counter()
     num=0
     checksum=hashlib.sha256()
     queued=[]
     errors=0
-    # For verify, read all row hashes once as one SQL query per collection ID.
-    # Not a full-table scan for every document and no additional DB round trip
-    # per Firestore record.
+    changed=0
+    unchanged=0
+    fenced=0
     targets={}
-    if mode=='verify':
-        with db.cursor(name='verify_'+hashlib.sha1(group.encode()).hexdigest()[:10]) as cur:
+    if mode in ('verify','sync'):
+        # One bounded SQL index scan per collection, not one round trip per
+        # document. Keep hashes and server-owned update timestamps only.
+        name='migration_'+hashlib.sha1(group.encode()).hexdigest()[:10]
+        with db.cursor(name=name) as cur:
             cur.itersize=500
-            cur.execute('SELECT path,data FROM awfl_documents WHERE collection_id=%s',
+            cur.execute('SELECT path,data,updated_at FROM awfl_documents WHERE collection_id=%s',
                 (group,))
-            for path,payload in cur:
-                targets[path]=digest(path,payload)
+            for path,payload,updated_at in cur:
+                targets[path]=(digest(path,payload),updated_at)
     for path,doc in collection_group(reader,group,page_size=page_size):
         value={field:decode(raw,kinds)
             for field,raw in doc.get('fields',{}).items()
             if field!='__awflStorageMeta'}
-        checksum.update(bytes.fromhex(digest(path,value)))
+        source_hash=digest(path,value)
+        checksum.update(bytes.fromhex(source_hash))
         num+=1
         if mode=='copy':
             queued.append(document_row(path,doc,value))
             if len(queued)>=100:
                 write_rows(db,queued)
                 queued.clear()
-        elif mode=='verify':
-            if targets.pop(path,None)!=digest(path,value):errors+=1
+        elif mode in ('sync','verify'):
+            target=targets.pop(path,None)
+            # A record touched by PostgreSQL after the provider switch is now
+            # PG-owned; source Firestore history must never overwrite it.
+            if cutover_at and target and target[1]>=cutover_at:
+                fenced+=1
+            elif mode=='verify':
+                if target is None or target[0]!=source_hash:errors+=1
+            elif target and target[0]==source_hash:
+                unchanged+=1
+            else:
+                queued.append(document_row(path,doc,value))
+                changed+=1
+                if len(queued)>=100:
+                    write_rows(db,queued,cutover_at=cutover_at)
+                    queued.clear()
         if num%4000==0:
             print('group',group,'docs',num,flush=True)
-    if queued:write_rows(db,queued)
-    errors+=len(targets)
-    return {'group':group,'count':num,'digest':checksum.hexdigest(),
-        'value_types':dict(sorted(kinds.items())),
-        **({'mismatched':errors} if mode=='verify' else {})}
+    if queued:write_rows(db,queued,cutover_at=cutover_at)
+    # PG-only rows created after the cutoff are expected; older extra rows
+    # are surfaced but never silently deleted by migration tools.
+    extras=sum(not cutover_at or stamp<cutover_at
+        for _,stamp in targets.values())
+    if mode=='verify':errors+=extras
+    record={'group':group,'count':num,'digest':checksum.hexdigest(),
+        'value_types':dict(sorted(kinds.items()))}
+    if mode=='verify':record.update(mismatched=errors,fenced=fenced,extras=extras)
+    if mode=='sync':record.update(changed=changed,unchanged=unchanged,
+        fenced=fenced,extras=extras)
+    return record
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode',choices=['discover','inventory','copy','verify'])
+    parser.add_argument('mode',choices=['discover','inventory','copy','sync','verify'])
     parser.add_argument('--project',default='awfl-us')
     parser.add_argument('--pg-dsn',default=os.getenv('AWFL_MIGRATION_PG_DSN'))
     parser.add_argument('--manifest',default='/tmp/awfl-pg-collection-groups.json')
@@ -205,8 +247,9 @@ def main():
     parser.add_argument('--page-size',type=int,default=400)
     parser.add_argument('--only-group',action='append')
     parser.add_argument('--ack-copy',action='store_true')
+    parser.add_argument('--cutover-at',help='UTC/offset timestamp fence for final sync/verify')
     args=parser.parse_args()
-    if args.mode=='copy' and not args.ack_copy:
+    if args.mode in ('copy','sync') and not args.ack_copy:
         parser.error('copy requires --ack-copy; do not start a live traffic cutover')
     token=os.getenv('GOOGLE_OAUTH_ACCESS_TOKEN')
     if not token and os.getenv('CLOUDSDK_AUTH_ACCESS_TOKEN_FILE'):
@@ -222,7 +265,10 @@ def main():
         return
     groups=args.only_group or json.loads(Path(args.manifest).read_text())
     if not groups:parser.error('no groups discovered')
-    db=connect(args.pg_dsn) if args.mode in ('copy','verify') else None
+    cutover_at=parse_cutover_timestamp(args.cutover_at)
+    if cutover_at and args.mode not in ('sync','verify'):
+        parser.error('--cutover-at only applies to sync or verify')
+    db=connect(args.pg_dsn) if args.mode in ('copy','sync','verify') else None
     if db:
         with db.cursor() as cur:
             cur.execute("SELECT to_regclass('public.awfl_documents')")
@@ -231,7 +277,7 @@ def main():
     try:
         for group in groups:
             record=migrate_group(reader,group,args.mode,db=db,
-                page_size=args.page_size)
+                page_size=args.page_size,cutover_at=cutover_at)
             print(stable(record),flush=True)
             mismatches+=record.get('mismatched',0)
     finally:

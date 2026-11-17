@@ -1,4 +1,5 @@
 import hashlib
+from datetime import datetime, timezone
 import importlib.util
 from pathlib import Path
 import sys
@@ -65,4 +66,52 @@ class QueryTests(unittest.TestCase):
         self.assertIn('mcpWorkspaces',m.EXCLUDE_ROOT)
         self.assertIn('nativeWorkflowExecutions',m.EXCLUDE_ROOT)
 
+
+class SQLFenceTests(unittest.TestCase):
+    def test_cutover_timestamp_is_explicitly_timezone_aware(self):
+        t=m.parse_cutover_timestamp('2026-11-17T04:00:00Z')
+        self.assertEqual(t.tzinfo,timezone.utc)
+        with self.assertRaises(ValueError):
+            m.parse_cutover_timestamp('2026-11-17T04:00:00')
+        with self.assertRaises(ValueError):
+            m.parse_cutover_timestamp('bad')
+
+    def test_sync_upsert_is_fenced_at_postgres_statement_execution(self):
+        queries=[]
+        class Cursor:
+            def __enter__(self):return self
+            def __exit__(self,*args):return False
+            def execute(self,sql,params):queries.append((sql,params))
+        class DB:
+            def cursor(self):return Cursor()
+            def commit(self):pass
+        cutoff=m.parse_cutover_timestamp('2026-11-17T04:00:00Z')
+        row=('users/u/projects/p','users/u/projects','projects','p',
+            '{"name":"test"}',1,'2026-11-01T00:00:00Z','2026-11-01T00:00:00Z')
+        m.write_rows(DB(),[row],cutover_at=cutoff)
+        self.assertIn('awfl_documents.updated_at < %s::timestamptz',queries[0][0])
+        self.assertEqual(queries[0][1][-1],cutoff)
+
+    def test_verify_exempts_new_pg_writes_but_detects_old_mismatch(self):
+        path='users/u/projects/p/convo.sessions/s/messages/a'
+        src=FakeReader([path])
+        class Cursor:
+            def __init__(self,rows):self.rows=rows
+            def __enter__(self):return self
+            def __exit__(self,*args):return False
+            def execute(self,*args):pass
+            def __iter__(self):return iter(self.rows)
+        class DB:
+            def __init__(self,time):self.time=time
+            def cursor(self,**kwargs):
+                return Cursor([(path,{'count':999},self.time)])
+        cutoff=m.parse_cutover_timestamp('2026-11-17T04:00:00Z')
+        newer=m.parse_cutover_timestamp('2026-11-17T04:00:01Z')
+        older=m.parse_cutover_timestamp('2026-11-17T03:59:59Z')
+        a=m.migrate_group(src,'messages','verify',DB(newer),
+            page_size=1,cutover_at=cutoff)
+        self.assertEqual((a['mismatched'],a['fenced']),(0,1))
+        b=m.migrate_group(src,'messages','verify',DB(older),
+            page_size=1,cutover_at=cutoff)
+        self.assertEqual((b['mismatched'],b['fenced']),(1,0))
 if __name__=='__main__':unittest.main()

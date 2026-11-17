@@ -85,3 +85,8 @@ until the native document-store flag is enabled after draining legacy roots;
 the PG document migration must not split one root's state and callbacks.
 Firestore will remain available for Firebase Auth, MCP control-plane
 records and legacy execution history.
+
+- An idempotent differential sync/check mode was added for the final pass:
+  it writes only changed rows and optionally fences against PostgreSQL rows
+  updated after a UTC cutover timestamp, protecting new PG writes. A real
+  five-document second sync made zero changes and verified with zero errors.
