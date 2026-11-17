@@ -6,6 +6,7 @@ import { context, propagation } from '@opentelemetry/api';
 import { createNativeLogEffectHandler } from './logEffects.js';
 import { createNativeStorageEffectHandler } from './storageEffects.js';
 import { createNativeCallbackEffects } from './callbackEffects.js';
+import { nativeProjectHeader, resolveNativeProjectIdentity } from './projectScope.js';
 
 const METHODS = Object.freeze({
   'http.get': 'GET', 'http.post': 'POST',
@@ -16,6 +17,7 @@ export function createJobsEffectHandlers({
   jobsOrigin, auth = new GoogleAuth(), timeoutMs = 30_000,
   logger = console,
   profiler = null, storage = null, callbackDb = null, callbackStorage = null,
+  getProjectStorage,
 }) {
   let base;
   try { base = new URL(jobsOrigin); } catch { /* validate below */ }
@@ -53,6 +55,12 @@ export function createJobsEffectHandlers({
       if (args.auth != null && args.auth.type !== 'OIDC') {
         throw new Error('native Jobs effect requires OIDC authentication');
       }
+      // A nested evaluation can intentionally operate in a different project
+      // owned by the *same* authenticated user. Check ownership against the
+      // provider-neutral project store before forming the trusted Jobs request.
+      const target = await resolveNativeProjectIdentity(identity, {
+        projectId: nativeProjectHeader(args.headers), getStorage: getProjectStorage,
+      });
       // jobs/workflowsUserInject prioritizes body.userId over x-user-id, and
       // projectIdMiddleware likewise reads the body. A DSL-authored body must
       // never be able to impersonate another user or project, even though the
@@ -65,8 +73,8 @@ export function createJobsEffectHandlers({
             Object.getPrototypeOf(args.body) === Object.prototype) {
           data = {
             ...args.body,
-            userId: identity.userId,
-            projectId: identity.projectId,
+            userId: target.userId,
+            projectId: target.projectId,
           };
         } else {
           // For non-object bodies, existing Jobs middleware uses the
@@ -78,8 +86,8 @@ export function createJobsEffectHandlers({
       const client = profiler ? await profiler.measure('oidc.client', acquireClient)
         : await acquireClient();
       const headers = {
-        'x-user-id': identity.userId,
-        'x-project-id': identity.projectId,
+        'x-user-id': target.userId,
+        'x-project-id': target.projectId,
         'x-awfl-idempotency-key': idempotencyKey,
       };
       propagation.inject(context.active(), headers);
