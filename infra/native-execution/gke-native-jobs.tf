@@ -105,7 +105,7 @@ resource "kubernetes_deployment_v1" "native_scheduler" {
           security_context {
             allow_privilege_escalation = false
             privileged                 = false
-            read_only_root_filesystem = false
+            read_only_root_filesystem  = false
             run_as_non_root            = false
             capabilities {
               drop = ["NET_RAW"]
@@ -147,6 +147,33 @@ resource "kubernetes_deployment_v1" "native_scheduler" {
           env {
             name  = "AWFL_NATIVE_PERSISTENT_WORKER"
             value = "1"
+          }
+
+          # Keep this in sync with Cloud Run API/Jobs during the finite cutover.
+          # Backend stays Firestore until data migration/recovery tests pass.
+          env {
+            name  = "AWFL_DOCUMENT_STORAGE_BACKEND"
+            value = "firestore"
+          }
+          env {
+            name  = "AWFL_NATIVE_DOCUMENT_STORE_ENABLED"
+            value = "0"
+          }
+          env {
+            name  = "AWFL_CLOUD_SQL_INSTANCE"
+            value = "awfl-us:us-central1:awfl-native-storage-bench"
+          }
+          env {
+            name  = "AWFL_POSTGRES_DB"
+            value = "awfl_prod"
+          }
+          env {
+            name  = "AWFL_POSTGRES_IAM_USER"
+            value = trimsuffix(local.runtime_sa, ".gserviceaccount.com")
+          }
+          env {
+            name  = "AWFL_POSTGRES_POOL_SIZE"
+            value = "2"
           }
           # Same in-process Firestore tracing as Cloud Run Jobs.
           env {

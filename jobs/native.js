@@ -10,7 +10,7 @@ import { NativeExecutionStore } from '../workflows/native/executionStore.js';
 import { NativeGcsReleases } from '../workflows/native/gcsReleases.js';
 import { createJobsEffectHandlers } from '../workflows/native/jobsEffects.js';
 import { runNativeWorkflow, nativeAsyncSchedulerFor } from '../workflows/native/worker.js';
-import { runNativeMemoryWorkflow } from '../workflows/native/memoryWorker.js';
+import { runNativeMemoryWorkflow, nativeMemoryAsyncSchedulerFor } from '../workflows/native/memoryWorker.js';
 import { createNativeProfiler } from '../workflows/native/profiler.js';
 import { configuredNativeMemoryStore, nativeDocumentStoreEnabled } from '../storage/nativeMemory.js';
 
@@ -100,18 +100,27 @@ export function startNativeDetachedRecovery({ store, releases, handlers } = {}) 
   if (process.env.AWFL_NATIVE_EXECUTION_ENABLED !== '1' ||
       process.env.AWFL_NATIVE_DETACHED_GKE_ENABLED !== '1' ||
       process.env.AWFL_NATIVE_PERSISTENT_WORKER !== '1') return null;
-  // The pilot document store has no detached recovery scan. Never scan
-  // Firestore when new roots are configured in another backend.
-  if (nativeDocumentStoreEnabled()) {
-    throw new Error('detached recovery is not supported with experimental document Storage');
-  }
-  const nativeStore = store || new NativeExecutionStore({ db: getFirestore() });
   const nativeReleases = releases || new NativeGcsReleases({
     storage: new Storage(), bucket: process.env.AWFL_NATIVE_ARTIFACT_BUCKET,
     verifiedCache: verifiedNativeArtifacts,
   });
-  // Detached recovery remains the legacy Firestore-backed durable executor;
-  // a separate native-memory recovery protocol is required before its cutover.
+  if (nativeDocumentStoreEnabled()) {
+    // Native memory roots and detached children use the *same* selected
+    // Storage/pool, including callback records. No Firestore recovery scan.
+    return (async () => {
+      const nativeStore = store || await configuredNativeMemoryStore();
+      const nativeHandlers = handlers || createJobsEffectHandlers({
+        jobsOrigin: process.env.AWFL_NATIVE_JOBS_URL,
+        storage: new Storage(), callbackStorage: await getDocumentStorage(),
+      });
+      return nativeMemoryAsyncSchedulerFor({
+        store: nativeStore, releases: nativeReleases, handlers: nativeHandlers,
+      });
+    })();
+  }
+  const nativeStore = store || new NativeExecutionStore({ db: getFirestore() });
+  // The existing durable Firestore execution journal remains supported only
+  // while the document-provider-native memory flag is disabled.
   const nativeHandlers = handlers || createJobsEffectHandlers({
     jobsOrigin: process.env.AWFL_NATIVE_JOBS_URL,
     storage: new Storage(), callbackDb: getFirestore(),

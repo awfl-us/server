@@ -1,6 +1,6 @@
 // Jobs and shared workflow modules use the same provider-neutral document API.
 // Provider clients are constructed only at the composition boundary.
-import { createNativeMemoryStore } from './nativeMemory.js';
+import { configuredNativeComponents } from './nativeMemory.js';
 
 let configured;
 let injectedClients;
@@ -11,7 +11,7 @@ export function configureDocumentStorageClients(clients) {
 }
 export function getDocumentStorage() {
   if (!configured) {
-    configured = createNativeMemoryStore(injectedClients).then(({ storage }) => storage).catch(error => {
+    configured = configuredNativeComponents(injectedClients).then(({ storage }) => storage).catch(error => {
       configured = null;
       throw error;
     });

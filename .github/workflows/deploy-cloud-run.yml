@@ -403,6 +403,7 @@ jobs:
             --region="${GCP_REGION}" \
             --image="${{ steps.image.outputs.IMAGE_URI }}" \
             --service-account="${CLOUD_RUN_RUNTIME_SA}" \
+            --max-instances=3 \
             --allow-unauthenticated \
             --timeout=3600 \
             --set-env-vars="^;^${{ steps.common_env.outputs.COMMON_ENV_VARS }};SERVICE_TARGET=start:api" \
@@ -434,6 +435,7 @@ jobs:
             --region="${GCP_REGION}" \
             --image="${{ steps.image.outputs.IMAGE_URI }}" \
             --service-account="${CLOUD_RUN_RUNTIME_SA}" \
+            --max-instances=3 \
             --no-allow-unauthenticated \
             --timeout=3600 \
             "${JOBS_CPU_FLAGS[@]}" \
