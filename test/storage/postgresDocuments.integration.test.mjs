@@ -232,7 +232,7 @@ test('PostgreSQL: indexed subcollection lookup excludes adjacent and wildcard pa
       parents[3]+'/not-matching/five',
     ];
     try{
-      const index=await storage.pool.query(\"SELECT indexdef FROM pg_indexes WHERE schemaname='public' AND indexname='awfl_documents_collection_path_pattern'\");
+      const index=await storage.pool.query("SELECT indexdef FROM pg_indexes WHERE schemaname='public' AND indexname='awfl_documents_collection_path_pattern'");
       assert.match(index.rows[0]?.indexdef || '',/text_pattern_ops/);
       for(const path of paths) await storage.create(path,{ok:true});
       assert.deepEqual(await storage.listCollections(parents[0]),['children','extra']);
