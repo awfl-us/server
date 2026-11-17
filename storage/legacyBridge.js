@@ -110,7 +110,8 @@ export class StorageCompatFirestore {
       const t=Object.freeze({
         get:async ref=>{
           const doc=await tx.get(ref.path);
-          return {exists:!!doc,id:ref.id,ref,data:()=>doc?.data};
+          return {exists:!!doc,id:ref.id,ref,data:()=>doc?.data,
+            get:field=>field.split('.').reduce((value,key)=>value?.[key],doc?.data)};
         },
         delete:ref=>{pending.push(['delete',ref.path]);},
         set:(ref,data,{merge=false}={})=>{pending.push(['put',ref.path,json(data),merge]);},

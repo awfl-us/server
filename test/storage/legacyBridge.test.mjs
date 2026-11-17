@@ -48,6 +48,7 @@ test('compatibility transactions update legacy OAuth documents atomically',async
   await db.runTransaction(async tx=>{
     const doc=await tx.get(ref);
     assert.equal(doc.data().status,'pending');
+    assert.equal(doc.get('status'),'pending');
     tx.update(ref,{status:'done'});
     tx.create(db.collection('mcpOAuthCodes').doc('one'),{issued:true});
   });
