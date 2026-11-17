@@ -76,13 +76,20 @@ export function createNativeJobsRouter({
         handlers: profiler ? profiler.handlers(nativeHandlers) : nativeHandlers,
         profiler,
       });
-      profiler?.report('completed');
       if (result?.status === 'failed') {
+        profiler?.report('failed');
+        console.error(JSON.stringify({
+          event: 'awfl_native_execution_failed', executionId, projectId,
+          errorCode: result.error?.code ?? null,
+          errorMessage: result.error?.message ?? String(result.error ?? 'unknown failure'),
+        }));
         return res.status(200).json({ state: 'FAILED' });
       }
       if (result?.status === 'cancelled') {
+        profiler?.report('cancelled');
         return res.status(200).json({ state: 'CANCELLED' });
       }
+      profiler?.report('completed');
       return res.status(200).json({ state: 'SUCCEEDED', result });
     } catch (error) {
       profiler?.report('error');
