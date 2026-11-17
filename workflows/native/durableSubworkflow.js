@@ -4,6 +4,7 @@
 import { createHash } from 'node:crypto';
 import { createNativeLocalRunner } from './localWorkflows.js';
 import { buildNativeTrustedGlobals, runNativeArtifact } from './runner.js';
+import { resolveNativeProjectIdentity } from './projectScope.js';
 
 const NAME = /^[A-Za-z][A-Za-z0-9_-]{0,99}$/;
 const MARKER = '${WORKFLOW_ENV}';
@@ -35,24 +36,45 @@ export function createDurableSubworkflowHandler({
   gcpProject = process.env.GCP_PROJECT || process.env.GCLOUD_PROJECT,
   region = process.env.WORKFLOWS_LOCATION || 'us-central1',
   runArtifact = runNativeArtifact, store, scheduleAsync,
+  getProjectStorage,
 }) {
   if (!releases?.active || !releases?.materialize ||
       !/^native_[a-f0-9]{32}$/.test(executionId || '') ||
       !userId || !projectId || !gcpProject) {
     throw new Error('trusted native child context required');
   }
+  const rootIdentity = Object.freeze({ userId, projectId });
+  let handler;
   const runner = createNativeLocalRunner({
     releases, handlers, rootExecutionId: executionId, identity: { userId, projectId },
-    gcpProject, region, runArtifact,
+    gcpProject, region, runArtifact, getProjectStorage,
+    // Nested workflows can start independent background children. Keep the
+    // same idempotent durable launch contract as a top-level workflow.run.
+    runDetached: ({ args, identity: scopedIdentity, path, effectId }) =>
+      handler.run({
+        args, identity: rootIdentity, scopeIdentity: scopedIdentity,
+        idempotencyKey: executionId + ':nested:' + path + ':' + effectId,
+      }),
   });
-  return {
-    async run({ args, identity, idempotencyKey }) {
+  handler = {
+    async run({ args, identity, idempotencyKey, scopeIdentity = rootIdentity }) {
       if (identity?.userId !== userId || identity?.projectId !== projectId ||
           typeof idempotencyKey !== 'string' ||
-          !idempotencyKey.startsWith(executionId + ':')) {
+          !idempotencyKey.startsWith(executionId + ':') ||
+          scopeIdentity?.userId !== userId) {
         throw new Error('durable child identity mismatch');
       }
       const name = childName(args, gcpProject, region);
+      const authorizedScope = await resolveNativeProjectIdentity(
+        rootIdentity, {
+          projectId: scopeIdentity.projectId, getStorage: getProjectStorage,
+        });
+      const childIdentity = await resolveNativeProjectIdentity(
+        authorizedScope, {
+          projectId: args.argument?.env?.projectId,
+          userId: args.argument?.env?.userId,
+          getStorage: getProjectStorage,
+        });
       const detached = args.connector_params?.skip_polling === true;
       // Detached background work needs a persistent GKE Jobs worker in
       // production: Cloud Run can suspend CPU after the parent returns.
@@ -80,7 +102,8 @@ export function createDurableSubworkflowHandler({
           .update(idempotencyKey + ':' + name).digest('hex').slice(0, 32);
         try {
           await store.create({
-            executionId: childExecutionId, userId, projectId,
+            executionId: childExecutionId, userId,
+            projectId: childIdentity.projectId,
             workflowName: name, artifactSha256: release.sha256,
             protocolVersion: 2, allowedOperations: release.allowedOperations,
             ...(release.trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
@@ -92,7 +115,7 @@ export function createDurableSubworkflowHandler({
           if (error.code !== 'CONFLICT') throw error;
           const existing = await store.get(childExecutionId);
           if (!existing || existing.userId !== userId ||
-              existing.projectId !== projectId ||
+              existing.projectId !== childIdentity.projectId ||
               existing.workflowName !== name ||
               existing.artifactSha256 !== release.sha256 ||
               existing.protocolVersion !== 2 ||
@@ -102,7 +125,7 @@ export function createDurableSubworkflowHandler({
         }
         // Only persist+enqueue before acknowledging the parent. Actual Rust
         // execution runs independently; no recursive wait or parent journal.
-        scheduleAsync({ executionId: childExecutionId, userId, projectId });
+        scheduleAsync({ executionId: childExecutionId, ...childIdentity });
         return { name: 'native/' + childExecutionId, state: 'ACTIVE' };
       }
       const artifact = await releases.materialize(release.sha256);
@@ -120,7 +143,7 @@ export function createDurableSubworkflowHandler({
       try {
         return await runner.run({
           workflowName: name, release, artifact, input: args.argument,
-          executionId: childExecutionId, globals,
+          executionId: childExecutionId, globals, scopedIdentity: childIdentity,
         });
       } finally {
         await artifact.cleanup?.();
@@ -128,4 +151,5 @@ export function createDurableSubworkflowHandler({
     },
     close: () => runner.close(),
   };
+  return handler;
 }

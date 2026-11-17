@@ -62,3 +62,47 @@ test('native Jobs effects reject external URLs and caller-supplied auth', async 
   }
   assert.equal(called, 0);
 });
+
+test('native Jobs effects route to a verified temporary project and retain the user', async () => {
+  const requests = [], reads = [];
+  const handlers = createJobsEffectHandlers({
+    jobsOrigin: 'https://jobs.example.org',
+    auth: { getIdTokenClient: async () => ({
+      request: async request => {
+        requests.push(request);
+        return { status: 200, data: { success: true } };
+      },
+    }) },
+    getProjectStorage: async () => ({
+      get: async path => {
+        reads.push(path);
+        return path === 'users/verified-user/projects/temp'
+          ? { data: { id: 'temp' } } : null;
+      },
+    }),
+  });
+  const args = {
+    url: 'https://jobs.example.org/producer/start',
+    headers: { 'x-user-id': 'attacker', 'x-project-id': 'temp' },
+    body: { sessionId: 'session-1', userId: 'attacker', projectId: 'forged' },
+    auth: { type: 'OIDC' },
+  };
+  const outcome = await handlers['http.post']({
+    args, identity, idempotencyKey: 'native:some-effect',
+  });
+  assert.equal(outcome.code, 200);
+  assert.deepEqual(reads, ['users/verified-user/projects/temp']);
+  assert.equal(requests[0].headers['x-user-id'], 'verified-user');
+  assert.equal(requests[0].headers['x-project-id'], 'temp');
+  assert.deepEqual(requests[0].data, {
+    sessionId: 'session-1', userId: 'verified-user', projectId: 'temp',
+  });
+  assert.equal(requests[0].headers.authorization, undefined);
+  assert.deepEqual(identity, { userId: 'verified-user', projectId: 'project-a' });
+
+  await assert.rejects(handlers['http.post']({
+    args: { ...args, headers: { 'x-project-id': 'unowned' } },
+    identity, idempotencyKey: 'native:some-effect-2',
+  }), /not owned/);
+  assert.equal(requests.length, 1, 'unauthorized effects cannot make IAM Jobs requests');
+});
