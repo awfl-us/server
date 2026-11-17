@@ -1,0 +1,119 @@
+name: Diagnose PostgreSQL production timeout (no rollback)
+on:
+  push:
+    branches: [fix/postgres-live-timeout-20261117]
+    paths: [.github/workflows/diagnose-pg-prod-timeout.yml]
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  logs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/323709301334/locations/global/workloadIdentityPools/github-oidc/providers/github
+          service_account: github-deployer@awfl-us.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: awfl-us
+      - name: Inspect current traffic, Cloud SQL capacity, and detailed API errors
+        shell: bash
+        run: |
+          set -euo pipefail
+          date -u
+          for service in api jobs; do
+            gcloud run services describe "$service" --project=awfl-us --region=us-central1 --format=json |
+              jq -c '[.metadata.name,.status.traffic,
+                [.spec.template.spec.containers[0].env[]? | select(.name == "AWFL_DOCUMENT_STORAGE_BACKEND")]]'
+          done
+          gcloud sql instances describe awfl-native-storage-bench --project=awfl-us --format=json |
+            jq '{name, state, tier: .settings.tier, flags: .settings.databaseFlags, connectionName}'
+          gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="api" AND timestamp>="2026-11-17T12:55:00Z" AND (severity>=WARNING OR textPayload:"timeout" OR textPayload:"pool" OR textPayload:"postgres")' --project=awfl-us --limit=400 --format=json > /tmp/api-logs.json
+          python3 - <<'PY'
+          import json,collections
+          a=json.load(open('/tmp/api-logs.json'))
+          print('API_LOG_COUNT',len(a))
+          msgs=collections.Counter()
+          for e in a:
+            body=e.get('textPayload') or str(e.get('jsonPayload',{}))
+            if body and body!='{}':
+              msgs[body[:500]]+=1
+          for msg,n in msgs.most_common(40):
+            print('LOG',n,msg.replace('\n',' ')[:500])
+          for e in a[:20]:
+            h=e.get('httpRequest',{})
+            if h.get('status',0)>=500:
+              print('HTTP',e.get('timestamp'),h.get('status'),h.get('latency'),h.get('requestUrl','').split('?')[0])
+          PY
+          gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="jobs" AND timestamp>="2026-11-17T12:55:00Z" AND (severity>=WARNING OR textPayload:"timeout")' --project=awfl-us --limit=200 --format=json > /tmp/jobs-logs.json
+          python3 - <<'PY'
+          import json,collections
+          a=json.load(open('/tmp/jobs-logs.json'))
+          c=collections.Counter()
+          for e in a:
+            body=e.get('textPayload') or str(e.get('jsonPayload',{}))
+            if body and body!='{}':c[body[:450]]+=1
+          for msg,n in c.most_common(20):print('JOBS_LOG',n,msg.replace('\n',' '))
+          PY
+  sql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/323709301334/locations/global/workloadIdentityPools/github-oidc/providers/github
+          service_account: github-deployer@awfl-us.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: awfl-us
+      - name: Query live PostgreSQL activity under production runtime service account
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat >/tmp/awfl-sql-diagnose.js <<'JS'
+          (async()=>{
+            const t=Date.now();
+            const {Connector}=await import('@google-cloud/cloud-sql-connector');
+            const pg=(await import('pg')).default;
+            const c=new Connector();
+            try{
+              const opt=await c.getOptions({instanceConnectionName:'awfl-us:us-central1:awfl-native-storage-bench',authType:'IAM'});
+              const pool=new pg.Pool({...opt,user:'323709301334-compute@developer',database:'awfl_prod',max:1,connectionTimeoutMillis:12000,application_name:'awfl_sql_diagnosis'});
+              const conn=await pool.connect();
+              try{
+                console.log('CONNECT_MS',Date.now()-t);
+                for (const [label,sql] of [
+                  ['BASE','SELECT now(), current_database(),current_user'],
+                  ['LIMITS','SHOW max_connections'],
+                  ['ACTIVITY','SELECT state,wait_event_type,wait_event,count(*)::int AS n FROM pg_stat_activity WHERE datname=current_database() GROUP BY 1,2,3 ORDER BY n DESC'],
+                  ['LONG_QUERIES',"SELECT pid,state,wait_event_type,wait_event,round(extract(epoch from clock_timestamp()-query_start)::numeric,1) AS age_seconds,left(query,250) AS query FROM pg_stat_activity WHERE datname=current_database() AND state<>\x27idle\x27 ORDER BY query_start LIMIT 20"],
+                  ['TABLE_COUNTS',"SELECT count(*)::int AS n FROM awfl_documents"],
+                  ['GROUPS',"SELECT collection_id,count(*)::int AS n FROM awfl_documents WHERE collection_id IN (\x27convo.sessions\x27,\x27workflowExecLinks\x27,\x27workflowExecStatus\x27) GROUP BY 1"],
+                  ['COLLECTION_SAMPLE',"SELECT collection_path,count(*)::int AS n FROM awfl_documents WHERE collection_id=\x27convo.sessions\x27 GROUP BY 1 ORDER BY n DESC LIMIT 8"],
+                  ['DB_STATS',"SELECT numbackends,xact_commit,xact_rollback,blks_read,blks_hit,temp_files,deadlocks FROM pg_stat_database WHERE datname=current_database()"],
+                ]){
+                  const start=Date.now();
+                  try{const r=await conn.query({text:sql,query_timeout:10000});console.log(label,'MS',Date.now()-start,'ROWS',JSON.stringify(r.rows).slice(0,5500));}
+                  catch(e){console.log(label,'ERROR',e.message,'MS',Date.now()-start);}
+                }
+              } finally {conn.release();await pool.end();}
+            } finally {c.close();}
+          })().catch(e=>{console.error('SQL_DIAG_FAILED',e.message,e.stack);process.exitCode=1});
+          JS
+          encoded="$(base64 -w0 /tmp/awfl-sql-diagnose.js)"
+          image="$(gcloud run services describe api --project=awfl-us --region=us-central1 --format='value(spec.template.spec.containers[0].image)')"
+          gcloud run jobs create awfl-pg-sql-diagnose-261117 --project=awfl-us --region=us-central1 \
+            --image="$image" \
+            --service-account=323709301334-compute@developer.gserviceaccount.com \
+            --cpu=1 --memory=512Mi --task-timeout=180s --max-retries=0 \
+            --set-env-vars=NODE_ENV=production \
+            --command=node --args="^~^-e~eval(Buffer.from('$encoded','base64').toString())" \
+            --quiet
+          gcloud run jobs execute awfl-pg-sql-diagnose-261117 --project=awfl-us --region=us-central1 --wait --quiet || true
+          echo SQL_JOB_LOGS
+          gcloud logging read 'resource.type="cloud_run_job" AND resource.labels.job_name="awfl-pg-sql-diagnose-261117"' --project=awfl-us --limit=70 --format='value(textPayload)' | tail -n 70
+          gcloud run jobs delete awfl-pg-sql-diagnose-261117 --project=awfl-us --region=us-central1 --quiet || true
