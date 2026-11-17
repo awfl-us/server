@@ -1,6 +1,6 @@
 # Jobs document Storage migration (November 16, 2026)
 
-**Status: code migrated and integration-tested; production cutover NOT performed.**
+**Status: Jobs document Storage code migrated and integration-tested on the `feat/jobs-document-storage-provider` branch; production cutover NOT performed.** The next-session deployment and latency investigation are tracked in the [November 16 handoff](postgres-production-cutover-latency-handoff-2026-11-16.md). This file describes branch behavior, **not** production or a complete Firestore removal.
 
 Jobs and the shared modules it invokes now use `storage/service.js` to obtain the same
 provider-neutral `Storage` implementation selected by `AWFL_DOCUMENT_STORAGE_BACKEND`
@@ -46,6 +46,24 @@ All tests below were actually executed in an authorized existing GKE environment
   with **59 effects**, **32 HTTP calls**, `BENCH_OK`, **8.03 seconds**. Three existing
   detached maintenance children still fail `unsupported subtraction operand types`
   in the Rust runtime (a separate compiler issue).
+
+## November 16–17 local Project Manager evidence — provider comparison
+
+The compiled Rust `codebase-ProjectManager` workflow completed **three local executions per backend** with **59 effects** each, including two CLI tool callbacks and a locally started Jobs HTTP server. On each run the test runner selected *both* the native memory store and the Jobs service's `AWFL_DOCUMENT_STORAGE_BACKEND` (`postgres` or `firestore`). PostgreSQL reached managed Cloud SQL through IAM Auth Proxy; this is a real database, not a fake provider. These experiments **did not deploy the PostgreSQL backend into production** and used a test-only callback transport rather than the normal remote session launcher.
+
+| Measurement (3 completed runs per backend) | PostgreSQL | Firestore |
+| --- | ---: | ---: |
+| End-to-end Project Manager execution times | 14.07, 10.18, 22.38 s | 14.70, 12.00, 19.80 s |
+| Median end-to-end | 14.07 s | 14.70 s |
+| Cumulative **native execution-store** calls | 314, ~229, ~649 ms | 2,811, ~2,091, ~4,192 ms |
+| Median native execution-store calls | **314 ms** | **2,811 ms** |
+| Jobs 26 HTTP POST effects, first pair only | 2.38 s total | 6.04 s total |
+
+**Critical measurement boundary:** `storeTimed` wraps the *native execution-state store only* (`create/claim/updateMemoryProgress/complete/get`). **All Jobs document Storage method calls were not individually instrumented.** The total Jobs HTTP effects include network and application logic as well as database time; those figures are **not DB-only** and cannot be summed with concurrent execution-store timings. The observed median native-store improvement is roughly **9×**; it is **not** a measured 9× improvement across every Jobs database call.
+
+All six main roots completed; three known detached Rust maintenance children failed in each run (existing `unsupported subtraction operand types` issue). A follow-up ten-run batch stopped during its fifth run when the AWFL GKE consumer died; only the four completed new runs were counted above. The prior Firestore **production** run (56.82 s) had a different execution/deployment path and must **not** be treated as a matched end-to-end baseline.
+
+**Instrumentation still needed after cutover:** measure `get/create/put/update/delete/query/count/listCollections/batch/transaction/subscribe` at the provider-neutral Storage boundary inside **Jobs**, plus request/response timing by Jobs endpoint, SQL connection acquisition/queries/transaction retries, and callback/LLM/GCS/Rust subphase timing. See the linked handoff for the exact procedure.
 
 ## Remaining production cutover gates
 
