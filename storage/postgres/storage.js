@@ -144,18 +144,15 @@ export class PostgresStorage {
   async listCollections(documentPath) {
     validatePath(documentPath);
     // Exact path depth prevents unrelated collection descendants leaking in.
-    // Use the existing (collection_path, document_id) btree index instead of
-    // scanning 270k documents for every session's subcollection lookup.
-    // Child paths lie between `documentPath/` and `documentPath0` in UTF-8.
-    const prefix=documentPath+'/';
-    const upper=documentPath+'0';
+    // A text_pattern_ops index makes this escaped LIKE prefix search fast
+    // under the production database's non-C collation. A raw lexical range
+    // using '/' and '0' returned missing collections in production.
     const depth=documentPath.split('/').length+1;
     const escaped=documentPath.replace(/[\\%_]/g,x=>'\\'+x);
     const result=await this.pool.query(`SELECT DISTINCT collection_id FROM awfl_documents
-      WHERE collection_path >= $1 AND collection_path < $2
-        AND collection_path LIKE $3 ESCAPE '\\'
-        AND array_length(string_to_array(collection_path,'/'),1)=$4
-      ORDER BY collection_id LIMIT 500`,[prefix,upper,escaped+'/%',depth]);
+      WHERE collection_path LIKE $1 ESCAPE '\\'
+        AND array_length(string_to_array(collection_path,'/'),1)=$2
+      ORDER BY collection_id LIMIT 500`,[escaped+'/%',depth]);
     return result.rows.map(x=>x.collection_id);
   }
   async batch(writes) {
