@@ -18,7 +18,7 @@ variable "native_jobs_image" {
 variable "native_jobs_document_backend" {
   type        = string
   description = "Shared Jobs document provider: firestore or postgres"
-  default     = "firestore"
+  default     = "postgres"
   validation {
     condition     = contains(["firestore", "postgres"], var.native_jobs_document_backend)
     error_message = "native_jobs_document_backend must be firestore or postgres"
@@ -176,7 +176,7 @@ resource "kubernetes_deployment_v1" "native_scheduler" {
           }
 
           # Keep this in sync with Cloud Run API/Jobs during the finite cutover.
-          # Backend stays Firestore until data migration/recovery tests pass.
+          # PostgreSQL is now the selected production document backend; native execution journal stays legacy until drained.
           env {
             name  = "AWFL_DOCUMENT_STORAGE_BACKEND"
             value = var.native_jobs_document_backend
