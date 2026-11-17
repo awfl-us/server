@@ -1,0 +1,58 @@
+name: Diagnose AWFL maintenance revision
+on:
+  push:
+    branches: [ops/mcp-maintenance-diagnose-261117]
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Authenticate GCP
+        run: |
+          echo "GCP_WIF_PROVIDER=$(jq -r .GCP_WIF_PROVIDER .github/actions-variables.json)" >> "$GITHUB_ENV"
+          echo "GCP_DEPLOY_SA=$(jq -r .GCP_DEPLOY_SA .github/actions-variables.json)" >> "$GITHUB_ENV"
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_DEPLOY_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: awfl-us
+      - name: Inspect API and Jobs revision images, command, and traffic
+        shell: bash
+        run: |
+          set -euo pipefail
+          for svc in api jobs; do
+            echo "========== CURRENT $svc =========="
+            gcloud run services describe "$svc" --project awfl-us --region us-central1 --format=json | jq '{
+              latestReady: .status.latestReadyRevisionName,
+              latestCreated: .status.latestCreatedRevisionName,
+              traffic: .status.traffic,
+              conditions: .status.conditions,
+              image: .spec.template.spec.containers[0].image,
+              command: .spec.template.spec.containers[0].command,
+              args: .spec.template.spec.containers[0].args,
+              env: [.spec.template.spec.containers[0].env[]? | select(.name=="SERVICE_TARGET" or .name=="AWFL_DOCUMENT_STORAGE_BACKEND" or .name=="AWFL_NATIVE_DOCUMENT_STORE_ENABLED")]
+            }'
+            echo "========== RECENT REVISIONS $svc =========="
+            gcloud run revisions list --service="$svc" --project=awfl-us --region=us-central1 --limit=12 --format=json | jq -r '.[] | [
+              .metadata.name,
+              .metadata.creationTimestamp,
+              (.spec.containers[0].image // ""),
+              ((.spec.containers[0].command // []) | join(" ")),
+              ((.spec.containers[0].args // []) | join(" ")),
+              (([.spec.containers[0].env[]? | select(.name=="SERVICE_TARGET") | .value] | first) // "")
+            ] | @tsv'
+          done
+          for origin in https://api.awfl.us https://api-4wmfqir74q-uc.a.run.app; do
+            for endpoint in /health /mcp /mcp/agents; do
+              method=POST; if [[ "$endpoint" == /health ]]; then method=GET; fi
+              status=$(curl -sS --max-time 15 -o /tmp/awfl-health-body -w '%{http_code}' -X "$method" "$origin$endpoint" || true)
+              echo "HTTP $status $origin$endpoint"
+              head -c 90 /tmp/awfl-health-body | tr '\n' ' '; echo
+            done
+          done
