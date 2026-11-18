@@ -123,8 +123,11 @@ test('opt-in native timing leaves HTTP payload unchanged and uses scoped IDs onl
     const res = await request(app).post('/native/execute').send({ executionId: id });
     assert.equal(res.status, 200);
     assert.deepEqual(res.body, { state: 'SUCCEEDED', result: { done: true } });
-    assert.equal(messages.length, 1);
-    const profile = JSON.parse(messages[0]);
+    assert.equal(messages.length, 3);
+    const profile = messages.map(line => JSON.parse(line))
+      .find(entry => entry.event === 'awfl_native_job_timing');
+    assert.ok(messages.some(line => JSON.parse(line).event === 'awfl_native_execution_started'));
+    assert.ok(messages.some(line => JSON.parse(line).event === 'awfl_native_execution_completed'));
     assert.equal(profile.executionId, id);
     assert.equal(profile.outcome, 'completed');
     assert.equal(profile.phases['firestore.get'].count, 1);
@@ -191,7 +194,8 @@ test('terminal failure logs the persisted error and profiles failed rather than 
     assert.equal(response.status, 200);
     assert.deepEqual(response.body, { state: 'FAILED' });
     assert.deepEqual(JSON.parse(errors[0]), { event: 'awfl_native_execution_failed',
-      executionId: id, projectId: 'project-a', errorCode: null,
+      executionId: id, projectId: 'project-a', executionMode: 'durable',
+      storageBackend: 'firestore', errorCode: null,
       errorMessage: 'missing field or element: arg1' });
     const timing = infos.map(line => JSON.parse(line)).find(line => line.event === 'awfl_native_job_timing');
     assert.equal(timing.outcome, 'failed');

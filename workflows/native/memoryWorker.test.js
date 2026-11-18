@@ -185,7 +185,7 @@ test('compiled Try edge catches HTTP failure in local continuation, no journal',
         continuation: { next_step: 1, slots: {}, frames: [] } };
       assert.equal(input.continuation.next_step, 2);
       assert.deepEqual(input.continuation.slots.s1, { type: 'map', value: {
-        message: { type: 'string', value: 'HTTP 404' },
+        message: { type: 'string', value: 'http.get (read_0): HTTP 404: Not Found' },
         code: { type: 'integer', value: 404 },
       } });
       return { protocol_version: 2, status: 'completed', result: { caught: true } };

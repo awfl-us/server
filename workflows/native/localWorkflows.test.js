@@ -161,7 +161,7 @@ test('compiled Try edge receives child workflow failure without losing parent co
         localArgs('LocalChild', {}), 's0',
         { on_error: { next_step: 2, error_slot: 's1' } });
       assert.equal(input.continuation.next_step, 2);
-      assert.equal(input.continuation.slots.s1.value.message.value, 'child failure');
+      assert.equal(input.continuation.slots.s1.value.message.value, 'workflow.run (effect_0): child failure');
       return { protocol_version: 2, status: 'completed', result: 'caught' };
     },
   });
@@ -411,12 +411,13 @@ test('Scala deployment placeholder resolves for nested native workflow.run child
 
 test('native effect failures are structured, redacted and logged even when Try catches them', async () => {
   const f = fixture();
-  const diagnostics = [];
+  const diagnostics = [], lifecycle = [];
   const secret = 'Bearer top-secret-key';
   const runner = createNativeLocalRunner({
     releases: f.releases, identity, rootExecutionId: rootId,
     gcpProject: 'awfl-us', region: 'us-central1',
     reportFailure: event => diagnostics.push(event),
+    reportEvent: event => lifecycle.push(event),
     handlers: { 'http.post': async () => {
       throw new Error('callback delivery rejected: ' + secret);
     } },
@@ -426,8 +427,11 @@ test('native effect failures are structured, redacted and logged even when Try c
           's0', { on_error: { next_step: 2, error_slot: 's1' } });
       }
       assert.equal(input.continuation.next_step, 2);
-      // Keep the existing catch contract; diagnostics only belong in GCP logs.
-      assert.equal(input.continuation.slots.s1.value.message.value, 'native effect failed');
+      const message = input.continuation.slots.s1.value.message.value;
+      assert.match(message, /http.post \(effect_0\): callback delivery rejected/);
+      assert.match(message, /Bearer \[REDACTED\]/);
+      assert.ok(!message.includes('top-secret-key'));
+      assert.ok(input.continuation.slots.s1.value.code);
       return { protocol_version: 2, status: 'completed', result: 'caught' };
     },
   });
@@ -437,6 +441,8 @@ test('native effect failures are structured, redacted and logged even when Try c
       artifact: f.artifact, executionId: rootId, input: {} });
     assert.equal(result, 'caught');
     assert.equal(diagnostics.length, 1);
+    assert.deepEqual(lifecycle.filter(e => e.event.startsWith('awfl_native_effect_'))
+      .map(e => e.event), ['awfl_native_effect_started']);
     const [entry] = diagnostics;
     assert.equal(entry.severity, 'ERROR');
     assert.equal(entry.event, 'awfl_native_effect_failed');
@@ -451,6 +457,8 @@ test('native effect failures are structured, redacted and logged even when Try c
     assert.match(entry.errorStack, /localWorkflows\.test\.js/);
     assert.ok(!JSON.stringify(entry).includes('top-secret-key'));
     assert.ok(!JSON.stringify(entry).includes('token=hidden'));
+    assert.equal(entry.ordinal, 1);
+    assert.equal(typeof entry.durationMs, 'number');
   } finally { await runner.close(); }
 });
 
@@ -472,5 +480,41 @@ test('compiled native workflow failures have structured diagnostics before propa
     assert.equal(diagnostics[0].event, 'awfl_native_workflow_failed');
     assert.equal(diagnostics[0].errorMessage, 'missing compiled argument');
     assert.equal(diagnostics[0].workflow, 'InvalidChild');
+  } finally { await runner.close(); }
+});
+
+
+test('nested transition exception logs child/parent identity and survives propagation', async () => {
+  const f = fixture();
+  const diagnostics = [], lifecycle = [];
+  const runner = createNativeLocalRunner({
+    releases: f.releases, handlers: {}, identity, rootExecutionId: rootId,
+    reportFailure: event => diagnostics.push(event),
+    reportEvent: event => lifecycle.push(event),
+    gcpProject: 'awfl-us', region: 'us-central1',
+    runArtifact: async ({ executable, input }) => {
+      if (executable === '/test/child') throw new Error('native stream process exited 1');
+      if (!input.continuation) return suspend('workflow.run', localArgs('LocalChild', {}));
+      throw new Error('unexpected parent resume');
+    },
+  });
+  try {
+    await assert.rejects(runner.run({ workflowName: 'Parent', release: f.root,
+      artifact: f.artifact, executionId: rootId, input: {} }), /native stream process exited 1/);
+    const child = lifecycle.find(e => e.event === 'awfl_native_workflow_started' && e.depth === 1);
+    assert.ok(child);
+    assert.equal(child.parentExecutionId, rootId);
+    assert.equal(child.parentEffectId, 'effect_0');
+    assert.match(child.executionId, /^native_[a-f0-9]{32}$/);
+    const transition = diagnostics.find(e => e.event === 'awfl_native_transition_failed');
+    assert.ok(transition);
+    assert.equal(transition.executionId, child.executionId);
+    assert.equal(transition.rootExecutionId, rootId);
+    assert.equal(transition.parentExecutionId, rootId);
+    assert.match(transition.errorMessage, /native stream process exited 1/);
+    const parent = diagnostics.find(e => e.event === 'awfl_native_effect_failed');
+    assert.equal(parent.operation, 'workflow.run');
+    assert.equal(parent.effectId, 'effect_0');
+    assert.equal(parent.executionId, rootId);
   } finally { await runner.close(); }
 });
