@@ -7,15 +7,12 @@ import { sizeLimiter as sizeLimiterFilter } from './sizeLimiter.js';
 import { toolCallBackfill as toolCallBackfillFilter } from './toolCallBackfill.js';
 import { fileContentsLimiter as fileContentsLimiterFilter } from './fileContentsLimiter.js';
 import { collapseGroupReplacer as collapseGroupReplacerFilter } from './collapseGroupReplacer.js';
-import { dropToolCallsCompleted as dropToolCallsCompletedFilter } from './dropToolCallsCompleted.js';
 
 const registry = new Map([
   ['sizeLimiter', sizeLimiterFilter],
   ['toolCallBackfill', toolCallBackfillFilter],
   ['fileContentsLimiter', fileContentsLimiterFilter],
   ['collapseGroupReplacer', collapseGroupReplacerFilter],
-  // Keeps only the latest user message whose content equals the phrase (default: "Tool calls completed")
-  ['dropToolCallsCompleted', dropToolCallsCompletedFilter],
 ]);
 
 export async function applyFilters(messages, filtersSpec = [], ctx = {}) {
