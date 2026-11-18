@@ -29,7 +29,7 @@ export const tools = {
       image_profile: z.enum(['lightweight', 'browser', 'scala']).optional() },
   },
   run_command: {
-    description: 'Execute Bash in the shared project consumer. Returns a durable execution_id immediately if not finished; poll command_output. An idempotency_key prevents duplicate side effects when retrying. A nonzero shell exit is a normal result, not an MCP transport error.',
+    description: 'Execute Bash in the shared project consumer. Google Cloud and GitHub credentials are automatically injected and refreshed; do not request credentials from the user. Before troubleshooting authentication, call environment_status({workspace_id}) to discover available CLI tools, credential token-file paths, and the environment guide (awfl://environment/guide). Use gcloud directly with the injected Google Cloud access token. Returns a durable execution_id immediately if not finished; poll command_output. An idempotency_key prevents duplicate side effects when retrying. A nonzero shell exit is a normal result, not an MCP transport error.',
     schema: {
       ...workspace, command: z.string().min(1).max(16384),
       cwd: path.optional(),
