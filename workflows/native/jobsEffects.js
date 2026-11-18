@@ -13,6 +13,29 @@ const METHODS = Object.freeze({
   'http.patch': 'PATCH', 'http.delete': 'DELETE',
 });
 
+// A nested workflow may execute in a temporary project but must deliver its
+// response to a callback that was registered in the parent project. Resolve
+// that callback's authoritative scope, rather than trusting the nested
+// workflow's default Env project header. Never redirect an arbitrary URL:
+// only a registered native callback belonging to this same execution/user.
+async function registeredCallbackProject({
+  method, url, identity, idempotencyKey, callbackDb, callbackStorage,
+}) {
+  const match = method === 'POST' &&
+    /^\/callbacks\/(n[a-f0-9]{32})$/.exec(url.pathname);
+  if (!match || (!callbackDb && !callbackStorage)) return undefined;
+  const path = `users/${identity.userId}/callbacks/${match[1]}`;
+  const snap = callbackStorage
+    ? await callbackStorage.get(path) : await callbackDb.doc(path).get();
+  const saved = callbackStorage ? snap?.data : snap?.data();
+  if (!saved || saved.kind !== 'native_workflow') return undefined;
+  if (saved.created_by !== identity.userId ||
+      saved.native_execution_id !== idempotencyKey?.split(':')[0]) {
+    throw new Error('native callback does not belong to authenticated execution');
+  }
+  return saved.native_project_id;
+}
+
 export function createJobsEffectHandlers({
   jobsOrigin, auth = new GoogleAuth(), timeoutMs = 30_000,
   logger = console,
@@ -58,8 +81,12 @@ export function createJobsEffectHandlers({
       // A nested evaluation can intentionally operate in a different project
       // owned by the *same* authenticated user. Check ownership against the
       // provider-neutral project store before forming the trusted Jobs request.
+      const callbackProject = await registeredCallbackProject({
+        method, url, identity, idempotencyKey, callbackDb, callbackStorage,
+      });
       const target = await resolveNativeProjectIdentity(identity, {
-        projectId: nativeProjectHeader(args.headers), getStorage: getProjectStorage,
+        projectId: callbackProject ?? nativeProjectHeader(args.headers),
+        getStorage: getProjectStorage,
       });
       // jobs/workflowsUserInject prioritizes body.userId over x-user-id, and
       // projectIdMiddleware likewise reads the body. A DSL-authored body must

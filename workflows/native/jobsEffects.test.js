@@ -106,3 +106,49 @@ test('native Jobs effects route to a verified temporary project and retain the u
   }), /not owned/);
   assert.equal(requests.length, 1, 'unauthorized effects cannot make IAM Jobs requests');
 });
+
+test('nested temporary project delivers registered parent callback in the parent scope', async () => {
+  const requests = [];
+  const root = 'native_' + 'a'.repeat(32);
+  const callback = 'n' + 'b'.repeat(32);
+  const path = 'users/verified-user/callbacks/' + callback;
+  const handlers = createJobsEffectHandlers({
+    jobsOrigin: 'https://jobs.example.org',
+    callbackDb: {
+      runTransaction: async () => { throw new Error('unexpected callback mutation'); },
+      doc: requested => {
+        assert.equal(requested, path);
+        return { get: async () => ({ data: () => ({
+          kind: 'native_workflow', created_by: 'verified-user',
+          native_execution_id: root, native_project_id: 'project-a',
+        }) }) };
+      },
+    },
+    auth: { getIdTokenClient: async () => ({
+      request: async request => {
+        requests.push(request);
+        return { status: 200, data: { ok: true } };
+      },
+    }) },
+  });
+  const input = {
+    url: 'https://jobs.example.org/callbacks/' + callback,
+    headers: { 'x-project-id': 'temporary-project' },
+    body: { response: true }, auth: { type: 'OIDC' },
+  };
+  const result = await handlers['http.post']({
+    args: input, identity, idempotencyKey: root + ':root:lane:child-step',
+  });
+  assert.equal(result.code, 200);
+  assert.equal(requests[0].headers['x-project-id'], 'project-a');
+  assert.equal(requests[0].data.projectId, 'project-a');
+  assert.equal(requests[0].data.userId, 'verified-user');
+  assert.deepEqual(input.headers, { 'x-project-id': 'temporary-project' });
+  // Possession of a callback ID from another execution does not authorize
+  // its invocation, even if the caller controls the project header.
+  await assert.rejects(handlers['http.post']({
+    args: input, identity,
+    idempotencyKey: 'native_' + 'f'.repeat(32) + ':root:other-step',
+  }), /does not belong to authenticated execution/);
+  assert.equal(requests.length, 1);
+});
