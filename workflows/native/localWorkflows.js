@@ -16,6 +16,18 @@ const MAX_TRANSITIONS = 100_000;
 const MAX_RELEASES = 64;
 const MAX_STREAM_PROCESSES = 16; // per authenticated local execution tree
 
+// Log failure context without workflow arguments, credentials, or unbounded stacks.
+// The workflow's catchable error contract remains unchanged.
+function diagnosticText(value, maxLength = 2048) {
+  return String(value ?? '')
+    .replace(/((?:Bearer|Basic)\s+)[^\s,;]+/gi, '$1[REDACTED]')
+    .replace(/([?&](?:token|api_key|access_token|key|secret|password)=)[^&\s]+/gi,
+      '$1[REDACTED]')
+    .replace(/((?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password)\s*[:=]\s*)[^\s,;]+/gi,
+      '$1[REDACTED]')
+    .slice(0, maxLength);
+}
+
 function checkedChildArgs(args, project, location) {
   if (!args || typeof args !== 'object' || Array.isArray(args) ||
       typeof args.workflow_id !== 'string' ||
@@ -48,6 +60,7 @@ export function createNativeLocalRunner({
   releases, handlers, rootExecutionId, identity, profiler = null,
   runArtifact = runNativeArtifact, onProgress = () => {},
   runDetached = null,
+  reportFailure = entry => console.error(JSON.stringify(entry)),
   getProjectStorage,
   gcpProject = process.env.GCP_PROJECT || process.env.GCLOUD_PROJECT,
   region = process.env.WORKFLOWS_LOCATION || 'us-central1',
@@ -60,6 +73,10 @@ export function createNativeLocalRunner({
   let childCalls = 0, transitions = 0, effectCount = 0;
   let closed = false;
   const rootId = rootExecutionId;
+  const emitFailure = entry => {
+    // Diagnostics must never turn a handled workflow failure into an unhandled one.
+    try { reportFailure({ severity: 'ERROR', ...entry }); } catch { /* logging is best effort */ }
+  };
   if (!/^native_[a-f0-9]{32}$/.test(rootId || '') ||
       !identity?.userId || !identity?.projectId) {
     throw new Error('local native runner requires trusted root execution context');
@@ -147,6 +164,13 @@ export function createNativeLocalRunner({
       }
       if (response.status === 'completed') return response.result;
       if (response.status === 'failed') {
+        emitFailure({
+          event: 'awfl_native_workflow_failed', rootExecutionId: rootId,
+          executionId, projectId: scopedIdentity.projectId,
+          workflow: workflowName, depth,
+          errorCode: response.error?.code ?? null,
+          errorMessage: diagnosticText(response.error?.message ?? response.error),
+        });
         // Development diagnostic: expose the compiler's native failure,
         // without silently reducing it to a generic wrapper message.
         if (process.env.AWFL_NATIVE_LOCAL_TRACE === '1') {
@@ -258,10 +282,25 @@ export function createNativeLocalRunner({
           ...next.slots, [effect.result_slot]: tagNativeValue(outcome),
         } };
       } catch (error) {
-        if (shouldStop() || error instanceof NativeMemoryParallelStopped ||
-            ((effect.operation === 'native.parallel' ||
-              effect.operation === 'workflow.run') &&
-             !(error instanceof NativeConfirmedWorkflowFailure))) throw error;
+        if (shouldStop() || error instanceof NativeMemoryParallelStopped) throw error;
+        const underlying = error?.nativeError ?? error;
+        emitFailure({
+          event: 'awfl_native_effect_failed', rootExecutionId: rootId,
+          executionId, projectId: scopedIdentity.projectId,
+          workflow: workflowName, depth, operation: effect.operation,
+          effectId: effect.effect_id, nodeId: effect.node_id,
+          errorName: diagnosticText(error?.name ?? 'Error', 120),
+          errorCode: underlying?.code ?? error?.response?.status ??
+            error?.status ?? null,
+          errorMessage: diagnosticText(underlying?.message ?? error?.message ?? error),
+          errorStack: typeof error?.stack === 'string'
+            ? diagnosticText(error.stack, 4096) : null,
+        });
+        // Unknown workflow.run/parallel outcomes still propagate for reconciliation;
+        // they must nonetheless leave an actionable diagnostic in Cloud Logging.
+        if ((effect.operation === 'native.parallel' ||
+             effect.operation === 'workflow.run') &&
+            !(error instanceof NativeConfirmedWorkflowFailure)) throw error;
         if (process.env.AWFL_NATIVE_LOCAL_TRACE === '1') {
           console.error('AWFL_NATIVE_CHILD_EFFECT_ERROR',
             JSON.stringify({workflowName,operation:effect.operation,
