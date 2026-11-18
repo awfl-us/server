@@ -12,6 +12,7 @@ import deepseekAdapter from './providers/deepseek.js';
 import { stripNullsDeep } from './providers/utils.js';
 import { incrementUsage } from './llm/usage.js';
 import { calculateOpenAiCost } from './llm/cost.js';
+import { llmFailureResponse } from './llm/transportError.js';
 
 const router = express.Router();
 
@@ -252,8 +253,18 @@ router.post('/chat', async (req, res) => {
 
     res.status(200).json({ message, usage, total_cost });
   } catch (error) {
-    console.error('LLM chat error:', error);
-    res.status(500).json({ error: 'Failed to complete chat request: ' + (error?.message || String(error)) });
+    // Do not log the provider error object wholesale: it can contain
+    // response headers (including cookies). Keep searchable safe fields.
+    console.error('[llm] chat failed', JSON.stringify({
+      event: 'awfl_llm_chat_failed',
+      providerStatus: error?.status ?? null,
+      providerCode: error?.code ?? error?.error?.code ?? null,
+      providerRequestId: error?.request_id ?? null,
+      model: req.body?.model ?? null,
+      errorMessage: error?.message ?? String(error),
+    }));
+    const response = llmFailureResponse(error);
+    res.status(response.status).json(response.body);
   }
 });
 
