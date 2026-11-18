@@ -407,3 +407,70 @@ test('Scala deployment placeholder resolves for nested native workflow.run child
     else process.env.WORKFLOW_ENV = before;
   }
 });
+
+
+test('native effect failures are structured, redacted and logged even when Try catches them', async () => {
+  const f = fixture();
+  const diagnostics = [];
+  const secret = 'Bearer top-secret-key';
+  const runner = createNativeLocalRunner({
+    releases: f.releases, identity, rootExecutionId: rootId,
+    gcpProject: 'awfl-us', region: 'us-central1',
+    reportFailure: event => diagnostics.push(event),
+    handlers: { 'http.post': async () => {
+      throw new Error('callback delivery rejected: ' + secret);
+    } },
+    runArtifact: async ({ input }) => {
+      if (!input.continuation) {
+        return suspend('http.post', { url: 'https://example.org/callback?token=hidden' },
+          's0', { on_error: { next_step: 2, error_slot: 's1' } });
+      }
+      assert.equal(input.continuation.next_step, 2);
+      // Keep the existing catch contract; diagnostics only belong in GCP logs.
+      assert.equal(input.continuation.slots.s1.value.message.value, 'native effect failed');
+      return { protocol_version: 2, status: 'completed', result: 'caught' };
+    },
+  });
+  try {
+    const result = await runner.run({ workflowName: 'CallbackParent',
+      release: { ...f.root, allowedOperations: ['http.post'] },
+      artifact: f.artifact, executionId: rootId, input: {} });
+    assert.equal(result, 'caught');
+    assert.equal(diagnostics.length, 1);
+    const [entry] = diagnostics;
+    assert.equal(entry.severity, 'ERROR');
+    assert.equal(entry.event, 'awfl_native_effect_failed');
+    assert.equal(entry.rootExecutionId, rootId);
+    assert.equal(entry.executionId, rootId);
+    assert.equal(entry.projectId, 'tenant');
+    assert.equal(entry.workflow, 'CallbackParent');
+    assert.equal(entry.operation, 'http.post');
+    assert.equal(entry.effectId, 'effect_0');
+    assert.equal(entry.nodeId, '0.0');
+    assert.match(entry.errorMessage, /callback delivery rejected/);
+    assert.match(entry.errorStack, /localWorkflows\.test\.js/);
+    assert.ok(!JSON.stringify(entry).includes('top-secret-key'));
+    assert.ok(!JSON.stringify(entry).includes('token=hidden'));
+  } finally { await runner.close(); }
+});
+
+test('compiled native workflow failures have structured diagnostics before propagation', async () => {
+  const f = fixture();
+  const diagnostics = [];
+  const runner = createNativeLocalRunner({
+    releases: f.releases, identity, rootExecutionId: rootId,
+    reportFailure: event => diagnostics.push(event),
+    runArtifact: async () => ({ protocol_version: 2, status: 'failed',
+      error: { message: 'missing compiled argument', code: null } }),
+    handlers: {},
+  });
+  try {
+    await assert.rejects(runner.run({ workflowName: 'InvalidChild',
+      release: f.root, artifact: f.artifact, executionId: rootId, input: {} }),
+    /missing compiled argument/);
+    assert.equal(diagnostics.length, 1);
+    assert.equal(diagnostics[0].event, 'awfl_native_workflow_failed');
+    assert.equal(diagnostics[0].errorMessage, 'missing compiled argument');
+    assert.equal(diagnostics[0].workflow, 'InvalidChild');
+  } finally { await runner.close(); }
+});
