@@ -9,9 +9,10 @@ import { Storage } from '@google-cloud/storage';
 import { NativeExecutionStore } from '../workflows/native/executionStore.js';
 import { NativeGcsReleases } from '../workflows/native/gcsReleases.js';
 import { createJobsEffectHandlers } from '../workflows/native/jobsEffects.js';
-import { runNativeWorkflow, nativeAsyncSchedulerFor } from '../workflows/native/worker.js';
+import { runNativeWorkflow } from '../workflows/native/worker.js';
 import { runNativeMemoryWorkflow, nativeMemoryAsyncSchedulerFor } from '../workflows/native/memoryWorker.js';
 import { createNativeProfiler } from '../workflows/native/profiler.js';
+import { createNativeAsyncScheduler } from '../workflows/native/asyncScheduler.js';
 import { configuredNativeMemoryStore, nativeDocumentStoreEnabled } from '../storage/nativeMemory.js';
 import { nativeCallbacksUseLegacyFirestore } from '../workflows/native/callbackEffects.js';
 
@@ -112,6 +113,66 @@ export function createNativeJobsRouter({
   return router;
 }
 
+// Firestore hosts both durable roots and memory roots until the native
+// document-store switch is enabled. One recovery scanner must dispatch by the
+// *persisted* executionMode, not the current global feature flag.
+const hybridSchedulers = new WeakMap();
+export function nativeHybridAsyncSchedulerFor({
+  store, releases, handlers,
+  executeDurable = runNativeWorkflow, executeMemory = runNativeMemoryWorkflow,
+}) {
+  const key = store?.db || store;
+  if (!key || typeof store?.get !== 'function' ||
+      typeof store?.listPendingAsync !== 'function') {
+    throw new Error('native hybrid recovery requires a persistent store');
+  }
+  let scheduler = hybridSchedulers.get(key);
+  if (!scheduler) {
+    // Old memory detached launches were missing executionMode entirely.
+    // Quarantine when the parent proves they belong to memory mode; never run
+    // them as durable by accident. A new launch is tagged correctly.
+    const quarantined = new Map();
+    scheduler = createNativeAsyncScheduler({
+      store,
+      execute: async ({ executionId, userId, projectId }) => {
+        if ((quarantined.get(executionId) || 0) > Date.now()) return;
+        quarantined.delete(executionId);
+        const state = await store.get(executionId);
+        if (!state || state.userId !== userId || state.projectId !== projectId) {
+          throw new Error('native detached recovery owner mismatch');
+        }
+        const params = { store, releases, handlers, executionId, userId,
+          projectId, asyncScheduler: scheduler };
+        if (state.executionMode === 'memory') {
+          return executeMemory(params);
+        }
+        if (state.executionMode) {
+          throw new Error('unsupported native detached execution mode');
+        }
+        if (state.detachedParentExecutionId) {
+          const parent = await store.get(state.detachedParentExecutionId);
+          if (!parent || parent.executionMode === 'memory') {
+            quarantined.set(executionId, Date.now() + 5 * 60_000);
+            console.error(JSON.stringify({ severity: 'ERROR',
+              event: 'awfl_native_legacy_detached_mode_missing', executionId,
+              parentExecutionId: state.detachedParentExecutionId,
+              projectId, workflow: state.workflowName,
+              errorMessage: !parent
+                ? 'Detached parent record missing; cannot safely choose execution mode'
+                : 'Legacy memory detached child missing executionMode; relaunch or repair before recovery',
+            }));
+            return;
+          }
+        }
+        return executeDurable({ ...params, maxTransitions: 10000 });
+      },
+    });
+    hybridSchedulers.set(key, scheduler);
+    scheduler.start();
+  }
+  return scheduler;
+}
+
 // The persistent GKE Jobs deployment can recover queued native detached
 // executions immediately on startup, without Cloud Tasks or another service.
 // Do not run a detached recovery loop on request-scoped Cloud Run instances.
@@ -146,9 +207,10 @@ export function startNativeDetachedRecovery({ store, releases, handlers } = {}) 
     jobsOrigin: process.env.AWFL_NATIVE_JOBS_URL,
     storage: new Storage(), callbackDb: getFirestore(),
   });
-  return nativeAsyncSchedulerFor({
-    store: nativeStore, releases: nativeReleases, handlers: nativeHandlers,
-  });
+  // Recovery must honor each persisted record even if this GKE process has
+  // an older/missing memory-mode flag. Never infer a record's mode globally.
+  return nativeHybridAsyncSchedulerFor({ store: nativeStore,
+    releases: nativeReleases, handlers: nativeHandlers });
 }
 
 export default createNativeJobsRouter();

@@ -3,7 +3,6 @@
 // therefore has its *own* durable provider-neutral root record and GKE scheduling.
 // Keep the same pinned-id and replay contract as the durable launcher.
 import { createHash } from 'node:crypto';
-import { nativeAsyncSchedulerFor } from './worker.js';
 
 const SHA = /^[a-f0-9]{64}$/;
 
@@ -42,6 +41,9 @@ export function createMemoryDetachedLauncher({
     if (childIdentity.userId !== userId || !childIdentity.projectId) {
       throw new Error('native detached child identity mismatch');
     }
+    if (typeof asyncScheduler?.enqueue !== 'function') {
+      throw new Error('memory detached scheduler unavailable');
+    }
     const childProjectId = childIdentity.projectId;
     const childId = 'native_' + createHash('sha256')
       .update(JSON.stringify([executionId, path, effectId, name]))
@@ -54,7 +56,8 @@ export function createMemoryDetachedLauncher({
         ...(release.trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
         ...(release.streamIpcVersion === 1 && { streamIpcVersion: 1 }),
         ...(release.parallelVersion === 1 && { parallelVersion: 1 }),
-        asyncLaunch: true, detachedParentExecutionId: executionId, input: args.argument,
+        executionMode: 'memory', asyncLaunch: true,
+        detachedParentExecutionId: executionId, input: args.argument,
       });
     } catch (error) {
       if (error.code !== 'CONFLICT' && error.code !== 'ALREADY_EXISTS') throw error;
@@ -63,15 +66,15 @@ export function createMemoryDetachedLauncher({
           existing.projectId !== childProjectId ||
           existing.workflowName !== name ||
           existing.artifactSha256 !== release.sha256 ||
-          existing.protocolVersion !== 2 ||
+          existing.protocolVersion !== 2 || existing.executionMode !== 'memory' ||
           existing.detachedParentExecutionId !== executionId ||
           JSON.stringify(existing.input) !== JSON.stringify(args.argument)) {
         throw new Error('memory detached child idempotency conflict');
       }
     }
 
-    const scheduler = asyncScheduler ||
-      nativeAsyncSchedulerFor({ store, releases, handlers });
+    // Never silently use the durable scheduler for a memory-mode child.
+    const scheduler = asyncScheduler;
     if (typeof scheduler?.enqueue !== 'function') {
       throw new Error('native detached scheduler unavailable');
     }
