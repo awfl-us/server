@@ -22,7 +22,7 @@ export function nativeMemoryAsyncSchedulerFor({ store, releases, handlers }) {
   let scheduler = memorySchedulers.get(store);
   if (!scheduler) {
     scheduler = createNativeAsyncScheduler({
-      store,
+      store, shouldRecover: state => state.executionMode === 'memory',
       execute: ({ executionId, userId, projectId }) => runNativeMemoryWorkflow({
         store, releases, handlers, executionId, userId, projectId,
         asyncScheduler: scheduler,

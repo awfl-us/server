@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import request from 'supertest';
-import { createNativeJobsRouter } from './native.js';
+import { createNativeJobsRouter, nativeHybridAsyncSchedulerFor,
+  startNativeDetachedRecovery } from './native.js';
 
 function appFor(underTest) {
   const app = express();
@@ -203,5 +204,87 @@ test('terminal failure logs the persisted error and profiles failed rather than 
     console.error = oldError; console.info = oldInfo;
     if (old === undefined) delete process.env.AWFL_NATIVE_PROFILE_ENABLED;
     else process.env.AWFL_NATIVE_PROFILE_ENABLED = old;
+  }
+});
+
+
+test('hybrid Firestore recovery dispatches each persisted execution to its pinned mode', async () => {
+  const durable = 'native_' + 'a'.repeat(32);
+  const memory = 'native_' + 'b'.repeat(32);
+  const states = new Map([
+    [durable, { executionId: durable, userId: 'owner', projectId: 'project',
+      asyncLaunch: true, status: 'ready', leaseUntil: 0 }],
+    [memory, { executionId: memory, userId: 'owner', projectId: 'project',
+      executionMode: 'memory', asyncLaunch: true, status: 'ready', leaseUntil: 0 }],
+  ]);
+  const store = { get: async id => states.get(id) ?? null,
+    listPendingAsync: async () => [...states.values()] };
+  const calls = [];
+  let scheduler;
+  scheduler = nativeHybridAsyncSchedulerFor({ store, releases: {}, handlers: {},
+    executeDurable: async args => calls.push(['durable', args.executionId,
+      args.asyncScheduler === scheduler]),
+    executeMemory: async args => calls.push(['memory', args.executionId,
+      args.asyncScheduler === scheduler]),
+  });
+  try {
+    await scheduler.scan(); await scheduler.drain();
+    assert.deepEqual(calls.sort((a, b) => a[1].localeCompare(b[1])), [
+      ['durable', durable, true], ['memory', memory, true],
+    ]);
+  } finally { await scheduler.close(); }
+});
+
+test('hybrid recovery quarantines old untagged memory children instead of running durable', async () => {
+  const child = 'native_' + 'c'.repeat(32);
+  const parent = 'native_' + 'd'.repeat(32);
+  const state = { executionId: child, userId: 'owner', projectId: 'project',
+    detachedParentExecutionId: parent, asyncLaunch: true,
+    status: 'ready', leaseUntil: 0 };
+  const calls = [], diagnostics = [], oldError = console.error;
+  console.error = line => diagnostics.push(JSON.parse(line));
+  const scheduler = nativeHybridAsyncSchedulerFor({
+    store: { get: async id => id === child ? state : { executionMode: 'memory' },
+      listPendingAsync: async () => [state] },
+    releases: {}, handlers: {},
+    executeMemory: async () => calls.push('memory'),
+    executeDurable: async () => calls.push('durable'),
+  });
+  try {
+    await scheduler.scan(); await scheduler.drain();
+    await scheduler.scan(); await scheduler.drain();
+    assert.deepEqual(calls, []);
+    assert.equal(diagnostics.length, 1);
+    assert.equal(diagnostics[0].event, 'awfl_native_legacy_detached_mode_missing');
+    assert.equal(diagnostics[0].executionId, child);
+    assert.equal(diagnostics[0].parentExecutionId, parent);
+  } finally { await scheduler.close(); console.error = oldError; }
+});
+
+
+test('GKE Firestore recovery uses per-record hybrid mode even if worker memory flag is absent', async () => {
+  const flags = ['AWFL_NATIVE_EXECUTION_ENABLED',
+    'AWFL_NATIVE_DETACHED_GKE_ENABLED', 'AWFL_NATIVE_PERSISTENT_WORKER',
+    'AWFL_NATIVE_MEMORY_EXECUTION_ENABLED', 'AWFL_NATIVE_DOCUMENT_STORE_ENABLED'];
+  const before = Object.fromEntries(flags.map(key => [key, process.env[key]]));
+  process.env.AWFL_NATIVE_EXECUTION_ENABLED = '1';
+  process.env.AWFL_NATIVE_DETACHED_GKE_ENABLED = '1';
+  process.env.AWFL_NATIVE_PERSISTENT_WORKER = '1';
+  delete process.env.AWFL_NATIVE_MEMORY_EXECUTION_ENABLED;
+  process.env.AWFL_NATIVE_DOCUMENT_STORE_ENABLED = '0';
+  const store = { get: async () => null, listPendingAsync: async () => [] };
+  let scheduler;
+  try {
+    scheduler = startNativeDetachedRecovery({ store, releases: {}, handlers: {} });
+    assert.ok(scheduler);
+    assert.equal(scheduler, nativeHybridAsyncSchedulerFor({
+      store, releases: {}, handlers: {} }));
+    await scheduler.scan();
+  } finally {
+    await scheduler?.close();
+    for (const [key, value] of Object.entries(before)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   }
 });

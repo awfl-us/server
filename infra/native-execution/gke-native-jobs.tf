@@ -166,6 +166,11 @@ resource "kubernetes_deployment_v1" "native_scheduler" {
             name  = "AWFL_NATIVE_EXECUTION_ENABLED"
             value = "1"
           }
+          # Match Cloud Run API/Jobs; dispatch still follows each persisted mode.
+          env {
+            name  = "AWFL_NATIVE_MEMORY_EXECUTION_ENABLED"
+            value = "1"
+          }
           env {
             name  = "AWFL_NATIVE_DETACHED_GKE_ENABLED"
             value = "1"
