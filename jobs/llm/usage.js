@@ -65,7 +65,7 @@ function buildUsageIncrements(usage = {}) {
   const inc = {};
   const add = (path, val) => {
     const n = toNumber(val);
-    if (!n) return;
+    if (val == null || val === '' || !Number.isFinite(Number(val))) return;
     inc[path] = patch.increment(n);
   };
   // Top-level known fields (nested under usage.*)
@@ -75,6 +75,10 @@ function buildUsageIncrements(usage = {}) {
 
   // Nested details if present
   const p = u.prompt_tokens_details || {};
+  if (p && Object.hasOwn(p, 'cached_tokens') && p.cached_tokens != null) {
+    add('usage.prompt_cache_reported_requests', 1);
+    add('usage.prompt_cache_reported_prompt_tokens', u.prompt_tokens);
+  }
   if (p) {
     add('usage.prompt_tokens_details.cached_tokens', p.cached_tokens);
     add('usage.prompt_tokens_details.audio_tokens', p.audio_tokens);
