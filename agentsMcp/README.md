@@ -14,6 +14,11 @@ AWFL Agents MCP **does not create another agent runtime**.
 
 - `create_session` is the same Google Workflows launch used by AWFL Web's
   `/workflows/execute`, sharing `createWorkflowExecution`.
+- `execute_workflow` invokes that same authenticated, project-scoped launcher
+  with typed JSON `params` without creating an agent/session mapping. Use
+  it for evaluation roots, e.g. `workflow_name: evals-AutomationBenchEval`
+  and `params: {"arg1":"run-identifier","arg2":"1"}`. Track the
+  returned `execution_name`. Never retry blindly after a timeout.
 - It uses the same agents and `agentSessions` mapping as the Web session creator.
 - `send_message` submits `query` to that same workflow and `sessionId`,
   rather than writing a separate message or opening a separate agent process.

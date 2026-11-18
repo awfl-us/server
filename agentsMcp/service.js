@@ -191,6 +191,20 @@ export class AgentSessionService {
       throw error;
     }
   }
+  async executeWorkflow(userId, { project_id, workflow_name, params } = {}) {
+    await this.ensureProject(userId, project_id);
+    if (!params || typeof params !== 'object' || Array.isArray(params) ||
+        !Object.keys(params).length || !workflow_name) {
+      throw new Error('Typed workflow_name and nonempty params are required');
+    }
+    // Ownership comes from the authenticated MCP user and the existing
+    // project check, never from caller-supplied env.userId or env.projectId.
+    // The shared launcher seals the trusted env after spreading params.
+    const { executionName } = await this.execute({
+      userId, projectId: project_id, workflowName: workflow_name, params,
+    });
+    return { project_id, workflow_name, execution_name: executionName, status: 'submitted' };
+  }
   async sendMessage(userId, { project_id, session_id, message, model = 'gpt-5',
     fund = 1, background = false } = {}) {
     await this.ensureProject(userId, project_id);
