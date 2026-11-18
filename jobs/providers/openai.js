@@ -1,4 +1,5 @@
 import { OpenAI } from 'openai';
+import { captureOpenAiRequest, logOpenAiCacheUsage } from './openaiCapture.js';
 import { stripNullsDeep } from './utils.js';
 import { toOpenAiMessages } from './openaiMessages.js';
 
@@ -26,7 +27,17 @@ export function buildChatPayload(params) {
 export async function chat(params) {
   // Retain native fetch: node-fetch prematurely closes compressed GKE replies.
   const client = new OpenAI({ apiKey: params.apiKey, fetch: globalThis.fetch });
-  const resp = await client.chat.completions.create(buildChatPayload(params));
+  const payload = buildChatPayload(params);
+  const capture = captureOpenAiRequest(payload);
+  const started = Date.now();
+  let resp;
+  try {
+    resp = await client.chat.completions.create(payload);
+  } catch (error) {
+    if (capture) console.error(JSON.stringify({ event: 'openai_context_capture_request_failed', capture_id: capture.id, status: error?.status ?? null }));
+    throw error;
+  }
+  logOpenAiCacheUsage(capture, resp, Date.now() - started);
 
   const choice = resp.choices?.[0];
   const message = choice?.message || null;
