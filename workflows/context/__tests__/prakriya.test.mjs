@@ -10,48 +10,29 @@ import { jest } from '@jest/globals';
 // Stub data registry keyed by collection path (post projectScopedCollectionPath)
 const STUB_COLLECTION_DOCS = new Map();
 
-// Mock firebase-admin/app to avoid real initialization
-jest.unstable_mockModule('firebase-admin/app', () => ({
-  initializeApp: jest.fn(),
-  getApps: () => [],
-}));
-
-// Mock projectScopedCollectionPath to return the raw collectionPath we pass in
+// Mock project scoping and the current provider-neutral Storage boundary.
+// The old Firestore Admin query mock no longer represents this code path.
 jest.unstable_mockModule('../../userAuth.js', () => ({
-  projectScopedCollectionPath: (userId, projectId, collectionPath) => collectionPath,
+  projectScopedCollectionPath: (_userId, _projectId, collectionPath) => collectionPath,
 }));
 
-// Mock firebase-admin/firestore with a minimal query chain used by listBetween and listBetweenFlat
-jest.unstable_mockModule('firebase-admin/firestore', () => ({
-  getFirestore: () => ({
-    collection: (path) => {
-      const chain = {
-        _path: path,
-        where() { return this; },
-        orderBy() { return this; },
-        async get() {
-          const docs = STUB_COLLECTION_DOCS.get(path) || [];
-          // Simulate Firestore's orderBy('create_time','asc') at query time
-          const sorted = [...docs].sort((a, b) => {
-            const at = a.data?.create_time ?? a.data?.createTime ?? a.data?.ts ?? 0;
-            const bt = b.data?.create_time ?? b.data?.createTime ?? b.data?.ts ?? 0;
-            return at - bt;
-          });
-          return {
-            docs: sorted.map((d) => ({ id: d.id, data: () => ({ ...d.data }) })),
-          };
-        },
-        async doc() { return { get: async () => ({ exists: false }) }; },
-        async listCollections() { return []; },
-      };
-      return chain;
-    },
-  }),
+jest.unstable_mockModule('../../../storage/service.js', () => ({
+  getDocumentStorage: async () => ({ listCollections: async () => [] }),
+  readDocuments: async (_store, { collection, where = [] }) => {
+    const docs = STUB_COLLECTION_DOCS.get(collection) || [];
+    return docs.filter(({ data }) => where.every(({ field, op, value }) => {
+      if (op === '>') return data[field] > value;
+      if (op === '<=') return data[field] <= value;
+      if (op === '==') return data[field] === value;
+      throw new Error(`Unexpected operator: ${op}`);
+    })).map(({ id, data }) => ({ id, path: `${collection}/${id}`, data: { ...data } }));
+  },
 }));
 
 // Import the module under test AFTER setting up the mocks
 const prakriya = await import('../lib/prakriya.js');
 const { buildYojMessages, WEEK_SECONDS, promoteKala } = prakriya;
+const { interleaveContextMessages } = await import('../lib/chronologicalMessages.js');
 
 function makeDoc(id, { create_time, sessionId, value, extra = {} }) {
   return {
@@ -102,6 +83,34 @@ describe('prakriya.buildYojMessages - WeekKala', () => {
     // Asc by create_time (s1, s2, s3)
     const order = res.map((m) => JSON.parse(m.content.replace(/^\(Week\)\s*/, ''))?.foo);
     expect(order).toEqual(['a', 'b', 'c']);
+  });
+
+  test('document wrapper timestamps interleave real summaries and chat without leaking metadata', async () => {
+    const now = 1_000_000;
+    const docs = (items) => items.map(([id, at, value]) => makeDoc(id, {
+      create_time: at, value,
+    }));
+    STUB_COLLECTION_DOCS.set('convo.sessions/s1/summaries', docs([
+      ['s2', now - 30, { title: 'Later summary' }],
+      ['s1', now - 250, { title: 'Earlier summary' }],
+    ]));
+    STUB_COLLECTION_DOCS.set('convo.sessions/s1/messages', docs([
+      ['m1', now - 300, { role: 'user', content: 'Older chat' }],
+      ['m2', now - 150, { role: 'assistant', content: 'Middle chat' }],
+      ['m3', now - 10, { role: 'user', content: 'Latest chat' }],
+    ]));
+    const params = { kala: { kind: 'SegKala', sessionId: 's1', end: now,
+      windowSeconds: 400 }, userId: 'user-1', projectId: 'proj-1', includeDocId: true };
+    const summaries = await buildYojMessages({ ...params, name: 'summaries',
+      framing: 'Previous convo summaries: ' });
+    const messages = await buildYojMessages({ ...params, name: 'messages' });
+    const result = interleaveContextMessages([...summaries, ...messages]);
+    expect(result.map(m => m.docId)).toEqual(['m1', 's1', 'm2', 's2', 'm3']);
+    expect(result.map(m => m.role)).toEqual(['user', 'system', 'assistant', 'system', 'user']);
+    expect(result[1].content).toContain('Earlier summary');
+    expect(result[3].content).toContain('Later summary');
+    expect(result.every(m => !Object.keys(m).includes('create_time'))).toBe(true);
+    expect(JSON.stringify(result)).not.toContain('create_time');
   });
 
   test('messages gating: messages for WeekKala returns empty list', async () => {
