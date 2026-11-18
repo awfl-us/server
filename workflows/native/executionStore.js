@@ -21,6 +21,10 @@ const requireValue = (value, name) => {
 };
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const conflict = message => Object.assign(new Error(message), { code: 'CONFLICT' });
+// An agent step can continue via detached workflow.run, so the callback
+// ancestry bound must accommodate more than the first 16 tool turns.
+// Preserve a finite server-controlled limit against unbounded recursion.
+export const MAX_DETACHED_ANCESTORS = 128;
 const LIMIT = { input: 256 * 1024, checkpoint: 256 * 1024,
   effectArgs: 128 * 1024, effectOutcome: 128 * 1024 };
 const enforceBytes = (value, max, description) => {
@@ -232,7 +236,7 @@ export class NativeExecutionStore {
         const ancestors = parent?.detachedAncestors ?? [];
         if (!parent || parent.userId !== userId ||
             !Array.isArray(ancestors) ||
-            ancestors.length >= 16 ||
+            ancestors.length >= MAX_DETACHED_ANCESTORS ||
             ancestors.some(value => !/^native_[a-f0-9]{32}$/.test(value) ||
               value === executionId || value === detachedParentExecutionId)) {
           throw new Error('detached workflow parent lineage not authenticated');

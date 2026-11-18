@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { NativeExecutionStore, tagNativeValue } from './executionStore.js';
+import { NativeExecutionStore, tagNativeValue, MAX_DETACHED_ANCESTORS } from './executionStore.js';
 
 function fakeFirestore() {
   const docs = new Map();
@@ -513,4 +513,29 @@ test('detached callback lineage is server-derived, immutable, bounded and same-u
     detachedParentExecutionId: root }), /invalid detached/);
   await assert.rejects(store.create({ ...base, executionId: child,
     asyncLaunch: true, detachedParentExecutionId: root }), /already exists/);
+});
+
+
+test('detached agent continuations exceed 16 levels but remain bounded', async () => {
+  const store = new NativeExecutionStore({ db: fakeFirestore() });
+  const base = {
+    userId: 'owner', projectId: 'project', artifactSha256: hash,
+    protocolVersion: 2, allowedOperations: [], input: {},
+    workflowName: 'ProjectManager',
+  };
+  const makeId = index => 'native_' + index.toString(16).padStart(32, '0');
+  await store.create({ ...base, executionId: makeId(0), executionMode: 'memory' });
+  let parent = makeId(0);
+  for (let depth = 1; depth <= MAX_DETACHED_ANCESTORS; depth++) {
+    const child = makeId(depth);
+    await store.create({ ...base, executionId: child, asyncLaunch: true,
+      detachedParentExecutionId: parent });
+    parent = child;
+  }
+  assert.equal((await store.get(parent)).detachedAncestors.length, MAX_DETACHED_ANCESTORS);
+  assert.ok((await store.get(makeId(17))).detachedAncestors.includes(makeId(0)));
+  await assert.rejects(store.create({
+    ...base, executionId: makeId(MAX_DETACHED_ANCESTORS + 1),
+    asyncLaunch: true, detachedParentExecutionId: parent,
+  }), /lineage not authenticated/);
 });
