@@ -109,7 +109,10 @@ router.post('/topicContextYoj/run', async (req, res) => {
     // Build filters (defaults handled in modelDecoder; fallback kept in sync with AGENT.md)
     const pipeline = model.filters;
 
-    const ctx = { sessionId: extractSessionId(kala), userId, projectId };
+    // `model` here is the context-composition schema. `llmModel` is the
+    // separate OpenAI/provider model chosen by the workflow.
+    const ctx = { sessionId: extractSessionId(kala), userId, projectId,
+      llmModel: model.llmModel };
 
     // Apply filter pipeline (note: now async to support Firestore lookups)
     const filtered = await applyFilters(

@@ -77,6 +77,24 @@ async function setupTest({ decoderReturn, promoteKalaImpl, buildYojImpl, applyFi
 
 
 describe('TopicContextYoj router - Yoj and Ista reads', () => {
+  test('selected LLM model is forwarded to the context filter pipeline', async () => {
+    const decoderReturn = {
+      kala: { kind: 'SegKala', sessionId: 'model-session', end: 1000, windowSeconds: 600 },
+      model: {
+        intro: { system: 'context intro' },
+        llmModel: 'gpt-6.1-terra',
+        promoteUpstream: false,
+        components: [{ kind: 'yoj', name: 'messages' }],
+        filters: [{ name: 'sizeLimiter' }]
+      }
+    };
+    const { app, mocks } = await setupTest({ decoderReturn });
+    await request(app).post('/context/topicContextYoj/run')
+      .send({ userId: 'user-xyz' }).expect(200);
+    expect(mocks.applyFilters).toHaveBeenCalledTimes(1);
+    expect(mocks.applyFilters.mock.calls[0][2].llmModel).toBe('gpt-6.1-terra');
+  });
+
   test('Yoj: intro + upstream promotion + local messages; includeDocId and filter ctx', async () => {
     const { app, mocks } = await setupTest({});
 

@@ -8,6 +8,8 @@
 // - Always tries to preserve the most recent system message when configured; if over budget,
 //   trims older system messages first.
 
+import { resolveContextMessageBudget } from '../../../jobs/llm/modelConfig.js';
+
 function defaultTokenEstimator(text) {
   if (!text) return 0;
   const s = typeof text === 'string' ? text : JSON.stringify(text);
@@ -22,9 +24,9 @@ function countMessageTokens(msg, { tokenizer = defaultTokenEstimator, perMessage
   return baseTokens + perMessageOverhead;
 }
 
-export function sizeLimiter(messages, opts = {}) {
+export function sizeLimiter(messages, opts = {}, ctx = {}) {
   const {
-    maxTokens = 17000,
+    maxTokens: requestedMaxTokens,
     tokenizer = defaultTokenEstimator,
     perMessageOverhead = 8,
     // If true, we try to keep system messages over others, trimming oldest systems only if necessary
@@ -36,6 +38,7 @@ export function sizeLimiter(messages, opts = {}) {
     // Truncate very large message contents before counting tokens/selection
     maxContentChars = 50000,
   } = opts;
+  const maxTokens = resolveContextMessageBudget(ctx.llmModel, requestedMaxTokens);
 
   if (!Array.isArray(messages) || messages.length === 0) return messages || [];
 

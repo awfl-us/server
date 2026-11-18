@@ -13,6 +13,7 @@ import { stripNullsDeep } from './providers/utils.js';
 import { incrementUsage } from './llm/usage.js';
 import { calculateOpenAiCost } from './llm/cost.js';
 import { llmFailureResponse } from './llm/transportError.js';
+import { MAX_TOKENS, resolveMaxTokens, checkModelContextWindow } from './llm/modelConfig.js';
 
 const router = express.Router();
 
@@ -59,40 +60,6 @@ const PRICING = {
   'gpt-3.5-turbo-16k': { prompt: 3.00, cached: 0.00, completion: 4.00 }
 };
 
-// Max completion token defaults per known models/providers
-const MAX_TOKENS = {
-  // OpenAI
-  'gpt-4o': 16384,
-  'chatgpt-4o-latest': 16384,
-  'gpt-4-turbo': 4096,
-  'gpt-4.1': 32768,
-  'gpt-4': 8192,
-  'gpt-4-32k': 4096,
-  'gpt-3.5-turbo': 4096,
-  'gpt-3.5-turbo-16k': 4096,
-  'o4-mini': 100000,
-  'o3': 100000,
-  'gpt-5': 128000,
-  'gpt-5.1': 128000,
-  'gpt-5.2': 128000,
-  'gpt-5.4': 128000,
-  'gpt-5.5': 128000,
-  'gpt-6.1-terra': 128000,
-  // Anthropic (conservative completion caps)
-  'claude-3-5-sonnet': 8192,
-  'claude-3-opus': 8192,
-  'claude-3-haiku': 8192,
-  // Gemini
-  'gemini-1.5-pro': 8192,
-  'gemini-1.5-flash': 8192,
-  'gemini-2.0-flash': 8192,
-  // xAI Grok
-  'grok-2': 8192,
-  'grok-2-mini': 8192,
-  // DeepSeek
-  'deepseek-chat': 8192,
-  'deepseek-reasoner': 8192
-};
 
 function fixed_temperature(model, temperature) {
   const fixed = { 'o3': 1, 'gpt-5': 1, 'gpt-5.5': 1 };
@@ -104,9 +71,6 @@ function estimateCost(model, usage) {
   return calculateOpenAiCost(PRICING[model] || PRICING['gpt-4'], usage);
 }
 
-function resolveMaxTokens(model, fallback = 16384) {
-  return MAX_TOKENS[model] || fallback;
-}
 
 function inferProvider(model = '') {
   const m = (model || '').toLowerCase();
@@ -203,6 +167,16 @@ router.post('/chat', async (req, res) => {
     }
 
     const resolvedMaxTokens = (max_completion_tokens ?? max_tokens) ?? resolveMaxTokens(model);
+
+    if (provider === 'openai') {
+      const windowCheck = checkModelContextWindow(model, {
+        messages, tools, response_format, tool_choice,
+        maxCompletionTokens: resolvedMaxTokens
+      });
+      if (!windowCheck.ok) {
+        return res.status(400).json({ error: windowCheck.reason, model });
+      }
+    }
 
     const params = stripNullsDeep({
       apiKey,
