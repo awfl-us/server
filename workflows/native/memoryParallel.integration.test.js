@@ -218,6 +218,9 @@ test('independent detached child from memory root is idempotent and durable', as
   const db = fakeFirestore(), store = new NativeExecutionStore({ db });
   const rootId = 'native_' + 'a'.repeat(32);
   const identity = { userId: 'verified-owner', projectId: 'verified-project' };
+  await store.create({ executionId: rootId, ...identity, workflowName: 'Parent',
+    artifactSha256: 'c'.repeat(64), protocolVersion: 2, executionMode: 'memory',
+    allowedOperations: ['workflow.run'], input: {} });
   const releases = { active: async name => name === 'NativeChild' ? {
     sha256: 'c'.repeat(64), protocolVersion: 2, parallelVersion: 1,
     allowedOperations: ['native.parallel', 'http.post'],
@@ -237,16 +240,17 @@ test('independent detached child from memory root is idempotent and durable', as
     const again = await launcher(req);
     assert.deepEqual(first, again);
     assert.equal(first.state, 'ACTIVE');
-    assert.equal(db.docs.size, 1, 'a separate detached root is the only new document');
+    assert.equal(db.docs.size, 2, 'parent plus one detached child');
     assert.equal(enqueued.length, 2, 'same stable detached ID is safe to enqueue again');
     assert.equal(enqueued[0].executionId, enqueued[1].executionId);
     const child = await store.get(enqueued[0].executionId);
     assert.equal(child.asyncLaunch, true);
+    assert.deepEqual(child.detachedAncestors, [rootId]);
     assert.equal(child.parallelVersion, 1);
     await assert.rejects(launcher({
       ...req, args: { argument: { task: 99 } },
     }), /idempotency conflict/);
-    assert.equal(db.docs.size, 1);
+    assert.equal(db.docs.size, 2);
   } finally {
     if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = originalNodeEnv;

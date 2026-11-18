@@ -143,6 +143,7 @@ test('detached workflow.run persists and schedules one independent parallel-capa
     const record = records.get(id);
     assert.deepEqual(record.input, detached.argument);
     assert.equal(record.asyncLaunch, true);
+    assert.equal(record.detachedParentExecutionId, executionId);
     assert.equal(record.parallelVersion, 1);
     assert.deepEqual(record.allowedOperations, ['native.parallel']);
     assert.equal(record.userId, identity.userId);

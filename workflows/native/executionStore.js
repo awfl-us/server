@@ -142,7 +142,7 @@ export class NativeExecutionStore {
   async create({ executionId, userId, projectId, artifactSha256, input,
                  protocolVersion = 1, workflowName, allowedOperations,
                  trustedGlobalsVersion, streamIpcVersion, parallelVersion,
-                 forkLane, executionMode, asyncLaunch }) {
+                 forkLane, executionMode, asyncLaunch, detachedParentExecutionId }) {
     id(executionId);
     if (!userId || !projectId || !/^[a-f0-9]{64}$/.test(artifactSha256 || '')) {
       throw new Error('owner and pinned artifact SHA-256 required');
@@ -187,6 +187,12 @@ export class NativeExecutionStore {
         (asyncLaunch !== true || forkLane !== undefined || protocolVersion !== 2)) {
       throw new Error('detached execution requires a standalone protocol-v2 release');
     }
+    if (detachedParentExecutionId !== undefined &&
+        (asyncLaunch !== true ||
+         !/^native_[a-f0-9]{32}$/.test(detachedParentExecutionId) ||
+         detachedParentExecutionId === executionId)) {
+      throw new Error('invalid detached workflow parent lineage');
+    }
     if (forkLane !== undefined) {
       if (parallelVersion !== 1 || !forkLane ||
           !/^native_[a-f0-9]{32}$/.test(forkLane.parentExecutionId || '') ||
@@ -216,6 +222,23 @@ export class NativeExecutionStore {
     return this.db.runTransaction(async tx => {
       const snap = await tx.get(ref);
       if (snap.exists) throw conflict('execution already exists');
+      // Only a server-launched detached child receives callback ancestry.
+      // Read the verified parent in the same transaction as child creation.
+      // No caller-provided callback ID, ancestor array or project claim is trusted.
+      let detachedAncestors;
+      if (detachedParentExecutionId) {
+        const parentSnap = await tx.get(this.ref(detachedParentExecutionId));
+        const parent = parentSnap.exists ? parentSnap.data() : null;
+        const ancestors = parent?.detachedAncestors ?? [];
+        if (!parent || parent.userId !== userId ||
+            !Array.isArray(ancestors) ||
+            ancestors.length >= 16 ||
+            ancestors.some(value => !/^native_[a-f0-9]{32}$/.test(value) ||
+              value === executionId || value === detachedParentExecutionId)) {
+          throw new Error('detached workflow parent lineage not authenticated');
+        }
+        detachedAncestors = [detachedParentExecutionId, ...ancestors];
+      }
       const now = this.clock();
       const state = { schemaVersion: 1, executionId, userId, projectId, artifactSha256, protocolVersion,
         ...(workflowName && { workflowName }),
@@ -225,6 +248,7 @@ export class NativeExecutionStore {
         ...(parallelVersion === 1 && { parallelVersion: 1 }),
         ...(executionMode === 'memory' && { executionMode: 'memory' }),
         ...(asyncLaunch === true && { asyncLaunch: true }),
+        ...(detachedAncestors && { detachedParentExecutionId, detachedAncestors }),
         ...(forkLane && { forkLane: null, forkLaneJson: JSON.stringify(forkLane) }),
         input: null, inputJson: JSON.stringify(input),
         status: 'ready', epoch: 0, owner: null, leaseUntil: 0,

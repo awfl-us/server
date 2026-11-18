@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createJobsEffectHandlers } from './jobsEffects.js';
+import { NativeEffectDispatcher } from './effectDispatcher.js';
 
 const identity = { userId: 'verified-user', projectId: 'project-a' };
 test('native Jobs effects use server OIDC and ignore untrusted caller headers', async () => {
@@ -151,4 +152,87 @@ test('nested temporary project delivers registered parent callback in the parent
     idempotencyKey: 'native_' + 'f'.repeat(32) + ':root:other-step',
   }), /does not belong to authenticated execution/);
   assert.equal(requests.length, 1);
+});
+
+
+test('detached ProjectManager delivers its parent callback through durable dispatcher but sibling cannot', async () => {
+  const root = 'native_' + 'c'.repeat(32);
+  const child = 'native_' + 'd'.repeat(32);
+  const callbackId = 'n' + 'f'.repeat(32);
+  const callbackPath = 'users/verified-user/callbacks/' + callbackId;
+  const requests = [];
+  const handlers = createJobsEffectHandlers({
+    jobsOrigin: 'https://jobs.example.org',
+    callbackDb: {
+      runTransaction: async () => { throw new Error('unexpected mutation'); },
+      doc: path => {
+        assert.equal(path, callbackPath);
+        return { get: async () => ({ data: () => ({
+          kind: 'native_workflow', native_execution_id: root,
+          created_by: 'verified-user', native_project_id: 'parent-project',
+        }) }) };
+      },
+    },
+    getProjectStorage: async () => ({
+      get: async path => path === 'users/verified-user/projects/parent-project'
+        ? { data: { id: 'parent-project' } } : null,
+    }),
+    auth: {
+      getIdTokenClient: async audience => {
+        assert.equal(audience, 'https://jobs.example.org');
+        return { request: async request => {
+          requests.push(request);
+          return { status: 200, data: { recorded: true } };
+        } };
+      },
+    },
+  });
+  const delivered = [];
+  const intent = {
+    operation: 'http.post', effectId: 'callback-effect', preparedAt: 10,
+    nodeId: '0.2', fingerprint: 'identical',
+    args: {
+      url: 'https://jobs.example.org/callbacks/' + callbackId,
+      body: { response: true, projectId: 'forged-project' },
+      headers: { 'x-project-id': 'temporary-project' },
+      auth: { type: 'OIDC' },
+    },
+  };
+  let state = {
+    owner: 'worker', epoch: 1, leaseUntil: Date.now() + 30_000,
+    userId: 'verified-user', projectId: 'temporary-project', updatedAt: 10,
+    workflowName: 'codebase-ProjectManager',
+    pendingEffect: intent, detachedParentExecutionId: root,
+    detachedAncestors: [root],
+  };
+  const store = {
+    get: async () => state,
+    recordEffect: async detail => delivered.push(detail),
+  };
+  const dispatcher = new NativeEffectDispatcher({
+    handlers, authorizeExecution: async ({ userId, projectId }) => ({
+      allowed: userId === state.userId && projectId === state.projectId,
+      userId, projectId,
+    }),
+    reportFailure: () => {},
+  });
+  const valid = await dispatcher.dispatch({
+    store, executionId: child, workerId: 'worker', epoch: 1, effectId: 'callback-effect',
+  });
+  assert.equal(valid.status, 'recorded');
+  assert.equal(delivered.length, 1);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].headers['x-user-id'], 'verified-user');
+  assert.equal(requests[0].headers['x-project-id'], 'parent-project');
+  assert.equal(requests[0].data.projectId, 'parent-project');
+
+  // An unrelated detached execution of the same user and temporary project
+  // lacks verified ancestry and cannot deliver this callback.
+  state = { ...state, detachedParentExecutionId: undefined, detachedAncestors: [] };
+  await assert.rejects(dispatcher.dispatch({
+    store, executionId: 'native_' + 'e'.repeat(32),
+    workerId: 'worker', epoch: 1, effectId: 'callback-effect',
+  }), /does not belong to authenticated execution/);
+  assert.equal(requests.length, 1);
+  assert.equal(delivered.length, 1);
 });

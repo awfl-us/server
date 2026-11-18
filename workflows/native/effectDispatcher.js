@@ -122,6 +122,7 @@ export class NativeEffectDispatcher {
       try {
         const observed = await reconcile({
           args: intent.args, intent, idempotencyKey: key, identity,
+          trustedCallbackAncestors: current.detachedAncestors ?? [],
         });
         if (observed === undefined) {
           return { status: 'uncertain', effectId, reason: 'remote outcome unknown' };
@@ -141,6 +142,7 @@ export class NativeEffectDispatcher {
     try {
       outcome = await this.handlers[intent.operation]({
         args: intent.args, idempotencyKey: key, identity,
+        trustedCallbackAncestors: current.detachedAncestors ?? [],
       });
     } catch (error) {
       // Log before the dispatcher may leave the effect unresolved. In particular,

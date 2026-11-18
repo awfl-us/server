@@ -20,6 +20,7 @@ const METHODS = Object.freeze({
 // only a registered native callback belonging to this same execution/user.
 async function registeredCallbackProject({
   method, url, identity, idempotencyKey, callbackDb, callbackStorage,
+  trustedCallbackAncestors = [],
 }) {
   const match = method === 'POST' &&
     /^\/callbacks\/(n[a-f0-9]{32})$/.exec(url.pathname);
@@ -29,8 +30,14 @@ async function registeredCallbackProject({
     ? await callbackStorage.get(path) : await callbackDb.doc(path).get();
   const saved = callbackStorage ? snap?.data : snap?.data();
   if (!saved || saved.kind !== 'native_workflow') return undefined;
+  const currentExecutionId = idempotencyKey?.split(':')[0];
+  const trustedAncestors = Array.isArray(trustedCallbackAncestors) &&
+    trustedCallbackAncestors.length <= 16 &&
+    trustedCallbackAncestors.every(id => /^native_[a-f0-9]{32}$/.test(id))
+      ? trustedCallbackAncestors : [];
   if (saved.created_by !== identity.userId ||
-      saved.native_execution_id !== idempotencyKey?.split(':')[0]) {
+      (saved.native_execution_id !== currentExecutionId &&
+       !trustedAncestors.includes(saved.native_execution_id))) {
     throw new Error('native callback does not belong to authenticated execution');
   }
   return saved.native_project_id;
@@ -59,7 +66,9 @@ export function createJobsEffectHandlers({
       db: callbackDb, storage: callbackStorage, jobsOrigin: base.origin })),
   };
   for (const [operation, method] of Object.entries(METHODS)) {
-    handlers[operation] = async ({ args, identity, idempotencyKey }) => {
+    handlers[operation] = async ({
+      args, identity, idempotencyKey, trustedCallbackAncestors = [],
+    }) => {
       if (!args || typeof args !== 'object' || Array.isArray(args) ||
           typeof args.url !== 'string' ||
           typeof identity?.userId !== 'string' || !identity.userId ||
@@ -83,6 +92,7 @@ export function createJobsEffectHandlers({
       // provider-neutral project store before forming the trusted Jobs request.
       const callbackProject = await registeredCallbackProject({
         method, url, identity, idempotencyKey, callbackDb, callbackStorage,
+        trustedCallbackAncestors,
       });
       const target = await resolveNativeProjectIdentity(identity, {
         projectId: callbackProject ?? nativeProjectHeader(args.headers),
