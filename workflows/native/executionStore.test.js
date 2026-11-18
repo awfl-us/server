@@ -482,3 +482,35 @@ test('confirmed workflow.run error can resume at compiled catch edge', async () 
   assert.equal(resumed.pendingEffect, null);
   assert.deepEqual((await store.getEffect(executionId, 'child_effect')).outcome, failure);
 });
+
+
+test('detached callback lineage is server-derived, immutable, bounded and same-user', async () => {
+  const store = new NativeExecutionStore({ db: fakeFirestore() });
+  const root = 'native_' + 'a'.repeat(32);
+  const child = 'native_' + 'b'.repeat(32);
+  const grandchild = 'native_' + 'c'.repeat(32);
+  const unrelated = 'native_' + 'd'.repeat(32);
+  const base = { userId: 'owner', projectId: 'parent',
+    artifactSha256: hash, protocolVersion: 2, allowedOperations: [],
+    input: {}, workflowName: 'Agent' };
+  await store.create({ ...base, executionId: root, executionMode: 'memory' });
+  await store.create({ ...base, executionId: child,
+    projectId: 'temporary', asyncLaunch: true, detachedParentExecutionId: root });
+  await store.create({ ...base, executionId: grandchild,
+    projectId: 'temporary', asyncLaunch: true, detachedParentExecutionId: child });
+  assert.deepEqual((await store.get(child)).detachedAncestors, [root]);
+  assert.deepEqual((await store.get(grandchild)).detachedAncestors, [child, root]);
+  await store.create({ ...base, executionId: unrelated });
+  assert.equal((await store.get(unrelated)).detachedAncestors, undefined);
+  await assert.rejects(store.create({ ...base,
+    executionId: 'native_' + 'e'.repeat(32), asyncLaunch: true,
+    detachedParentExecutionId: 'native_' + 'f'.repeat(32) }), /not authenticated/);
+  await assert.rejects(store.create({ ...base, userId: 'another',
+    executionId: 'native_' + 'e'.repeat(32), asyncLaunch: true,
+    detachedParentExecutionId: root }), /not authenticated/);
+  await assert.rejects(store.create({ ...base,
+    executionId: 'native_' + 'e'.repeat(32),
+    detachedParentExecutionId: root }), /invalid detached/);
+  await assert.rejects(store.create({ ...base, executionId: child,
+    asyncLaunch: true, detachedParentExecutionId: root }), /already exists/);
+});

@@ -109,7 +109,7 @@ export function createDurableSubworkflowHandler({
             ...(release.trustedGlobalsVersion === 1 && { trustedGlobalsVersion: 1 }),
             ...(release.streamIpcVersion === 1 && { streamIpcVersion: 1 }),
             ...(release.parallelVersion === 1 && { parallelVersion: 1 }),
-            asyncLaunch: true, input: args.argument,
+            asyncLaunch: true, detachedParentExecutionId: executionId, input: args.argument,
           });
         } catch (error) {
           if (error.code !== 'CONFLICT') throw error;
@@ -119,6 +119,7 @@ export function createDurableSubworkflowHandler({
               existing.workflowName !== name ||
               existing.artifactSha256 !== release.sha256 ||
               existing.protocolVersion !== 2 ||
+              existing.detachedParentExecutionId !== executionId ||
               JSON.stringify(existing.input) !== JSON.stringify(args.argument)) {
             throw new Error('native detached launch idempotency conflict');
           }

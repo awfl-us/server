@@ -29,6 +29,7 @@ test('memory detached child persists and schedules under the validated caller pr
   assert.equal(records.length, 1);
   assert.equal(records[0].projectId, 'tmp-project');
   assert.equal(records[0].userId, 'owner');
+  assert.equal(records[0].detachedParentExecutionId, executionId);
   assert.deepEqual(scheduled, [{
     executionId: records[0].executionId, userId: 'owner', projectId: 'tmp-project',
   }]);
