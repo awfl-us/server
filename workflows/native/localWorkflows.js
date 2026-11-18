@@ -7,7 +7,7 @@ import { tagNativeValue } from './executionStore.js';
 import { NativeConfirmedWorkflowFailure } from './effectErrors.js';
 import { createMemoryParallelScheduler, NativeMemoryParallelStopped } from './memoryParallel.js';
 import { resolveNativeProjectIdentity } from './projectScope.js';
-import { diagnosticText } from './effectDiagnostics.js';
+import { diagnosticText, catchableEffectFailure } from './effectDiagnostics.js';
 
 const NAME = /^[A-Za-z][A-Za-z0-9_-]{0,99}$/;
 const SLOT = /^s[0-9]+$/;
@@ -50,6 +50,7 @@ export function createNativeLocalRunner({
   runArtifact = runNativeArtifact, onProgress = () => {},
   runDetached = null,
   reportFailure = entry => console.error(JSON.stringify(entry)),
+  reportEvent = entry => console.info(JSON.stringify(entry)),
   getProjectStorage,
   gcpProject = process.env.GCP_PROJECT || process.env.GCLOUD_PROJECT,
   region = process.env.WORKFLOWS_LOCATION || 'us-central1',
@@ -62,6 +63,9 @@ export function createNativeLocalRunner({
   let childCalls = 0, transitions = 0, effectCount = 0;
   let closed = false;
   const rootId = rootExecutionId;
+  const emitEvent = entry => {
+    try { reportEvent({ severity: 'INFO', ...entry }); } catch { /* best effort */ }
+  };
   const emitFailure = entry => {
     // Diagnostics must never turn a handled workflow failure into an unhandled one.
     try { reportFailure({ severity: 'ERROR', ...entry }); } catch { /* logging is best effort */ }
@@ -100,7 +104,8 @@ export function createNativeLocalRunner({
   async function run({ workflowName, release, artifact, input, executionId,
                         globals = null, depth = 0, path = 'root',
                         forkDepth = 0, initialContinuation = null,
-                        shouldStop = () => false, scopedIdentity = identity }) {
+                        shouldStop = () => false, scopedIdentity = identity,
+                        parentExecutionId = null, parentEffectId = null }) {
     if (scopedIdentity?.userId !== identity.userId ||
         !scopedIdentity.projectId) {
       throw new Error('native child cannot change authenticated user');
@@ -117,6 +122,11 @@ export function createNativeLocalRunner({
         artifact.sha256 !== release.sha256) {
       throw new Error('invalid local native release');
     }
+    const workflowStartedAt = Date.now();
+    emitEvent({ event: 'awfl_native_workflow_started', rootExecutionId: rootId,
+      executionId, parentExecutionId, parentEffectId,
+      projectId: scopedIdentity.projectId, workflow: workflowName, depth,
+      executionMode: 'in_process' });
     let continuation = initialContinuation;
     // A static Rust effect ID can execute more than once inside a loop.
     // Per-lane ordinals are stable across replay and independent of sibling
@@ -146,16 +156,36 @@ export function createNativeLocalRunner({
           input: payload,
         });
       };
-      const response = profiler ? await profiler.measure('runner.transition', invoke)
-        : await invoke();
+      let response;
+      try {
+        response = profiler ? await profiler.measure('runner.transition', invoke)
+          : await invoke();
+      } catch (error) {
+        emitFailure({ event: 'awfl_native_transition_failed',
+          rootExecutionId: rootId, executionId, parentExecutionId, parentEffectId,
+          projectId: scopedIdentity.projectId, workflow: workflowName, depth,
+          errorName: diagnosticText(error?.name ?? 'Error', 120),
+          errorCode: error?.code ?? error?.status ?? null,
+          errorMessage: diagnosticText(error?.message ?? error),
+          errorStack: typeof error?.stack === 'string'
+            ? diagnosticText(error.stack, 4096) : null });
+        throw error;
+      }
       if (!response || response.protocol_version !== 2) {
         throw new Error('invalid native memory IPC version');
       }
-      if (response.status === 'completed') return response.result;
+      if (response.status === 'completed') {
+        emitEvent({ event: 'awfl_native_workflow_completed',
+          rootExecutionId: rootId, executionId, parentExecutionId, parentEffectId,
+          projectId: scopedIdentity.projectId, workflow: workflowName, depth,
+          durationMs: Date.now() - workflowStartedAt });
+        return response.result;
+      }
       if (response.status === 'failed') {
         emitFailure({
           event: 'awfl_native_workflow_failed', rootExecutionId: rootId,
-          executionId, projectId: scopedIdentity.projectId,
+          executionId, parentExecutionId, parentEffectId,
+          projectId: scopedIdentity.projectId,
           workflow: workflowName, depth,
           errorCode: response.error?.code ?? null,
           errorMessage: diagnosticText(response.error?.message ?? response.error),
@@ -202,6 +232,12 @@ export function createNativeLocalRunner({
       }
       onProgress({ stage: 'effect', workflow: workflowName, effectCount,
         nodeId: effect.node_id, depth });
+      const startedAt = Date.now();
+      emitEvent({ event: 'awfl_native_effect_started',
+        rootExecutionId: rootId, executionId, parentExecutionId, parentEffectId,
+        projectId: scopedIdentity.projectId, workflow: workflowName, depth,
+        operation: effect.operation, effectId: effect.effect_id,
+        nodeId: effect.node_id, ordinal });
       try {
         const invokeEffect = async () => {
           if (effect.operation === 'native.parallel') {
@@ -220,6 +256,7 @@ export function createNativeLocalRunner({
                   path: path + ':lane:' + laneId.slice(7),
                   forkDepth: nextDepth, shouldStop: laneStopped,
                   initialContinuation: { next_step: entry, slots, frames: [] },
+                  parentExecutionId: executionId, parentEffectId: effect.effect_id,
                 }),
             });
           }
@@ -263,6 +300,7 @@ export function createNativeLocalRunner({
             scopedIdentity: childIdentity,
             globals: childGlobals, depth: depth + 1,
             path: effectPath + ':call:' + effect.effect_id, forkDepth, shouldStop,
+            parentExecutionId: executionId, parentEffectId: effect.effect_id,
           });
         };
         const outcome = profiler ? await profiler.measure('dispatcher.total', invokeEffect)
@@ -270,14 +308,21 @@ export function createNativeLocalRunner({
         continuation = { ...next, slots: {
           ...next.slots, [effect.result_slot]: tagNativeValue(outcome),
         } };
+        emitEvent({ event: 'awfl_native_effect_completed',
+          rootExecutionId: rootId, executionId, parentExecutionId, parentEffectId,
+          projectId: scopedIdentity.projectId, workflow: workflowName, depth,
+          operation: effect.operation, effectId: effect.effect_id,
+          nodeId: effect.node_id, ordinal, durationMs: Date.now() - startedAt });
       } catch (error) {
         if (shouldStop() || error instanceof NativeMemoryParallelStopped) throw error;
         const underlying = error?.nativeError ?? error;
         emitFailure({
           event: 'awfl_native_effect_failed', rootExecutionId: rootId,
-          executionId, projectId: scopedIdentity.projectId,
+          executionId, parentExecutionId, parentEffectId,
+          projectId: scopedIdentity.projectId,
           workflow: workflowName, depth, operation: effect.operation,
-          effectId: effect.effect_id, nodeId: effect.node_id,
+          effectId: effect.effect_id, nodeId: effect.node_id, ordinal,
+          durationMs: Date.now() - startedAt,
           errorName: diagnosticText(error?.name ?? 'Error', 120),
           errorCode: underlying?.code ?? error?.response?.status ??
             error?.status ?? null,
@@ -299,12 +344,7 @@ export function createNativeLocalRunner({
         const onError = effect.on_error;
         if (!onError || !Number.isSafeInteger(onError.next_step) ||
             !SLOT.test(onError.error_slot || '')) throw error;
-        const httpCode = error?.response?.status ?? error?.status ?? null;
-        const failure = error?.nativeError ?? {
-          message: Number.isSafeInteger(httpCode) ? `HTTP ${httpCode}` : 'native effect failed',
-          code: Number.isSafeInteger(httpCode) && httpCode >= 400 && httpCode <= 599
-            ? httpCode : null,
-        };
+        const failure = catchableEffectFailure(error, effect.operation, effect.effect_id);
         continuation = { ...next, next_step: onError.next_step,
           slots: { ...next.slots, [onError.error_slot]: tagNativeValue(failure) } };
       }

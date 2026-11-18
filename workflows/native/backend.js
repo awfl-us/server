@@ -72,6 +72,20 @@ export class NativeWorkflowBackend {
       throw new Error('document Storage currently supports native memory executions only');
     }
     const executionStore = this.memoryStore || this.store;
+    // Record the choice made at launch: flag values alone cannot reconstruct
+    // the path of a specific production execution after a later deployment.
+    console.info(JSON.stringify({ severity: 'INFO',
+      event: 'awfl_native_execution_selected', executionId, projectId,
+      workflow: deployedName, executionMode: memoryMode ? 'memory' : 'durable',
+      storageBackend: this.memoryStore
+        ? process.env.AWFL_DOCUMENT_STORAGE_BACKEND || 'firestore' : 'firestore',
+      memoryFlagEnabled: process.env.AWFL_NATIVE_MEMORY_EXECUTION_ENABLED === '1',
+      documentStoreEnabled: Boolean(this.memoryStore),
+      protocolVersion: active.protocolVersion,
+      parallelVersion: active.parallelVersion ?? null,
+      parallelAllowed: active.allowedOperations.includes('native.parallel'),
+      artifactSha256: active.sha256,
+    }));
     await executionStore.create({
       executionId, userId, projectId, input: argument,
       workflowName: deployedName, artifactSha256: active.sha256,

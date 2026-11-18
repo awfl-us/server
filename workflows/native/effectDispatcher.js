@@ -7,7 +7,8 @@ const validOperations = new Set(['http.get', 'http.post', 'http.patch', 'http.de
 
 export class NativeEffectDispatcher {
   constructor({ handlers, reconcile = {}, authorizeExecution,
-                reportFailure = entry => console.error(JSON.stringify(entry)) }) {
+                reportFailure = entry => console.error(JSON.stringify(entry)),
+                reportEvent = entry => console.info(JSON.stringify(entry)) }) {
     if (!handlers || typeof handlers !== 'object') throw new Error('handlers required');
     if (typeof authorizeExecution !== 'function') {
       throw new Error('native effect dispatcher requires an authorization policy');
@@ -16,6 +17,7 @@ export class NativeEffectDispatcher {
     this.reconcile = reconcile;
     this.authorizeExecution = authorizeExecution;
     this.reportFailure = reportFailure;
+    this.reportEvent = reportEvent;
   }
 
   async dispatch({ store, executionId, workerId, epoch, effectId,
@@ -63,6 +65,15 @@ export class NativeEffectDispatcher {
       throw new Error('native effect lease or intent changed during authorization');
     }
     const key = `${executionId}:${effectId}`;
+    const startedAt = Date.now();
+    const rootExecutionId = current.forkLane?.rootExecutionId || executionId;
+    const lifecycle = (event, detail = {}) => {
+      try { this.reportEvent({ severity: 'INFO', event, rootExecutionId,
+        executionId, projectId: state.projectId, workflow: state.workflowName ?? null,
+        operation: intent.operation, effectId, nodeId: intent.nodeId ?? null,
+        ...detail }); } catch { /* diagnostics must not affect execution */ }
+    };
+    lifecycle('awfl_native_effect_started');
     const withState = (result, persisted) => preparedState && persisted &&
       typeof persisted === 'object' ? { ...result, state: persisted } : result;
     const recordConfirmed = async error => {
@@ -71,13 +82,19 @@ export class NativeEffectDispatcher {
       const child = error instanceof NativeConfirmedWorkflowFailure;
       if (!http && !fork && !child) throw error;
       const failure = {
-        message: error.message, code: http ? error.status : null,
+        message: http ? error.message : diagnosticText(
+          `${intent.operation} (${effectId})${error.childExecutionId ?
+            ` lane ${error.childExecutionId}` : ''}: ${error.message}`, 256),
+        code: http ? error.status : null,
       };
       if (intent.onError) {
         if (typeof store.recordEffectFailure !== 'function') throw error;
         const persisted = await store.recordEffectFailure({
           executionId, workerId, epoch, effectId, failure,
         });
+        lifecycle('awfl_native_effect_failed_recorded', {
+          durationMs: Date.now() - startedAt, errorCode: failure.code,
+          errorMessage: failure.message });
         return withState({ status: 'failed_recorded', effectId, failure }, persisted);
       }
       if ((fork || child) && typeof store.failPendingConfirmedEffect === 'function') {
@@ -85,6 +102,9 @@ export class NativeEffectDispatcher {
           executionId, workerId, epoch, effectId, error: failure,
           operation: fork ? 'native.parallel' : 'workflow.run',
         });
+        lifecycle('awfl_native_effect_failed_recorded', {
+          durationMs: Date.now() - startedAt, errorCode: failure.code,
+          errorMessage: failure.message });
         return withState({ status: 'failed_recorded', effectId, failure }, persisted);
       }
       // Preserve the old fork-specific store contract for callers still
@@ -93,6 +113,9 @@ export class NativeEffectDispatcher {
         const persisted = await store.failPendingParallel({
           executionId, workerId, epoch, effectId, error: failure,
         });
+        lifecycle('awfl_native_effect_failed_recorded', {
+          durationMs: Date.now() - startedAt, errorCode: failure.code,
+          errorMessage: failure.message });
         return withState({ status: 'failed_recorded', effectId, failure }, persisted);
       }
       // Unhandled confirmed HTTP failures keep their previous behavior.
@@ -102,8 +125,10 @@ export class NativeEffectDispatcher {
       try {
         this.reportFailure({
           severity: 'ERROR', event: 'awfl_native_effect_failed',
-          executionId, projectId: state.projectId, workflow: state.workflowName ?? null,
-          operation: intent.operation, effectId, nodeId: intent.nodeId ?? null, phase,
+          rootExecutionId, executionId, projectId: state.projectId,
+          workflow: state.workflowName ?? null, operation: intent.operation,
+          effectId, nodeId: intent.nodeId ?? null, phase,
+          durationMs: Date.now() - startedAt,
           errorName: diagnosticText(error?.name ?? 'Error', 120),
           errorCode: error?.response?.status ?? error?.status ?? error?.code ?? null,
           errorMessage: diagnosticText(error?.message ?? error),
@@ -117,6 +142,7 @@ export class NativeEffectDispatcher {
     if (state.epoch > 1 && intent.preparedAt < state.updatedAt) {
       const reconcile = this.reconcile[intent.operation];
       if (typeof reconcile !== 'function') {
+        lifecycle('awfl_native_effect_uncertain', { reason: 'reconciliation required' });
         return { status: 'uncertain', effectId, reason: 'reconciliation required' };
       }
       try {
@@ -125,6 +151,7 @@ export class NativeEffectDispatcher {
           trustedCallbackAncestors: current.detachedAncestors ?? [],
         });
         if (observed === undefined) {
+          lifecycle('awfl_native_effect_uncertain', { reason: 'remote outcome unknown' });
           return { status: 'uncertain', effectId, reason: 'remote outcome unknown' };
         }
         const persisted = await store.recordEffect({ executionId, workerId, epoch,
@@ -154,6 +181,7 @@ export class NativeEffectDispatcher {
     }
     const persisted = await store.recordEffect({ executionId, workerId, epoch,
       effectId, outcome });
+    lifecycle('awfl_native_effect_completed', { durationMs: Date.now() - startedAt });
     return withState({ status: 'recorded', effectId, outcome }, persisted);
   }
 }

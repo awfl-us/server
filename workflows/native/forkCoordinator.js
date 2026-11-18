@@ -2,6 +2,7 @@
 // independently journaled native child execution records. Production routing
 // remains controlled by the release-pinned parallel capability and flag.
 import { createHash } from 'node:crypto';
+import { diagnosticText } from './effectDiagnostics.js';
 
 const EXECUTION = /^native_[a-f0-9]{32}$/;
 const NODE = /^[A-Za-z0-9_.-]{1,120}$/;
@@ -15,12 +16,13 @@ const digest = value => createHash('sha256').update(JSON.stringify(value)).diges
   * through the parent's statically compiled Try edge.
   */
 export class NativeConfirmedParallelFailure extends Error {
-  constructor(error) {
+  constructor(error, { childExecutionId = null } = {}) {
     const message = typeof error?.message === 'string'
       ? error.message.slice(0, 256)
       : 'native parallel branch failed';
     super(message);
     this.name = 'NativeConfirmedParallelFailure';
+    this.childExecutionId = childExecutionId;
   }
 }
 
@@ -83,14 +85,13 @@ export class NativeForkCoordinator {
       while (cursor < lanes.length && !firstError) {
         const index = cursor++;
         const lane = lanes[index];
+        const childId = forkLaneId({ parentExecutionId: parent.executionId,
+          nodeId, generation, index });
         try {
           if (!lane || !SELECTOR.test(lane.entry || '') ||
               !lane.slots || Array.isArray(lane.slots) || typeof lane.slots !== 'object') {
             throw new Error('invalid compiled native branch entry or slot snapshot');
           }
-          const childId = forkLaneId({
-            parentExecutionId: parent.executionId, nodeId, generation, index,
-          });
           const forkLane = {
             parentExecutionId: parent.executionId, rootExecutionId, depth,
             nodeId, generation, index, entry: lane.entry,
@@ -135,7 +136,7 @@ export class NativeForkCoordinator {
             throw new Error('persisted native fork lane identity mismatch');
           }
           if (stored.status === 'failed') {
-            throw new NativeConfirmedParallelFailure(stored.error);
+            throw new NativeConfirmedParallelFailure(stored.error, { childExecutionId: childId });
           }
           if (stored.status === 'cancelled') {
             throw new Error('native fork lane was cancelled');
@@ -147,13 +148,26 @@ export class NativeForkCoordinator {
             stored = await this.store.get(childId);
           }
           if (stored?.status === 'failed') {
-            throw new NativeConfirmedParallelFailure(stored.error);
+            throw new NativeConfirmedParallelFailure(stored.error, { childExecutionId: childId });
           }
           if (stored?.status !== 'completed') {
             throw new Error('native fork lane has no durable completed result');
           }
           results[index] = stored.result;
         } catch (error) {
+          // The parent stores only the fork's terminal status; retain the
+          // precise lane identity and exception in searchable Cloud Logs.
+          try { console.error(JSON.stringify({
+            severity: 'ERROR', event: 'awfl_native_parallel_lane_failed',
+            rootExecutionId, parentExecutionId: parent.executionId,
+            childExecutionId: childId, projectId: parent.projectId,
+            workflow: parent.workflowName, nodeId, generation, laneIndex: index,
+            errorName: diagnosticText(error?.name ?? 'Error', 120),
+            errorCode: error?.code ?? error?.status ?? null,
+            errorMessage: diagnosticText(error?.message ?? error),
+            errorStack: typeof error?.stack === 'string'
+              ? diagnosticText(error.stack, 4096) : null,
+          })); } catch { /* logging must not affect fork decisions */ }
           errors.push(error);
           firstError ||= error; // Allow already-running siblings to settle.
         }

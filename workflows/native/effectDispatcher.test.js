@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { NativeEffectDispatcher as BaseNativeEffectDispatcher } from './effectDispatcher.js';
 import { NativeConfirmedHttpFailure, NativeConfirmedWorkflowFailure } from './effectErrors.js';
+import { NativeConfirmedParallelFailure } from './forkCoordinator.js';
 
 const testAuthorize = async ({ userId, projectId }) => ({
   allowed: true, userId, projectId,
@@ -200,7 +201,7 @@ test('confirmed workflow.run child failure follows a compiled Try or ends parent
     assert.equal(recorded.length, 1);
     assert.equal(recorded[0][0], handled ? 'catch' : 'terminal');
     assert.deepEqual(recorded[0][1].failure ?? recorded[0][1].error, {
-      message: 'missing field or element: workdir', code: null,
+      message: 'workflow.run (step1): missing field or element: workdir', code: null,
     });
     if (!handled) {
       assert.equal(recorded[0][1].operation, 'workflow.run');
@@ -261,4 +262,35 @@ test('a failure to emit durable diagnostics does not change caught HTTP failure 
   });
   assert.equal(outcome.status, 'failed_recorded');
   assert.deepEqual(outcome.failure, { message: 'HTTP 403', code: 403 });
+});
+
+
+test('confirmed fork failure persists a searchable lane ID and retains error semantics', async () => {
+  const { store: base } = fixture({ operation: 'native.parallel' });
+  const recorded = [], lifecycle = [];
+  const store = { ...base,
+    get: async () => ({ ...(await base.get()), pendingEffect: {
+      ...pending, operation: 'native.parallel', fingerprint: 'fork',
+      onError: { nextStep: 8, errorSlot: 's9' },
+    } }),
+    recordEffectFailure: async details => { recorded.push(details); return { status: 'waiting_effect' }; },
+  };
+  const laneId = 'native_' + 'd'.repeat(32);
+  const dispatcher = new NativeEffectDispatcher({
+    reportEvent: event => lifecycle.push(event),
+    reportFailure: () => {},
+    handlers: { 'native.parallel': async () => {
+      throw new NativeConfirmedParallelFailure({ message: 'missing field or element: workdir' },
+        { childExecutionId: laneId });
+    } },
+  });
+  const result = await dispatcher.dispatch({
+    store, executionId: 'root', workerId: 'worker', epoch: 1, effectId: 'step1',
+  });
+  assert.equal(result.status, 'failed_recorded');
+  assert.match(recorded[0].failure.message, /native.parallel \(step1\)/);
+  assert.ok(recorded[0].failure.message.includes(laneId));
+  assert.equal(recorded[0].failure.code, null);
+  assert.deepEqual(lifecycle.map(e => e.event),
+    ['awfl_native_effect_started', 'awfl_native_effect_failed_recorded']);
 });

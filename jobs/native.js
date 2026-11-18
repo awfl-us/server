@@ -67,8 +67,15 @@ export function createNativeJobsRouter({
         span.setAttribute('awfl.execution_id', executionId);
         span.setAttribute('awfl.execution_mode', req.body.executionMode === 'memory' ? 'memory' : 'durable');
       }
-      const runner = req.body.executionMode === 'memory'
-        ? executeMemory : execute;
+      const executionMode = req.body.executionMode === 'memory' ? 'memory' : 'durable';
+      const storageBackend = resolvedMemoryStore
+        ? process.env.AWFL_DOCUMENT_STORAGE_BACKEND || 'firestore' : 'firestore';
+      console.info(JSON.stringify({ severity: 'INFO',
+        event: 'awfl_native_execution_started', executionId, projectId,
+        executionMode, storageBackend,
+        documentStoreEnabled: nativeDocumentStoreEnabled(),
+      }));
+      const runner = executionMode === 'memory' ? executeMemory : execute;
       const result = await runner({
         executionId, userId, projectId,
         store: profiler ? profiler.store(nativeStore) : nativeStore,
@@ -80,7 +87,7 @@ export function createNativeJobsRouter({
         profiler?.report('failed');
         console.error(JSON.stringify({
           event: 'awfl_native_execution_failed', executionId, projectId,
-          errorCode: result.error?.code ?? null,
+          executionMode, storageBackend, errorCode: result.error?.code ?? null,
           errorMessage: result.error?.message ?? String(result.error ?? 'unknown failure'),
         }));
         return res.status(200).json({ state: 'FAILED' });
@@ -90,6 +97,9 @@ export function createNativeJobsRouter({
         return res.status(200).json({ state: 'CANCELLED' });
       }
       profiler?.report('completed');
+      console.info(JSON.stringify({ severity: 'INFO',
+        event: 'awfl_native_execution_completed', executionId, projectId,
+        executionMode, storageBackend }));
       return res.status(200).json({ state: 'SUCCEEDED', result });
     } catch (error) {
       profiler?.report('error');
