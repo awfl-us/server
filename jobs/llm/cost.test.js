@@ -3,6 +3,16 @@ import assert from 'node:assert/strict';
 import { calculateOpenAiCost } from './cost.js';
 
 const sol = { prompt: 2.00, cached: 0.20, completion: 10.00 };
+const terra = { prompt: 1.00, cached: 0.05, completion: 5.00 };
+
+test('GPT-6.1 Terra standard pricing accounts for cached tokens', () => {
+  const result = calculateOpenAiCost(terra, {
+    prompt_tokens: 10_000,
+    prompt_tokens_details: { cached_tokens: 6_000 },
+    completion_tokens: 2_000,
+  });
+  assert.ok(Math.abs(result - 0.0143) < 1e-12);
+});
 
 test('uncached GPT-6 Sol pricing', () => {
   assert.equal(calculateOpenAiCost(sol, { prompt_tokens: 10_000, completion_tokens: 2_000 }), 0.04);

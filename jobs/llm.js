@@ -42,6 +42,8 @@ const PRICING = {
 
   // GPT-6 Sol standard API pricing: input, cached input, output per 1M tokens.
   'gpt-6-sol': { prompt: 2.00, cached: 0.20, completion: 10.00 },
+  // GPT-6.1 Terra standard short-context rates (USD per million tokens).
+  'gpt-6.1-terra': { prompt: 1.00, cached: 0.05, completion: 5.00 },
 
   // Reasoning
   'o4-mini': { prompt: 0.55, cached: 0.14, completion: 2.20 },
@@ -75,6 +77,7 @@ const MAX_TOKENS = {
   'gpt-5.2': 128000,
   'gpt-5.4': 128000,
   'gpt-5.5': 128000,
+  'gpt-6.1-terra': 128000,
   // Anthropic (conservative completion caps)
   'claude-3-5-sonnet': 8192,
   'claude-3-opus': 8192,

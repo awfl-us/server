@@ -52,6 +52,21 @@ test('GPT-6 Sol function calls use no reasoning on Chat Completions', () => {
   assert.equal(payload.max_completion_tokens, 1000);
 });
 
+test('GPT-6.1 Terra supports Chat Completions function tools with no reasoning', () => {
+  const payload = buildChatPayload({
+    model: 'gpt-6.1-terra',
+    messages: [{ role: 'user', content: 'Inspect' }],
+    tools: functionTools,
+    tool_choice: 'auto',
+    temperature: 0.7,
+    max_tokens: 1000,
+  });
+  assert.equal(payload.reasoning_effort, 'none');
+  assert.equal(payload.temperature, undefined);
+  assert.deepEqual(payload.tools, functionTools);
+  assert.equal(payload.max_completion_tokens, 1000);
+});
+
 test('other models preserve their parameters', () => {
   const payload = buildChatPayload({
     model: 'gpt-5.5', messages: [], tools: functionTools,

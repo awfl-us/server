@@ -7,20 +7,19 @@ import { toOpenAiMessages } from './openaiMessages.js';
 // Returns: { message, usage, raw }
 export function buildChatPayload(params) {
   const { model, messages, temperature, max_tokens, response_format, tools, tool_choice } = params;
-  // Chat Completions rejects GPT-6 Sol function calls with reasoning
-  // enabled. Use the supported no-reasoning mode for this legacy adapter;
-  // Responses API is required to use reasoning-enabled function tools.
-  const isSol = model === 'gpt-6-sol';
+  // GPT-6 Sol and GPT-6.1 Terra support Chat Completions function tools
+  // with reasoning_effort=none; remove unsupported temperature settings.
+  const isNoReasoningToolModel = model === 'gpt-6-sol' || model === 'gpt-6.1-terra';
   const hasFunctionTools = Array.isArray(tools) && tools.some(t => t?.type === 'function');
   return stripNullsDeep({
     model,
     messages: toOpenAiMessages(messages),
-    temperature: isSol ? undefined : temperature,
+    temperature: isNoReasoningToolModel ? undefined : temperature,
     max_completion_tokens: typeof max_tokens === 'number' ? max_tokens : undefined,
     response_format,
     tools,
     tool_choice,
-    reasoning_effort: isSol && hasFunctionTools ? 'none' : undefined
+    reasoning_effort: isNoReasoningToolModel && hasFunctionTools ? 'none' : undefined
   });
 }
 
