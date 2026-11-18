@@ -1,11 +1,13 @@
 import { NativeConfirmedHttpFailure, NativeConfirmedWorkflowFailure } from './effectErrors.js';
 import { NativeConfirmedParallelFailure } from './forkCoordinator.js';
+import { diagnosticText } from './effectDiagnostics.js';
 // Explicit effect execution boundary. Never dispatches an unknown operation or
 // retries an ambiguous external outcome automatically.
 const validOperations = new Set(['http.get', 'http.post', 'http.patch', 'http.delete', 'log.write', 'native.parallel', 'workflow.run', 'storage.object_get', 'callback.create', 'callback.await']);
 
 export class NativeEffectDispatcher {
-  constructor({ handlers, reconcile = {}, authorizeExecution }) {
+  constructor({ handlers, reconcile = {}, authorizeExecution,
+                reportFailure = entry => console.error(JSON.stringify(entry)) }) {
     if (!handlers || typeof handlers !== 'object') throw new Error('handlers required');
     if (typeof authorizeExecution !== 'function') {
       throw new Error('native effect dispatcher requires an authorization policy');
@@ -13,6 +15,7 @@ export class NativeEffectDispatcher {
     this.handlers = handlers;
     this.reconcile = reconcile;
     this.authorizeExecution = authorizeExecution;
+    this.reportFailure = reportFailure;
   }
 
   async dispatch({ store, executionId, workerId, epoch, effectId,
@@ -95,6 +98,20 @@ export class NativeEffectDispatcher {
       // Unhandled confirmed HTTP failures keep their previous behavior.
       throw error;
     };
+    const logFailure = (error, phase) => {
+      try {
+        this.reportFailure({
+          severity: 'ERROR', event: 'awfl_native_effect_failed',
+          executionId, projectId: state.projectId, workflow: state.workflowName ?? null,
+          operation: intent.operation, effectId, nodeId: intent.nodeId ?? null, phase,
+          errorName: diagnosticText(error?.name ?? 'Error', 120),
+          errorCode: error?.response?.status ?? error?.status ?? error?.code ?? null,
+          errorMessage: diagnosticText(error?.message ?? error),
+          errorStack: typeof error?.stack === 'string'
+            ? diagnosticText(error.stack, 4096) : null,
+        });
+      } catch { /* failed logging must not change native effects */ }
+    };
     // An effect prepared before a crash may already have reached the remote
     // system. Reconciliation is mandatory for an aged intent. No blind replay.
     if (state.epoch > 1 && intent.preparedAt < state.updatedAt) {
@@ -113,6 +130,8 @@ export class NativeEffectDispatcher {
           effectId, outcome: observed });
         return withState({ status: 'reconciled', effectId, outcome: observed }, persisted);
       } catch (error) {
+        // Previous remote outcome may still be unknown; preserve reconciliation policy.
+        logFailure(error, 'reconcile');
         return recordConfirmed(error);
       }
     }
@@ -124,6 +143,9 @@ export class NativeEffectDispatcher {
         args: intent.args, idempotencyKey: key, identity,
       });
     } catch (error) {
+      // Log before the dispatcher may leave the effect unresolved. In particular,
+      // preflight callback authorization failures never reach HTTP access logs.
+      logFailure(error, 'dispatch');
       // A confirmed child terminal failure is safe to catch (or to fail an
       // uncaught parent fork). Unknown/transport outcomes remain unresolved.
       return recordConfirmed(error);

@@ -215,3 +215,50 @@ test('confirmed workflow.run child failure follows a compiled Try or ends parent
     assert.equal(recorded.length, 1, 'uncertain child outcome must not be recorded as failed');
   }
 });
+
+
+test('durable effect dispatcher logs preflight errors without altering unresolved intent', async () => {
+  const { store, calls } = fixture();
+  const diagnostics = [];
+  const dispatcher = new NativeEffectDispatcher({
+    handlers: { 'http.post': async () => {
+      throw new Error('native callback does not belong to authenticated execution: Bearer secret123');
+    } },
+    reportFailure: event => diagnostics.push(event),
+  });
+  await assert.rejects(dispatcher.dispatch({
+    store, executionId: 'native_child', workerId: 'worker', epoch: 1, effectId: 'step1',
+  }), /callback does not belong/);
+  assert.equal(calls.length, 0, 'unknown effect outcome stays unresolved');
+  assert.equal(diagnostics.length, 1);
+  assert.equal(diagnostics[0].severity, 'ERROR');
+  assert.equal(diagnostics[0].event, 'awfl_native_effect_failed');
+  assert.equal(diagnostics[0].executionId, 'native_child');
+  assert.equal(diagnostics[0].projectId, 'project');
+  assert.equal(diagnostics[0].operation, 'http.post');
+  assert.equal(diagnostics[0].effectId, 'step1');
+  assert.equal(diagnostics[0].phase, 'dispatch');
+  assert.match(diagnostics[0].errorMessage, /callback does not belong/);
+  assert.match(diagnostics[0].errorStack, /effectDispatcher.test.js/);
+  assert.ok(!JSON.stringify(diagnostics).includes('secret123'));
+});
+
+test('a failure to emit durable diagnostics does not change caught HTTP failure semantics', async () => {
+  const { store: base } = fixture();
+  const store = {
+    ...base,
+    get: async () => ({ ...(await base.get()), pendingEffect: {
+      ...pending, fingerprint: 'digest', onError: { nextStep: 7, errorSlot: 's2' },
+    } }),
+    recordEffectFailure: async () => ({ status: 'waiting_effect' }),
+  };
+  const dispatcher = new NativeEffectDispatcher({
+    handlers: { 'http.post': async () => { throw new NativeConfirmedHttpFailure(403); } },
+    reportFailure: () => { throw new Error('logging subsystem unavailable'); },
+  });
+  const outcome = await dispatcher.dispatch({
+    store, executionId: 'run1', workerId: 'worker', epoch: 1, effectId: 'step1',
+  });
+  assert.equal(outcome.status, 'failed_recorded');
+  assert.deepEqual(outcome.failure, { message: 'HTTP 403', code: 403 });
+});

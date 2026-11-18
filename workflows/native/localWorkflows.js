@@ -7,6 +7,7 @@ import { tagNativeValue } from './executionStore.js';
 import { NativeConfirmedWorkflowFailure } from './effectErrors.js';
 import { createMemoryParallelScheduler, NativeMemoryParallelStopped } from './memoryParallel.js';
 import { resolveNativeProjectIdentity } from './projectScope.js';
+import { diagnosticText } from './effectDiagnostics.js';
 
 const NAME = /^[A-Za-z][A-Za-z0-9_-]{0,99}$/;
 const SLOT = /^s[0-9]+$/;
@@ -15,18 +16,6 @@ const MAX_CHILD_CALLS = 4096;
 const MAX_TRANSITIONS = 100_000;
 const MAX_RELEASES = 64;
 const MAX_STREAM_PROCESSES = 16; // per authenticated local execution tree
-
-// Log failure context without workflow arguments, credentials, or unbounded stacks.
-// The workflow's catchable error contract remains unchanged.
-function diagnosticText(value, maxLength = 2048) {
-  return String(value ?? '')
-    .replace(/((?:Bearer|Basic)\s+)[^\s,;]+/gi, '$1[REDACTED]')
-    .replace(/([?&](?:token|api_key|access_token|key|secret|password)=)[^&\s]+/gi,
-      '$1[REDACTED]')
-    .replace(/((?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password)\s*[:=]\s*)[^\s,;]+/gi,
-      '$1[REDACTED]')
-    .slice(0, maxLength);
-}
 
 function checkedChildArgs(args, project, location) {
   if (!args || typeof args !== 'object' || Array.isArray(args) ||
