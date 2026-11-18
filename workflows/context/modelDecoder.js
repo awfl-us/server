@@ -124,6 +124,7 @@ export function decodeContextModel(body) {
     normalized = {
       intro: model.intro && typeof model.intro === 'object' ? model.intro : undefined,
       promoteUpstream: Boolean(model.promoteUpstream),
+      llmModel: typeof model.llmModel === 'string' ? model.llmModel : undefined,
       components: components.map((c, idx) => normalizeComponent(c, [String(idx)], 1, counter)),
       filters: normalizeFilters(model.filters ?? defaultFilters)
     };

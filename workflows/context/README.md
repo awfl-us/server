@@ -123,6 +123,7 @@ Body JSON (simplified):
       { "kind": "literal", "value": string } // literal cannot have children
     ],
     // Optional, ordered filter pipeline; each entry is a string name or { name, options }
+    "llmModel"?: string, // e.g. "gpt-6.1-terra"; selects limits from the shared model config
     "filters"?: [
       { "name": "sizeLimiter", "options": { "maxTokens": 24000 } },
       "toolCallBackfill"
@@ -161,7 +162,10 @@ Currently supported:
   - filters (default order):
     1. `collapseGroupReplacer`
     2. `fileContentsLimiter` with `{ filesLimit: 7, versionsPerFile: 2 }`
-    3. `sizeLimiter` with `{ maxTokens: 20000 }` (and `maxContentChars: 50000` by default)
+    3. `sizeLimiter` with the shared LLM model's context-message budget
+       (`100000` for `gpt-6.1-terra`, `17000` without a configured model),
+       capped separately from the model's total context window.
+       `maxContentChars: 50000` remains the default.
     4. `toolCallBackfill`
 
 If no `model` or `presetId` is provided, the decoder defaults to an empty component list and applies the default filters `[ sizeLimiter(24000), toolCallBackfill ]`.
@@ -195,7 +199,9 @@ Available filters:
   - Strategy: Greedy newest-first selection. When `prioritizeSystem` is true, prefers newer system messages first; when `prioritizeUser` is true (default), prefers newer user messages; otherwise treats all messages uniformly by recency. If both are true, selection order is system -> user -> others (assistant/tool), each greedily newest-first.
   - Token accounting: Counts tokens over the entire message object (its JSON representation), not just `content`. This captures roles, tool/function metadata (e.g., tool_calls, tool_call_id, function arguments), and other fields.
   - Options:
-    - `maxTokens` (number, default 24000)
+    - `maxTokens` (number, optional override; capped at the configured model's
+      budget when known). Defaults to 100000 for `gpt-6.1-terra`,
+      17000 otherwise. Legacy explicit filter overrides remain supported.
     - `perMessageOverhead` (number, default 8)
     - `prioritizeSystem` (boolean, default false)
     - `prioritizeUser` (boolean, default true)
@@ -218,6 +224,21 @@ Composition tips:
 - In TopicContext preset, order is: `collapseGroupReplacer` -> `fileContentsLimiter` -> `sizeLimiter` -> `toolCallBackfill`.
 - In general, run pruning/size filters (e.g., `sizeLimiter`) BEFORE `toolCallBackfill` so orphan detection, ordering, and backfills are accurate on the final window.
 - If you include `fileContentsLimiter`, consider placing it before `sizeLimiter` to shrink oversized file payloads prior to token budgeting.
+
+### Model-aware context limits
+
+The LLM model is passed through `model.llmModel` in the TopicContext request,
+separate from the context schema called `model`. Workflow-utils' `YojComposer`
+forwards the workflow's `Env.model` when building the assistant's TopicContext.
+The server uses the single `jobs/llm/modelConfig.js` table for completion limits,
+context window sizes and per-model history budgets. The history budget does
+**not** include the workflow's prompt, tool definitions, or API response budget.
+
+`/llm/chat` also performs a conservative full-request preflight for models
+with a configured context window, taking into account tools, messages and the
+reserved output. The provider remains authoritative on actual token counts.
+The default 50000-character per-message truncation and `fileContentsLimiter`
+still apply separately and can affect prompt-cache reuse.
 - Unknown filters are skipped with a warning.
 
 ## Upstream promotion
