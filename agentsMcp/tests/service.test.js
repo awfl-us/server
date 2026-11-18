@@ -88,6 +88,36 @@ test('new AWFL sessions use the current workflow launcher and existing agent map
   }), /Project not found/);
 });
 
+test('typed workflows use the existing project-authorized launcher without session pollution', async () => {
+  const db = memoryDb(), calls = [];
+  await db.doc('users/owner/projects/workflows').set({ id: 'workflows' });
+  const service = new AgentSessionService({
+    db, execute: async args => {
+      calls.push(args);
+      return { executionName: 'native/native_abc' };
+    },
+  });
+  const params = { arg1: 'test-1219', arg2: '1', model: 'gpt-6-sol',
+    env: { userId: 'forged', projectId: 'foreign' } };
+  const result = await service.executeWorkflow('owner', {
+    project_id: 'workflows', workflow_name: 'evals-AutomationBenchEval', params,
+  });
+  assert.equal(result.execution_name, 'native/native_abc');
+  assert.deepEqual(calls, [{
+    userId: 'owner', projectId: 'workflows',
+    workflowName: 'evals-AutomationBenchEval', params,
+  }]);
+  assert.equal(db.data.size, 1, 'no agent or conversation side effects');
+  await assert.rejects(service.executeWorkflow('owner', {
+    project_id: 'someone-elses-project',
+    workflow_name: 'evals-AutomationBenchEval', params,
+  }), /Project not found/);
+  await assert.rejects(service.executeWorkflow('owner', {
+    project_id: 'workflows', workflow_name: 'evals-AutomationBenchEval', params: {},
+  }), /nonempty params/);
+  assert.equal(calls.length, 1);
+});
+
 test('history is project-scoped, chronological, and paginated like Devin', async () => {
   const db = memoryDb(), path = 'users/owner/projects/project-a';
   await db.doc(path).set({});

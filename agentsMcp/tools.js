@@ -40,6 +40,18 @@ export const agentTools = {
       workflow_name: z.string().min(1).max(128).optional(),
       model, fund, background: z.boolean().default(false) },
   },
+  execute_workflow: {
+    description: 'Start an existing AWFL workflow with typed JSON arguments, via the SAME project-authorized Workflows launcher used by AWFL Web. Use for non-chat workflows such as evals-AutomationBenchEval (params: {arg1: runId, arg2: "1"}). Does not create a chat session. Returns execution_name for status tracking. A timeout/network failure is not proof that launch failed: inspect before retrying.',
+    schema: {
+      project_id,
+      workflow_name: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,99}$/),
+      params: z.record(z.string(), z.unknown()).refine(
+        p => Object.keys(p).length > 0 && Object.keys(p).length <= 40
+          && JSON.stringify(p).length <= 65536,
+        'Provide 1-40 JSON parameters totaling at most 64 KiB',
+      ),
+    },
+  },
   send_message: {
     description: 'Send instructions or follow-up to the SAME AWFL session and linked workflow. This starts a normal AWFL workflow execution on that session; do not retry blindly after a network error.',
     schema: { project_id, session_id, message, model, fund, background: z.boolean().default(false) },

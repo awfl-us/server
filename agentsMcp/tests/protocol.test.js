@@ -25,6 +25,10 @@ test('separate AWFL Agents MCP follows the Devin session interface and enforces 
       sessions.push(args);
       return { session_id: 's' + sessions.length, status: 'submitted' };
     },
+    executeWorkflow: async (userId, args) => {
+      calls.push({ name: 'execute_workflow', userId, args });
+      return { execution_name: 'native/native_123', status: 'submitted' };
+    },
     sendMessage: async (userId, args) => {
       calls.push({ name: 'send', userId, args });
       return { session_id: args.session_id, execution_name: 'exec2' };
@@ -63,7 +67,7 @@ test('separate AWFL Agents MCP follows the Devin session interface and enforces 
     const listed = await client.listTools();
     assert.equal(listed.tools.length, Object.keys(agentTools).length);
     for (const name of ['list_sessions', 'get_session', 'list_messages', 'review_session',
-      'create_session', 'send_message', 'terminate_session', 'search_conversations',
+      'create_session', 'execute_workflow', 'send_message', 'terminate_session', 'search_conversations',
       'search_session_matches', 'launch_batch', 'message_batch']) {
       assert.ok(listed.tools.some(tool => tool.name === name), name);
     }
@@ -75,11 +79,22 @@ test('separate AWFL Agents MCP follows the Devin session interface and enforces 
     assert.equal(JSON.parse(launched.content[0].text).session_id, 's1');
     assert.equal(calls[0].args.model, 'gpt-5');
     assert.equal(calls[0].args.fund, 0.25);
+    const typed = await client.callTool({ name: 'execute_workflow', arguments: {
+      project_id: 'repo', workflow_name: 'evals-AutomationBenchEval',
+      params: { arg1: 'public-1219', arg2: '1' },
+    } });
+    assert.equal(JSON.parse(typed.content[0].text).execution_name, 'native/native_123');
+    assert.deepEqual(calls[1].args.params, { arg1: 'public-1219', arg2: '1' });
+    const empty = await client.callTool({ name: 'execute_workflow', arguments: {
+      project_id: 'repo', workflow_name: 'evals-AutomationBenchEval', params: {},
+    } });
+    assert.equal(empty.isError, true);
+    assert.equal(calls.filter(c => c.name === 'execute_workflow').length, 1);
     const followed = await client.callTool({ name: 'send_message', arguments: {
       project_id: 'repo', session_id: 's1', message: 'Now review the diff',
     } });
     assert.equal(JSON.parse(followed.content[0].text).execution_name, 'exec2');
-    assert.equal(calls[1].args.session_id, 's1');
+    assert.equal(calls.find(c => c.name === 'send').args.session_id, 's1');
     const invalid = await client.callTool({ name: 'terminate_session', arguments: {
       project_id: 'repo', session_id: 's1',
     } });
