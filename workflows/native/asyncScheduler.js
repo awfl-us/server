@@ -25,9 +25,11 @@ export function needsNativeEffectReconciliation(state) {
 
 export function createNativeAsyncScheduler({
   store, execute, concurrency = 4, pollIntervalMs = 15_000,
+  shouldRecover = () => true,
   logError = error => console.error('Native detached execution:', error?.message || error),
 }) {
   if (!store?.get || typeof execute !== 'function' ||
+      typeof shouldRecover !== 'function' ||
       !Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 32 ||
       !Number.isSafeInteger(pollIntervalMs) || pollIntervalMs < 1000) {
     throw new Error('invalid native detached scheduler configuration');
@@ -76,7 +78,8 @@ export function createNativeAsyncScheduler({
       const eligible = states.filter(state =>
         state.asyncLaunch && !TERMINAL.has(state.status) &&
         !(state.owner && state.leaseUntil > now) &&
-        !needsNativeEffectReconciliation(state));
+        !needsNativeEffectReconciliation(state) &&
+        shouldRecover(state));
       eligible.sort((a, b) =>
         Number(b.status === 'ready') - Number(a.status === 'ready'));
       for (const state of eligible) {

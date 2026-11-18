@@ -123,3 +123,30 @@ test('only old unresolved remote intents are quarantined', () => {
     updatedAt: now - 6000}), false,
     'an effect prepared after the last update is not stale');
 });
+
+
+test('recovery scanners filter pending records by their persisted mode', async () => {
+  const recorded = [];
+  const states = [
+    { executionId: a, ...owner, asyncLaunch: true,
+      status: 'ready', leaseUntil: 0 },
+    { executionId: b, ...owner, asyncLaunch: true,
+      executionMode: 'memory', status: 'ready', leaseUntil: 0 },
+  ];
+  const store = { get: async () => null, listPendingAsync: async () => states };
+  const memory = createNativeAsyncScheduler({ store,
+    shouldRecover: state => state.executionMode === 'memory',
+    execute: async ({ executionId }) => recorded.push(['memory', executionId]),
+  });
+  const durable = createNativeAsyncScheduler({ store,
+    shouldRecover: state => state.executionMode !== 'memory',
+    execute: async ({ executionId }) => recorded.push(['durable', executionId]),
+  });
+  try {
+    await Promise.all([memory.scan(), durable.scan()]);
+    await Promise.all([memory.drain(), durable.drain()]);
+    assert.deepEqual(recorded.sort((x, y) => x[1].localeCompare(y[1])), [
+      ['durable', a], ['memory', b],
+    ]);
+  } finally { await Promise.all([memory.close(), durable.close()]); }
+});

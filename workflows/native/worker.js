@@ -17,7 +17,7 @@ export function nativeAsyncSchedulerFor({ store, releases, handlers }) {
   let scheduler = detachedSchedulers.get(key);
   if (!scheduler) {
     scheduler = createNativeAsyncScheduler({
-      store,
+      store, shouldRecover: state => state.executionMode !== 'memory',
       execute: ({ executionId, userId, projectId }) => runNativeWorkflow({
         store, releases, handlers, executionId, userId, projectId,
         asyncScheduler: scheduler, maxTransitions: 10000,
