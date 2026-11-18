@@ -93,6 +93,22 @@ Security and limits
 - `modelDecoder.js` validates/normalizes the request and supports presets.
 - `filters/` contains modular, composable filters and a registry.
 
+## Chronological TopicContext composition
+
+When a TopicContext model requests both raw `messages` and `summaries` or
+`topicInfos`, the endpoint merges their source documents by the **stored
+`create_time` timestamp** (Unix seconds) before applying its context filters.
+This interleaves summary and topic messages with the conversation at the time
+those records were created, rather than putting every summary before all chat.
+The static introductory system message remains first. Equal timestamps use
+stable source order; literal/un-timestamped messages keep their original slots.
+
+Timestamp metadata is attached internally, not included in serialized
+`ChatMessage` responses or OpenAI payloads. Unrelated component models without
+both history and summary/topic sources retain the explicit component order.
+Newly appended conversation messages therefore preserve the existing prefix
+when no older summaries or filters change, improving prompt-cache reuse.
+
 ## Request schema
 
 Body JSON (simplified):

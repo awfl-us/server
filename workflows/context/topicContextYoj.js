@@ -4,6 +4,7 @@
 
 import express from 'express';
 import { promoteKala, buildYojMessages } from './lib/prakriya.js';
+import { interleaveContextMessages } from './lib/chronologicalMessages.js';
 import { decodeContextModel } from './modelDecoder.js';
 import { applyFilters } from './filters/index.js';
 import { getUserIdFromReq } from '../../jobs/userAuth.js';
@@ -74,6 +75,7 @@ router.post('/topicContextYoj/run', async (req, res) => {
     const includeDocId = Boolean(req?.body?.includeDocId);
 
     const messages = [];
+    const contextMessages = [];
 
     // Optional intro
     if (model.intro?.system) {
@@ -87,12 +89,22 @@ router.post('/topicContextYoj/run', async (req, res) => {
       if (model.promoteUpstream && (component.kind === 'yoj' || component.kind === 'ista')) {
         // Include upstream context for promoted Kala(s)
         const upstream = await runUpstream({ name: component.name, kala, userId, projectId, framing: component.framing || '', includeDocId });
-        messages.push(...upstream);
+        contextMessages.push(...upstream);
       }
 
       const local = await buildComponentMessages({ component, kala, userId, projectId, includeDocId });
-      messages.push(...local);
+      contextMessages.push(...local);
     }
+
+    // TopicContext joins summary/topic components and chat history. Merge those
+    // by their document creation timestamps instead of grouping all summaries
+    // before conversation. Explicitly ordered unrelated Yoj models retain the
+    // existing component order. The intro stays first; untimed literals keep
+    // their slot.
+    const isTopicHistory = leaves.some(c => c.name === 'messages') &&
+      leaves.some(c => ['summaries', 'topicInfos', 'topicInfo'].includes(c.name));
+    messages.push(...(isTopicHistory ? interleaveContextMessages(contextMessages)
+      : contextMessages));
 
     // Build filters (defaults handled in modelDecoder; fallback kept in sync with AGENT.md)
     const pipeline = model.filters;

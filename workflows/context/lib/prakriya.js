@@ -4,6 +4,7 @@
 
 import { getDocumentStorage, readDocuments } from '../../../storage/service.js';
 import { projectScopedCollectionPath } from '../../userAuth.js';
+import { timestampContextMessage } from './chronologicalMessages.js';
 
 // -----------------------------------
 // Collection path helpers
@@ -170,7 +171,7 @@ export async function buildYojMessages({ name, kala, userId, projectId, framing 
         msg.execId = wrapperExecId;
       }
       if (includeDocId && doc?.id) msg.docId = doc.id;
-      return msg;
+      return timestampContextMessage(msg, datum.create_time);
     });
   }
 
@@ -192,7 +193,7 @@ export async function buildYojMessages({ name, kala, userId, projectId, framing 
           msg.execId = wrapperExecId;
         }
         if (includeDocId) msg.docId = doc.id;
-        return msg;
+        return timestampContextMessage(msg, datum.create_time);
       }
       // Non-object payloads are returned as-is
       return value;
@@ -220,14 +221,14 @@ export async function buildYojMessages({ name, kala, userId, projectId, framing 
           msg.currentExecId = wrapperCurrentExecId;
         }
         if (includeDocId) msg.docId = doc.id;
-        return msg;
+        return timestampContextMessage(msg, datum.create_time);
       }
       return value;
     }
     // datum is already the payload
     if (includeDocId && datum && typeof datum === 'object') {
-      return { ...datum, docId: doc.id };
+      return timestampContextMessage({ ...datum, docId: doc.id }, datum.create_time);
     }
-    return datum;
+    return timestampContextMessage(datum, datum?.create_time);
   });
 }

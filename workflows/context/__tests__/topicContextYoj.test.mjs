@@ -172,3 +172,104 @@ describe('TopicContextYoj router - Yoj and Ista reads', () => {
     expect(last.content).toContain('ctx:sess-abc/user-abc/proj-42');
   });
 });
+
+
+describe('TopicContextYoj chronological context', () => {
+  test('interleaves stored summaries and topics with raw chat before running filters', async () => {
+    // The actual storage reader attaches a non-enumerable timestamp. Mock the
+    // same contract and verify the full endpoint/filter boundary preserves order.
+    const { timestampContextMessage } = await import('../lib/chronologicalMessages.js');
+    const msg = (content, time, role = 'system') =>
+      timestampContextMessage({ role, content, docId: `${content}-id` }, time);
+    const decoderReturn = {
+      kala: { kind: 'SegKala', sessionId: 'sess-chronological', end: 1000, windowSeconds: 600 },
+      model: {
+        intro: { system: 'static context intro' },
+        promoteUpstream: false,
+        components: [
+          { kind: 'yoj', name: 'summaries' },
+          { kind: 'yoj', name: 'topicInfos' },
+          { kind: 'yoj', name: 'messages' },
+        ],
+        filters: [],
+      },
+    };
+    const buildYojImpl = async ({ name }) => ({
+      summaries: [msg('summary 600', 600), msg('summary 900', 900)],
+      topicInfos: [msg('topic 750', 750)],
+      messages: [msg('chat 500', 500, 'user'), msg('chat 700', 700, 'assistant'),
+        msg('chat 1000', 1000, 'tool')],
+    }[name] || []);
+    const { app, mocks } = await setupTest({ decoderReturn, buildYojImpl,
+      applyFiltersImpl: async messages => messages });
+    const { body: { yoj } } = await request(app).post('/context/topicContextYoj/run')
+      .send({ includeDocId: true, userId: 'u-1' }).expect(200);
+    expect(yoj.map(m => m.content)).toEqual([
+      'static context intro', 'chat 500', 'summary 600', 'chat 700',
+      'topic 750', 'summary 900', 'chat 1000',
+    ]);
+    expect(yoj[1].docId).toBe('chat 500-id');
+    expect(yoj[2].docId).toBe('summary 600-id');
+    expect(yoj.every(m => !Object.keys(m).includes('create_time'))).toBe(true);
+    expect(mocks.applyFilters.mock.calls[0][0].map(m => m.content)).toEqual(
+      yoj.map(m => m.content));
+  });
+
+  test('interleaves promoted summary levels with raw history', async () => {
+    const { timestampContextMessage } = await import('../lib/chronologicalMessages.js');
+    const msg = (text, time) => timestampContextMessage({ role: 'system', content: text }, time);
+    const decoderReturn = {
+      kala: { kind: 'SegKala', sessionId: 'sess-chronological', end: 1000, windowSeconds: 600 },
+      model: {
+        intro: { system: 'intro' },
+        promoteUpstream: true,
+        components: [
+          { kind: 'yoj', name: 'summaries' },
+          { kind: 'yoj', name: 'messages' },
+        ],
+        filters: [],
+      },
+    };
+    const buildYojImpl = async ({ name, kala }) => {
+      if (name === 'messages') return kala.kind === 'SegKala'
+        ? [msg('chat 300', 300), msg('chat 800', 800)] : [];
+      return {
+        TermKala: [msg('term 100', 100)],
+        WeekKala: [msg('week 900', 900)],
+        SessionKala: [msg('session 600', 600)],
+        SegKala: [msg('segment 500', 500)],
+      }[kala.kind] || [];
+    };
+    const { app } = await setupTest({ decoderReturn, buildYojImpl,
+      applyFiltersImpl: async messages => messages });
+    const { body: { yoj } } = await request(app).post('/context/topicContextYoj/run')
+      .send({ userId: 'u-1' }).expect(200);
+    expect(yoj.map(m => m.content)).toEqual([
+      'intro', 'term 100', 'chat 300', 'segment 500', 'session 600',
+      'chat 800', 'week 900',
+    ]);
+  });
+
+  test('does not reorder unrelated custom component models', async () => {
+    const { timestampContextMessage } = await import('../lib/chronologicalMessages.js');
+    const decoderReturn = {
+      kala: { kind: 'SegKala', sessionId: 'sess-custom', end: 1000, windowSeconds: 600 },
+      model: {
+        promoteUpstream: false,
+        components: [
+          { kind: 'yoj', name: 'customOlder' },
+          { kind: 'yoj', name: 'customNewer' },
+        ],
+        filters: [],
+      },
+    };
+    const buildYojImpl = async ({ name }) => [timestampContextMessage({
+      role: 'system', content: name,
+    }, name === 'customOlder' ? 900 : 100)];
+    const { app } = await setupTest({ decoderReturn, buildYojImpl,
+      applyFiltersImpl: async messages => messages });
+    const { body: { yoj } } = await request(app).post('/context/topicContextYoj/run')
+      .send({ userId: 'u-1' }).expect(200);
+    expect(yoj.map(m => m.content)).toEqual(['customOlder', 'customNewer']);
+  });
+});
