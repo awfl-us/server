@@ -65,8 +65,12 @@ test('Ista.tool(kala) retains strict schema from Scala through native Rust and O
         {type:'array',items:{type:'string'}},{type:'null'}]);
       assert.deepEqual(schema.properties.history,{type:'array',items:{type:'boolean'}});
       assert.deepEqual(schema.properties.counts,{type:'object',additionalProperties:{type:'integer'}});
-      assert.ok(!JSON.stringify(first).includes('workflowName'),
+      assert.ok(!JSON.stringify(tool).includes('workflowName'),
         'routing metadata must never reach model');
+      assert.equal(first.routed.workflowName,'tools-ReadTyped');
+      assert.equal(first.routed.type,'function');
+      assert.deepEqual(first.routed.function,tool.function,
+        'routed Ista must retain exactly the model-facing schema');
       const payload=buildChatPayload({model:'gpt-6.1-terra',
         messages:[{role:'user',content:'Read a file'}],tools:[tool],tool_choice:'auto'});
       assert.deepEqual(payload.tools,[tool]);
