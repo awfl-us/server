@@ -6,7 +6,7 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { NativeExecutionStore } from '../workflows/native/executionStore.js';
-import { runNativeWorkflow } from '../workflows/native/worker.js';
+import { runNativeWorkflow, nativeAsyncSchedulerFor } from '../workflows/native/worker.js';
 import { runNativeMemoryWorkflow } from '../workflows/native/memoryWorker.js';
 import { createNativeLogEffectHandler } from '../workflows/native/logEffects.js';
 import { createNativeStorageEffectHandler } from '../workflows/native/storageEffects.js';
@@ -130,7 +130,7 @@ export async function localReleases(reportPath) {
 }
 
 export function createReplayHttpHandlers({ fixtures, identity,
-    jobsOrigin = DEFAULT_ORIGIN, seen, missing }) {
+    jobsOrigin = DEFAULT_ORIGIN, seen, missing, respond = null }) {
   const expected = new URL(jobsOrigin);
   const operations = {
     'http.get': 'GET', 'http.post': 'POST',
@@ -149,7 +149,9 @@ export function createReplayHttpHandlers({ fixtures, identity,
       const effectId = idempotencyKey.split(':').at(-1);
       const path = url.pathname;
       seen.push({ op, path, effectId });
-      const saved = fixtures[effectId];
+      const saved = fixtures[effectId] || (respond ? await respond({
+        operation:op, method, path, args, idempotencyKey, effectId,
+      }) : null);
       if (!saved) {
         const description = method + ' ' + path + ' (' + effectId + ')';
         missing.push(description);
@@ -258,7 +260,9 @@ export function createLiveGcsStorage(tokenFile) {
 export async function runLocalProjectManager({
   reportPath, input, fixtures = {}, identity, tokenFile = null,
   jobsOrigin = DEFAULT_ORIGIN, localJobsUrl = null, maxTransitions = 120,
-  executionMode = 'durable', log = console.log,
+  executionMode = 'durable', log = console.log, respondHttp = null,
+  storageHandler = null, callbackFixtureHandlers = null,
+  drainDetached = false, drainTimeoutMs = 20000,
 }) {
   if (!identity?.userId || !identity?.projectId) {
     throw new Error('explicit authenticated development identity required');
@@ -285,15 +289,15 @@ export async function runLocalProjectManager({
   const http = localJobsUrl
     ? createLocalJobsHttpHandlers({identity, jobsOrigin, localJobsUrl,
       seen, missing, failedRequests})
-    : createReplayHttpHandlers({fixtures, identity, jobsOrigin, seen, missing});
+    : createReplayHttpHandlers({fixtures, identity, jobsOrigin, seen, missing, respond:respondHttp});
   const realStorage = tokenFile ? createNativeStorageEffectHandler({
     storage: createLiveGcsStorage(tokenFile),
   }) : null;
   // Same native callback service and Firestore records used by Cloud Run.
   // Only enabled for explicitly local Jobs runs with the existing GKE
   // user-scoped credential preloader.
-  let callbackHandlers = {};
-  if (localJobsUrl) {
+  let callbackHandlers = callbackFixtureHandlers || {};
+  if (localJobsUrl && !callbackFixtureHandlers) {
     // This is a standalone test CLI, unlike the normal Jobs Express
     // application which initializes Firebase before mounting handlers.
     const { getApps, initializeApp } = await import('firebase-admin/app');
@@ -319,9 +323,9 @@ export async function runLocalProjectManager({
     'log.write': createNativeLogEffectHandler({
       info: event => log('NATIVE_LOCAL_LOG ' + JSON.stringify(event).slice(0, 500)),
     }),
-    ...(realStorage && {
+    ...((realStorage || storageHandler) && {
       'storage.object_get': async effect => {
-        try { return await realStorage(effect); }
+        try { return await (realStorage || storageHandler)(effect); }
         catch (error) {
           storageErrors.push(String(error?.message || error).slice(0, 220));
           throw error;
@@ -340,6 +344,21 @@ export async function runLocalProjectManager({
       handlers, maxTransitions,
     });
   } catch (cause) { error = String(cause?.message || cause); }
+  let detachedDrainError = null;
+  if (drainDetached && executionMode === 'durable') {
+    // The underlying worker schedules self-continuations and summaries with a
+    // per-store detached scheduler; wait for those children, not only the root.
+    const scheduler = nativeAsyncSchedulerFor({store, releases, handlers});
+    let timeout;
+    try {
+      await Promise.race([
+        scheduler.drain(),
+        new Promise((_,reject) => { timeout = setTimeout(() => reject(new Error(
+          `detached native children did not settle within ${drainTimeoutMs}ms`)), drainTimeoutMs); }),
+      ]);
+    } catch (e) { detachedDrainError=String(e?.message||e); }
+    finally { clearTimeout(timeout); }
+  }
   const state = await store.get(executionId);
   // Local development-only cleanup: workflow uses a session lock in the real
   // Jobs collection. A failed local process cannot finish the Scala unlock
@@ -364,7 +383,7 @@ export async function runLocalProjectManager({
   }
   return {
     executionId, executionMode, durationMs: Math.round(performance.now() - start),
-    result, error, status: state.status, effectCount: state.effectCount,
+    result, error, detachedDrainError, status: state.status, effectCount: state.effectCount,
     fixtureCalls: seen, missing, storageErrors, failedRequests,
     lanes: [...db._docs.entries()].filter(([key]) =>
       /^nativeWorkflowExecutions\/native_[^/]+$/.test(key))
