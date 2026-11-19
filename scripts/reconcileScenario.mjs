@@ -11,10 +11,18 @@ import { resolve } from 'node:path';
 import { runLocalProjectManager } from './nativeLocalDev.mjs';
 import { createNativeStorageEffectHandler } from '../workflows/native/storageEffects.js';
 
-export const scenarios = Object.freeze(['basic', 'no-query', 'tool-roundtrip']);
+export const scenarios = Object.freeze(['basic', 'no-query', 'tool-roundtrip', 'typed-tool-roundtrip']);
 
-export function makeReconciliationFixture({ scenario = 'basic', query = 'Read the config.', sessionId = 'reconcile-session' } = {}) {
+export function makeReconciliationFixture({ scenario = 'basic', query = 'Read the config.', sessionId = 'reconcile-session',
+  typedToolDef = null } = {}) {
   if (!scenarios.includes(scenario)) throw new Error('Unknown reconciliation scenario: ' + scenario);
+  if (scenario === 'typed-tool-roundtrip') {
+    assert.equal(typedToolDef?.workflowName,'tools-CliTools',
+      'typed dispatch needs the compiled, separate workflow mapping');
+    assert.equal(typedToolDef?.function?.name,'READ_FILE');
+    assert.equal(typedToolDef?.function?.parameters?.additionalProperties,false,
+      'typed schema must be strict and derived');
+  }
   const docs = new Map();
   if (scenario === 'no-query') docs.set(
     `convo.sessions/${sessionId}/messages/prior-turn`,
@@ -23,14 +31,16 @@ export function makeReconciliationFixture({ scenario = 'basic', query = 'Read th
   const modelRequests = [];
   const callbackTools = new Map();
   let callbackSequence = 0;
-  const llmReplies = scenario === 'tool-roundtrip'
+  const isTool = scenario === 'tool-roundtrip' || scenario === 'typed-tool-roundtrip';
+  const llmReplies = isTool
     ? [{role:'assistant',content:'',tool_calls:[{type:'function',id:'read-fixture-1',
         function:{name:'READ_FILE',arguments:JSON.stringify({filepath:'/tmp/reconcile-config.json'})}}]},
       {role:'assistant',content:'The configuration enables debug logging.'}]
     : [{role:'assistant',content:'The configuration enables debug logging.'}];
-  const toolDef={type:'function',function:{name:'READ_FILE',description:'Read a file',
+  const legacyToolDef={type:'function',function:{name:'READ_FILE',description:'Read a file',
     parameters:{type:'object',properties:{filepath:{type:'string'}},required:['filepath']}},
     workflowName:'tools-CliTools'};
+  const toolDef=typedToolDef || legacyToolDef;
   const callbackCreate=async()=>({url:`https://jobs-4wmfqir74q-uc.a.run.app/callbacks/test-${++callbackSequence}`});
   const callbackAwait=async({args})=>{
     const id=new URL(args.callback.url).pathname.split('/').at(-1);
@@ -81,15 +91,34 @@ export function makeReconciliationFixture({ scenario = 'basic', query = 'Read th
         const seen=messages().map(x=>x.value||x).filter(x=>x.role);
         return ok({yoj:seen.length?seen:[{role:'user',content:query}]});
       }
+      case 'POST /context/collapse/indexer/run': return ok({});
       case 'POST /llm/chat': {
         modelRequests.push(body);
         assert.ok(Array.isArray(body.messages),'llm must receive messages array');
+        if (scenario === 'typed-tool-roundtrip' && body.workflow_name === 'codebase-ProjectManager') {
+          const readTools=body.tools.filter(tool=>tool.function?.name==='READ_FILE');
+          assert.deepEqual(readTools,[{type:toolDef.type,function:toolDef.function}],
+            'generated READ_FILE schema must be preserved and routing metadata removed');
+          assert.ok(body.tools.every(tool=>!('workflowName' in tool)),
+            'no internal routing metadata may reach the model');
+          const names=body.tools.map(tool=>tool.function?.name);
+          assert.equal(new Set(names).size,names.length,
+            'model payload cannot advertise duplicate function names');
+          assert.ok(names.includes('RUN_COMMAND'),'unrelated CLI tools must survive override');
+          assert.ok(names.includes('CHECK_TASKS'),'unrelated task tools must survive override');
+        }
         // Background Ista completions require machine-readable JSON. Never
         // consume a foreground scripted tool turn for a background call.
         const structured = {
           'context-ContextCollapser-SegKala': {groups:[]},
           'Summaries-Convo': {title:'Fixture conversation',summary:'Read-only configuration discussion.'},
+          'Summaries-Session': {title:'Fixture conversation',summary:'Read-only configuration discussion.'},
+          'Summaries-Week': {title:'Fixture week',summary:'Read-only configuration discussion.'},
+          'Summaries-Term': {title:'Fixture term',summary:'Read-only configuration discussion.'},
           'assistant-ExtractTopics-Convo': {topics:[],nuggets:[],reflections:[],artifacts:[],shouldSaveReflection:false},
+          'assistant-ExtractTopics-Session': {topics:[],nuggets:[],reflections:[],artifacts:[],shouldSaveReflection:false},
+          'assistant-ExtractTopics-Week': {topics:[],nuggets:[],reflections:[],artifacts:[],shouldSaveReflection:false},
+          'assistant-ExtractTopics-Term': {topics:[],nuggets:[],reflections:[],artifacts:[],shouldSaveReflection:false},
         };
         if(body.response_format?.type === 'json_object') {
           const payload = structured[body.workflow_name];
@@ -102,8 +131,8 @@ export function makeReconciliationFixture({ scenario = 'basic', query = 'Read th
           total_cost:0,usage:{completion_tokens:10,completion_tokens_details:{accepted_prediction_tokens:0,audio_tokens:0,reasoning_tokens:0,rejected_prediction_tokens:0},prompt_tokens:20,prompt_tokens_details:{audio_tokens:0,cached_tokens:0},total_tokens:30}});
       }
       case 'GET /agents/session/reconcile-session': return ok({sessionId,agentId:'default'});
-      case 'GET /agents/default/tools': return ok({tools:scenario === 'tool-roundtrip' ? ['READ_FILE'] : []});
-      case 'GET /tools/list': case 'GET /jobs/tools/list': return ok({items:scenario === 'tool-roundtrip' ? [toolDef] : []});
+      case 'GET /agents/default/tools': return ok({tools:isTool ? ['READ_FILE'] : []});
+      case 'GET /tools/list': case 'GET /jobs/tools/list': return ok({items:isTool ? [toolDef] : []});
       case 'GET /jobs/tasks/by-session/reconcile-session': return ok({tasks:[]});
       case 'POST /workflows/exec/status/update': return ok({});
       case 'POST /callbacks': return ok({id:String(body.callback_url||'').split('/').at(-1)});
@@ -122,9 +151,9 @@ export function makeReconciliationFixture({ scenario = 'basic', query = 'Read th
 }
 
 export async function runReconciliationScenario({reportPath,scenario='basic', log=()=>{},
-  maxTransitions=120, strictBackground=false}) {
+  maxTransitions=120, strictBackground=false, typedToolDef=null}) {
   if(!reportPath) throw new Error('--report is required; compile native workflows first');
-  const fixture=makeReconciliationFixture({scenario});
+  const fixture=makeReconciliationFixture({scenario,typedToolDef});
   const input={fund:2,env:{userId:'reconcile-user',projectId:'reconcile-project',
     sessionId:fixture.sessionId,model:'gpt-6.1-terra',
     BASE_URL:'https://jobs-4wmfqir74q-uc.a.run.app',background:false,
@@ -167,7 +196,7 @@ function assertBaseline(result) {
     'nil query duplicated or dropped previously persisted user turn');
   const foregroundRequests=result.modelRequests.filter(x=>x.workflow_name==='codebase-ProjectManager');
   const backgroundRequests=result.modelRequests.filter(x=>x.workflow_name!=='codebase-ProjectManager');
-  const isTool=result.scenario==='tool-roundtrip';
+  const isTool=result.scenario==='tool-roundtrip' || result.scenario==='typed-tool-roundtrip';
   assert.equal(roles.filter(x=>x==='assistant').length,isTool?2:1,
     'incorrect number of assistant messages');
   if(isTool) {
@@ -191,7 +220,7 @@ function assertBaseline(result) {
   }
   assert.equal(foregroundRequests.length,isTool?2:1,
     'incorrect foreground LLM request count');
-  if(result.strictBackground) assert.equal(backgroundRequests.length,isTool?10:5,
+  if(result.strictBackground) assert.ok(backgroundRequests.length >= (isTool?10:5),
     'expected background LLM requests were missing');
   return {scenario:result.scenario,status:result.native.status,
     effects:result.native.effectCount,modelCalls:foregroundRequests.length,

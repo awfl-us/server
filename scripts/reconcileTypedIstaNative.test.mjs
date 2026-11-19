@@ -15,6 +15,7 @@ import { runNativeMemoryWorkflow } from '../workflows/native/memoryWorker.js';
 import { localReleases } from './nativeLocalDev.mjs';
 import { parseTypedToolCalls } from '../jobs/llm/typedToolArguments.js';
 import { buildChatPayload } from '../jobs/providers/openai.js';
+import { runReconciliationScenario } from './reconcileScenario.mjs';
 
 const REPORT = process.env.AWFL_TYPED_ISTA_REPORT;
 const DB = process.env.PGTEST_URL;
@@ -29,7 +30,7 @@ if (active) {
 }
 
 test('Ista.tool(kala) retains strict schema from Scala through native Rust and OpenAI payload',
-  {skip: !active,timeout:45_000}, async () => {
+  {skip: !active,timeout:150_000}, async () => {
     const pool = new pg.Pool({connectionString: DB,max:3});
     const records = new PostgresAtomicRecords({pool,table:'reconcile_typed_ista'});
     const store = new NativeMemoryExecutionPilotStore({records});
@@ -71,6 +72,12 @@ test('Ista.tool(kala) retains strict schema from Scala through native Rust and O
       assert.equal(first.routed.type,'function');
       assert.deepEqual(first.routed.function,tool.function,
         'routed Ista must retain exactly the model-facing schema');
+      const readFileTool=first.routedReadFile;
+      assert.equal(readFileTool.workflowName,'tools-CliTools');
+      assert.equal(readFileTool.function.name,'READ_FILE');
+      assert.equal(readFileTool.function.parameters.additionalProperties,false);
+      assert.deepEqual(readFileTool.function.parameters.required,['filepath']);
+      assert.ok(!('workflowName' in readFileTool.function));
       const payload=buildChatPayload({model:'gpt-6.1-terra',
         messages:[{role:'user',content:'Read a file'}],tools:[tool],tool_choice:'auto'});
       assert.deepEqual(payload.tools,[tool]);
@@ -127,6 +134,48 @@ test('Ista.tool(kala) retains strict schema from Scala through native Rust and O
         assert.ok(!JSON.stringify(rejected.body).includes('sample.scala'));
       } finally {
         await new Promise((resolve,reject)=>server.close(err=>err?reject(err):resolve()));
+      }
+      // The optional full-closure gate uses the actual compiled ProjectManager,
+      // ToolDispatcher and CliTools Rust artifacts. The fixture's generated
+      // READ_FILE tool definition flows through the ordinary service lookup.
+      if (process.env.AWFL_NATIVE_LOCAL_BUILD_REPORT) {
+        const scenario=await runReconciliationScenario({
+          reportPath:process.env.AWFL_NATIVE_LOCAL_BUILD_REPORT,
+          scenario:'typed-tool-roundtrip',typedToolDef:readFileTool,
+          strictBackground:true,
+        });
+        assert.equal(scenario.native.status,'completed',JSON.stringify({
+          error:scenario.native.error, result:scenario.native.result,
+          lanes:scenario.native.lanes,missing:scenario.native.missing,
+          effectCount:scenario.native.effectCount,
+          modelCalls:scenario.modelRequests.length,
+          httpRequests:scenario.requests.length,
+          roles:scenario.messages.map(message=>message.value?.role||message.role)
+        }));
+        assert.equal(scenario.native.detachedDrainError,null);
+        assert.deepEqual(scenario.native.missing,[]);
+        assert.deepEqual(scenario.native.lanes.filter(lane=>lane.status==='failed'),[]);
+        const messages=scenario.messages.map(message=>message.value||message);
+        assert.deepEqual(messages.map(message=>message.role),
+          ['user','assistant','tool','assistant']);
+        const call=messages[1].tool_calls[0];
+        assert.equal(call.id,'read-fixture-1');
+        assert.deepEqual(parseTypedToolCalls({tool_calls:[call]},[
+          {type:readFileTool.type,function:readFileTool.function}
+        ])[0].arguments,{filepath:'/tmp/reconcile-config.json'});
+        assert.equal(messages[2].tool_call_id,call.id);
+        assert.deepEqual(JSON.parse(messages[2].content),{
+          content:'{"debug":true}',filepath:'/tmp/reconcile-config.json'
+        });
+        const modelCalls=scenario.modelRequests.filter(
+          request=>request.workflow_name==='codebase-ProjectManager');
+        assert.equal(modelCalls.length,2);
+        assert.equal(modelCalls[1].messages.filter(
+          message=>message.role==='tool'&&message.tool_call_id===call.id).length,1);
+        assert.equal(scenario.requests.filter(
+          request=>request.path==='/events'&&
+            request.body?.data?.tool_call?.id===call.id).length,1,
+          'native CLI dispatch must enqueue exactly one callback event');
       }
     } finally {
       await records.delete(executionId).catch(()=>{});
