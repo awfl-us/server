@@ -162,7 +162,7 @@ Currently supported:
   - filters (default order):
     1. `collapseGroupReplacer`
     2. `sizeLimiter` with the shared LLM model's context-message budget
-       (`100000` for `gpt-6.1-terra`, `17000` without a configured model),
+       (`17000` for `gpt-6.1-terra` during the threshold experiment, and `17000` without a configured model),
        capped separately from the model's total context window.
        `maxContentChars: 50000` remains the default.
     3. `toolCallBackfill`
@@ -199,7 +199,7 @@ Available filters:
   - Token accounting: Counts tokens over the entire message object (its JSON representation), not just `content`. This captures roles, tool/function metadata (e.g., tool_calls, tool_call_id, function arguments), and other fields.
   - Options:
     - `maxTokens` (number, optional override; capped at the configured model's
-      budget when known). Defaults to 100000 for `gpt-6.1-terra`,
+      budget when known). Temporarily defaults to 17000 for `gpt-6.1-terra`,
       17000 otherwise. Legacy explicit filter overrides remain supported.
     - `perMessageOverhead` (number, default 8)
     - `prioritizeSystem` (boolean, default false)

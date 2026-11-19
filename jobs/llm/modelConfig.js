@@ -21,7 +21,7 @@ export const MODEL_CONFIGS = Object.freeze({
   'gpt-6.1-terra': {
     maxCompletionTokens: 128000,
     contextWindowTokens: 1050000,
-    contextMessageBudgetTokens: 100000
+    contextMessageBudgetTokens: 17000 // Temporary threshold/caching regression test
   },
   'claude-3-5-sonnet': { maxCompletionTokens: 8192 },
   'claude-3-opus': { maxCompletionTokens: 8192 },
