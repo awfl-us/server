@@ -1,0 +1,48 @@
+# RBAC to allow a Google Service Account (Cloud Run runtime SA) to create Jobs in the awfl namespace
+#
+# How to use:
+# 1) Replace __GSA_EMAIL__ with your Cloud Run runtime service account email
+#    e.g., jobs-runtime@YOUR_PROJECT.iam.gserviceaccount.com
+# 2) Ensure the awfl namespace exists (included here; applying is idempotent)
+# 3) kubectl apply -f k8s/rbac/awfl-job-launcher.yaml
+#
+# Notes:
+# - The server will call the Kubernetes API using a Google access token from the metadata server
+#   (no static tokens). RBAC binds the GSA email as a User subject.
+# - Ensure the server has K8S_API_SERVER and either K8S_CA_CERT_B64 or K8S_INSECURE_SKIP_TLS_VERIFY=1 set.
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: awfl
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: awfl
+  name: awfl-job-launcher
+rules:
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["create", "get", "list", "watch", "delete"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch", "delete"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  namespace: awfl
+  name: awfl-job-launcher-binding
+subjects:
+- kind: User
+  name: __GSA_EMAIL__  # e.g., jobs-runtime@YOUR_PROJECT.iam.gserviceaccount.com
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: awfl-job-launcher
+  apiGroup: rbac.authorization.k8s.io

@@ -2,10 +2,10 @@ import { OpenAI } from 'openai';
 import { stripNullsDeep } from './utils.js';
 
 // OpenAI adapter wrapping chat.completions
-// Input: { apiKey, model, messages, temperature, max_tokens, response_format, tools, tool_choice }
+// Input: { apiKey, model, messages, temperature, max_tokens, response_format, tools, tool_choice, reasoning_effort }
 // Returns: { message, usage, raw }
 export async function chat(params) {
-  const { apiKey, model, messages, temperature, max_tokens, response_format, tools, tool_choice } = params;
+  const { apiKey, model, messages, temperature, max_tokens, response_format, tools, tool_choice, reasoning_effort } = params;
   const client = new OpenAI({ apiKey });
 
   // Build request payload and defensively strip null/undefined values
@@ -17,7 +17,8 @@ export async function chat(params) {
     max_completion_tokens: typeof max_tokens === 'number' ? max_tokens : undefined,
     response_format,
     tools,
-    tool_choice
+    tool_choice,
+    reasoning_effort
   });
 
   const resp = await client.chat.completions.create(payload);

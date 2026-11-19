@@ -3,6 +3,7 @@
     "AGENT.md"
   ],
   "commands": [
-    "pwd"
+    "pwd",
+    "uname -a"
   ]
 }

@@ -2,18 +2,6 @@
 
 # NOTE: project_id, github_repository, and region variables are defined in other infra/*.tf files.
 
-# Resolve project details (number is needed for some bindings)
-data "google_project" "project" {
-  project_id = var.project_id
-  # Ensure required APIs are enabled before reading project metadata
-  depends_on = [
-    google_project_service.cloudresourcemanager,
-    google_project_service.serviceusage,
-    google_project_service.iam,
-    google_project_service.iamcredentials,
-  ]
-}
-
 # ------------------------------
 # Workload Identity Pool and Provider for GitHub Actions OIDC
 # ------------------------------

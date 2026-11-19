@@ -39,6 +39,19 @@ const PRICING = {
   'gpt-5.5': { prompt: 5.00, cached: 0.50, completion: 30.00 },
   'gpt-5.5-pro': { prompt: 30.00, cached: 0.00, completion: 180.00 },
 
+  // GPT-5.6 family
+  'gpt-5.6': { prompt: 4.00, cached: 0.40, completion: 20.00 },
+  'gpt-5.6-sol': { prompt: 4.00, cached: 2.50, completion: 20.00 },
+  'gpt-5.6-terra': { prompt: 2.50, cached: 0.00, completion: 15.00 },
+  'gpt-5.6-luna': { prompt: 1.00, cached: 0.00, completion: 6.00 },
+  'gpt-5.6-cyber': { prompt: 12.50, cached: 0.00, completion: 75.00 },
+
+  // GPT-6 family
+  'gpt-6-astra': { prompt: 10.00, cached: 0.00, completion: 50.00 },
+  'gpt-6-sol': { prompt: 2.00, cached: 0.00, completion: 10.00 },
+  'gpt-6.1-sol': { prompt: 2.00, cached: 0.00, completion: 10.00 },
+  'gpt-6-luna': { prompt: 0.10, cached: 0.00, completion: 0.50 },
+
   // Reasoning
   'o4-mini': { prompt: 0.55, cached: 0.14, completion: 2.20 },
   'o3': { prompt: 2.00, cached: 0.50, completion: 8.00 },
@@ -57,6 +70,7 @@ const PRICING = {
 const MAX_TOKENS = {
   // OpenAI
   'gpt-4o': 16384,
+  'gpt-4o-mini': 16384, // align with 4o default
   'chatgpt-4o-latest': 16384,
   'gpt-4-turbo': 4096,
   'gpt-4.1': 32768,
@@ -66,13 +80,22 @@ const MAX_TOKENS = {
   'gpt-3.5-turbo-16k': 4096,
   'o4-mini': 100000,
   'o3': 100000,
+  'o3-mini': 100000, // match o3 cap for simplicity
   'gpt-5': 128000,
   'gpt-5.1': 128000,
   'gpt-5.2': 128000,
   'gpt-5.4': 128000,
   'gpt-5.5': 128000,
+  'gpt-5.6': 128000,
+  'gpt-5.6-terra': 128000,
+  'gpt-5.6-luna': 128000,
+  'gpt-5.6-cyber': 128000,
+  'gpt-6-astra': 128000,
+  'gpt-6.1-sol': 128000,
+  'gpt-6-luna': 128000,
   // Anthropic (conservative completion caps)
   'claude-3-5-sonnet': 8192,
+  'claude-3-5-haiku': 8192,
   'claude-3-opus': 8192,
   'claude-3-haiku': 8192,
   // Gemini
@@ -90,6 +113,13 @@ const MAX_TOKENS = {
 function fixed_temperature(model, temperature) {
   const fixed = { 'o3': 1, 'gpt-5': 1, 'gpt-5.5': 1 };
   return fixed[model] ?? temperature;
+}
+
+// Reasoning effort: explicitly pass 'none' for GPT-5.6 and all GPT-6 families
+// (including gpt-6.1-* variants). Other models omit the field.
+function reasoningEffort(model) {
+  const m = String(model || '');
+  return /^gpt-5\.6(?:-|$)/.test(m) || /^gpt-6(?:[.-]|$)/.test(m) ? 'none' : null;
 }
 
 function estimateCost(model, usage) {
@@ -134,8 +164,8 @@ router.get('/models', (_req, res) => {
   const providers = [
     {
       id: 'openai',
-      prefixes: ['gpt-', 'chatgpt-', 'o1', 'o3', 'o4', 'gpt-5'],
-      examples: ['gpt-4o', 'chatgpt-4o-latest', 'o3']
+      prefixes: ['gpt-', 'chatgpt-', 'o1', 'o3', 'o4', 'gpt-5', 'gpt-6'],
+      examples: ['gpt-4o', 'o3', 'gpt-5.6', 'gpt-6-astra']
     },
     {
       id: 'anthropic',
@@ -166,16 +196,56 @@ router.get('/models', (_req, res) => {
       { provider: 'gemini', match: 'gemini-*' },
       { provider: 'grok', match: 'grok-*' },
       { provider: 'deepseek', match: 'deepseek-*' },
-      { provider: 'openai', match: 'gpt-*, chatgpt-*, o1*, o3*, o4*, gpt-5*' }
+      { provider: 'openai', match: 'gpt-*, chatgpt-*, o1*, o3*, o4*, gpt-5*, gpt-6*' }
     ]
   };
+
+  // Define the current (non-legacy) models we expose in the /models response.
+  // Maintainers: refresh this allowlist periodically when providers update their
+  // generally-available, recommended models. Keep historical entries in PRICING
+  // or MAX_TOKENS for log/backfill parity, but do not include them here.
+  // Last reviewed: 2026-06-05
+  const CURRENT_MODELS = [
+    // OpenAI
+    'gpt-4o', 'gpt-4o-mini', 'o3', 'o3-mini',
+    'gpt-5.6', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.6-cyber',
+    'gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-luna',
+    // Anthropic
+    'claude-3-5-sonnet', 'claude-3-5-haiku',
+    // Gemini
+    'gemini-1.5-pro', 'gemini-1.5-flash',
+    // xAI Grok
+    'grok-2', 'grok-2-mini',
+    // DeepSeek
+    'deepseek-chat', 'deepseek-reasoner'
+  ];
+
+  const max_tokens_filtered = Object.fromEntries(
+    Object.entries(MAX_TOKENS).filter(([k]) => CURRENT_MODELS.includes(k))
+  );
+
+  const pricing_openai_filtered = Object.fromEntries(
+    Object.entries(PRICING).filter(([k]) => CURRENT_MODELS.includes(k))
+  );
+
+  // Sanity log if a current model is missing optional metadata
+  const missingMax = CURRENT_MODELS.filter((m) => !(m in MAX_TOKENS));
+  const missingOpenAIPricing = CURRENT_MODELS.filter(
+    (m) => inferProvider(m) === 'openai' && !(m in PRICING)
+  );
+  if (missingMax.length || missingOpenAIPricing.length) {
+    console.warn('[llm]/models metadata gaps:', {
+      missingMax,
+      missingOpenAIPricing
+    });
+  }
 
   res.status(200).json({
     providers,
     inference,
-    known_models: Object.keys(MAX_TOKENS),
-    max_tokens: MAX_TOKENS,
-    pricing: { openai: PRICING }
+    known_models: CURRENT_MODELS,
+    max_tokens: max_tokens_filtered,
+    pricing: { openai: pricing_openai_filtered }
   });
 });
 
@@ -210,7 +280,8 @@ router.post('/chat', async (req, res) => {
       max_tokens: resolvedMaxTokens,
       response_format,
       tools,
-      tool_choice
+      tool_choice,
+      reasoning_effort: reasoningEffort(model)
     });
 
     let result;
