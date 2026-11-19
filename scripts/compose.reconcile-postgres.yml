@@ -1,0 +1,20 @@
+# Local developer-only database; no cloud SQL, no production credentials.
+name: awfl-reconcile-test
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: awfl
+      POSTGRES_PASSWORD: reconcile-test-only
+      POSTGRES_DB: awfl_reconcile
+    ports:
+      - '127.0.0.1:55439:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U awfl -d awfl_reconcile']
+      interval: 2s
+      timeout: 2s
+      retries: 15
+    volumes:
+      - reconcile_db:/var/lib/postgresql/data
+volumes:
+  reconcile_db: {}
