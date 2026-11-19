@@ -106,3 +106,33 @@ HTTP effect, not the entire EventHandler `/llm/chat` request. A legacy
 replay harness remained in `waiting_effect` when its synthetic 422 was
 thrown as a generic unconfirmed Error. Test actual Jobs-route validation
 and native EventHandler terminal state together before closing that gate.
+
+## Memory-mode follow-up gates completed (2026-11-19)
+
+- `reconcileMemoryCallbackConcurrency.test.mjs` holds `callback.await` while
+  a second native Project Manager root runs in the same session. The second
+  root gets terminal 409 without saving an orphaned query. The original
+  tool call, tool result and assistant continuation are correctly ordered;
+  the rejected prompt then succeeds when explicitly retried.
+- `reconcileMemoryTyped422.test.mjs` exercises the **actual Jobs LLM HTTP
+  route** with a mock provider returning invalid typed `READ_FILE` arguments.
+  Scala `Llm.chatWithTools` opts into `validate_tool_arguments`, Jobs returns
+  422, and compiled Rust EventHandler saves `failed` with code 422 without
+  dispatching the invalid tool. The one provider completion is accounted
+  for, and the session lock is released. This closes the previous limited
+  handler-only 422 check.
+- `executionFailureResponse.test.js` verifies public `/workflows/execute`
+  failure normalization: a native session-busy code 409 becomes HTTP 409,
+  `retryable:true`, and a readable string, instead of HTTP 500 with an
+  object-valued `error`. Existing web `PromptComposer` keeps its draft when
+  the awaited submit request rejects, allowing the user to retry manually.
+
+All **three** native concurrency/422 regressions and **two** public-error
+tests passed together. Tool-aware workflow-utils snapshot was compiled
+locally and all **26 native closure binaries** recompiled/verified. This is
+PostgreSQL **memory mode**, not the deferred durable per-effect journal.
+
+Still required before production: an authenticated real-browser submission
+test and a canary/merge decision. Cross-device simultaneous submissions may
+still require a user-visible manual retry after a 409; automatic queueing is
+deliberately not claimed.

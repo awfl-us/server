@@ -1,6 +1,7 @@
 import express from 'express';
 import { WorkflowsClient } from '@google-cloud/workflows';
 import { createWorkflowExecution } from './services/executeWorkflow.js';
+import { executionFailureResponse } from './services/executionFailureResponse.js';
 
 const router = express.Router();
 
@@ -100,7 +101,10 @@ router.post('/execute', async (req, res) => {
       }
 
       if (current.state === 'FAILED' || current.state === 'CANCELLED') {
-        return res.status(500).json({ executionName, state: current.state, error: current.error || 'Execution did not succeed' });
+        const failure = executionFailureResponse({
+          executionName, state: current.state, error: current.error,
+        });
+        return res.status(failure.status).json(failure.body);
       }
 
       if (Date.now() > deadline) {
