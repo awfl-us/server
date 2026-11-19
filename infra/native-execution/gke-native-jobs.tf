@@ -27,8 +27,8 @@ variable "native_jobs_document_backend" {
 
 variable "native_jobs_document_store_enabled" {
   type        = bool
-  description = "Enable provider-neutral native-memory execution after legacy roots drain"
-  default     = false
+  description = "Use PostgreSQL provider-neutral native memory execution; durable Firestore mode deferred"
+  default     = true
 }
 
 data "google_client_config" "native_scheduler" {}

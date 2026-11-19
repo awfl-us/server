@@ -35,7 +35,7 @@
   "PUBSUB_TOPIC": "awfl-events",
   "WORKFLOWS_BASE_URL": "https://jobs-4wmfqir74q-uc.a.run.app",
   "AWFL_DOCUMENT_STORAGE_BACKEND": "postgres",
-  "AWFL_NATIVE_DOCUMENT_STORE_ENABLED": "0",
+  "AWFL_NATIVE_DOCUMENT_STORE_ENABLED": "1",
   "AWFL_CLOUD_SQL_INSTANCE": "awfl-us:us-central1:awfl-native-storage-bench",
   "AWFL_POSTGRES_DB": "awfl_prod",
   "AWFL_POSTGRES_IAM_USER": "323709301334-compute@developer",
