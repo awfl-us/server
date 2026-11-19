@@ -1,5 +1,9 @@
 # Native callbacks: real Jobs HTTP + isolated PostgreSQL gate
 
+> **RELEASE STATUS (2026-11-19): MERGED AND DEPLOYED.** The following
+> entries document historical test gates. Full production evidence and
+> remaining limitations are in
+> `docs/plans/2026-11-19-wip-old-production-release.md`.
 > **Active priority: PostgreSQL memory-mode execution for latency.** Legacy durable per-effect Firestore journaling is intentionally deferred. It is not a release gate for the current `wip-old` work.
 
 2026-11-19, wip-old reconciliation, test-only.
@@ -17,7 +21,8 @@ PGTEST_URL=postgres://awfl@127.0.0.1:55439/awfl_reconcile \
   node --test test/storage/nativeCallbackRoutes.integration.test.mjs
 ```
 
-Only a loopback `/awfl_reconcile` database is allowed. The test explicitly
+Only loopback `/awfl_reconcile` (local development) and `/benchmark_ci`
+(GitHub Actions' isolated database) are allowed. The test explicitly
 initializes the existing document schema in that isolated database. It checks
 that:
 
