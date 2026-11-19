@@ -55,3 +55,7 @@ Remaining: full authenticated local Jobs Express service with isolated PG-backed
 ### Combined gate result
 
 `reconcile-test all --strict-background` with isolated `PGTEST_URL` and the compiled 26-workflow report returned exit 0. Cold Rust build is relatively expensive (~262 s); subsequent unchanged rebuild compiled/verified in 7.6 s. Native replay fixtures and all storage recovery tests passed. The workflows launcher rejects non-loopback PostgreSQL URLs and wrong database names before any SQL test invocation. Remaining work is running a real Jobs Express app against local Postgres and durable-journal crash/restart in a persistent backing store.
+
+### Production Jobs scoped storage router verification
+
+A fourth native/Postgres integration case mounts the **real** `createFirebaseDbRouter` with `workflowsUserInject` and `projectIdMiddleware` in a loopback-only Express app against isolated `PostgresStorage`. It verifies project-scoped create/read, 409 duplicate handling, and two simultaneous lock acquisitions with exactly one winner; no Firestore network calls. The consolidated PostgreSQL suite now passes **15/15** tests. This covers actual Jobs route behavior; the full `jobs.server.js` app and cloud-dependent LLM/context/callback routes remain a separate integration gate.
