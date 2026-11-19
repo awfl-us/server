@@ -69,3 +69,34 @@ Outstanding gate: native Rust execution of a workflow using the new `JsonSchema.
 ### Native typed Ista tool-schema fixture (2026-11-19)
 
 `scripts/reconcileTypedIstaNative.test.mjs` runs the actual compiled `helpers-TypedIstaSchemaFixture` static Rust binary against a loopback-only PostgreSQL `awfl_reconcile` database, verifies schema required/optional/nullable/map/list/strictness and contextual description, replays the completed execution, passes the tool through `buildChatPayload`, and validates returned JSON arguments. Set `AWFL_TYPED_ISTA_REPORT` to the dedicated native build-report.json. It passed 1/1. This exercises the **direct structured map** path from `Ista.tool(kala)` (not `json.decode`). No OpenAI or production Jobs request is issued. The server `validate_tool_arguments` opt-in remains a separate integration gate for full endpoint/usage behavior.
+
+## Typed-Ista Jobs HTTP contract checkpoint — 2026-11-19
+
+The typed-schema feature branch now exposes `createLlmRouter` for *isolated test-only*
+dependency injection while preserving the original default production router
+and credential/provider/usage services. No HTTP-exposed injection or provider
+network calls were added. The real Express `POST /llm/chat` handler was exercised
+on loopback with a fake provider and usage recorder.
+
+- `node --test jobs/llm/typedToolArguments.test.js jobs/llm/typedToolHttp.test.js jobs/providers/openai.test.js jobs/llm/transportError.test.js`: **13/13 pass**.
+- Valid typed calls preserve the supplied schema and return 200; malformed JSON,
+  schema-invalid arguments, unknown functions, missing or duplicate tool call IDs
+  return 422 when `validate_tool_arguments=true`.
+- Invalid provider results still reach usage accounting before the validation
+  error; error bodies do not contain raw tool arguments.
+- Legacy callers retain the original behavior when typed validation is omitted.
+- Fresh `workflow-utils_3:0.3.6-SNAPSHOT` was published **locally** after GCS
+  restore; Scala 53-source compile and `helpers-TypedIstaSchemaFixture` native
+  Rust static ELF rebuild succeeded, with `publish=false` (~153s cold).
+- `PGTEST_URL=postgres://awfl@127.0.0.1:55439/awfl_reconcile
+  ./scripts/reconcile-test typed-ista --server ../reconcile-server
+  --compiler ../reconcile-compiler-rust` **passed 1/1**. The actual compiled
+  `Ista.tool(kala)` schema was forwarded through the *real Jobs Express router*
+  unchanged; 200 valid, 422 invalid, usage counted, native completed-result replay.
+
+**Boundaries:** Local Postgres was initialized as a disposable test DB after the
+old GCS-synced PostgreSQL data directory lacked required empty directories.
+The provider and ledger were injected fakes. This is not the full Jobs process,
+production IAM, a provider API call, a dispatched tool callback, or a durable
+Postgres effect journal. Remaining gates: typed routing and callback completion,
+error and replay behavior across real session concurrency, then provider canary.

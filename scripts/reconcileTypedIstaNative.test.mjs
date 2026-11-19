@@ -4,6 +4,8 @@
  * Never calls OpenAI, GCP or the production Jobs service.
  */
 import { test } from 'node:test';
+import express from 'express';
+import { createLlmRouter } from '../jobs/llm.js';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
@@ -75,6 +77,53 @@ test('Ista.tool(kala) retains strict schema from Scala through native Rust and O
       assert.throws(()=>parseTypedToolCalls({tool_calls:[{id:'call-2',type:'function',
         function:{name:'READ_TYPED',arguments:JSON.stringify({...args,counts:{reads:'bad'}})}}]},
         [tool]),/counts.reads: expected integer/);
+
+      // Cross the actual Jobs Express route with the tool schema created by
+      // the compiled Scala -> Rust fixture, not a hand-written JS schema.
+      let nextArguments = args;
+      const accounted = [];
+      const observed = [];
+      const app = express();
+      app.use(express.json());
+      app.use((req,_res,next) => {
+        req.userId='reconcile-user';
+        req.projectId='reconcile-project';
+        next();
+      });
+      app.use('/llm',createLlmRouter({
+        apiKeyForUser: async ()=>'test-only-key',
+        adapters: {openai:{chat: async params => {
+          observed.push(params);
+          return {message:{role:'assistant',tool_calls:[{id:'call-rust',type:'function',
+            function:{name:'READ_TYPED',arguments:JSON.stringify(nextArguments)}}]},
+            usage:{prompt_tokens:10,completion_tokens:5,total_tokens:15}};
+        }}},
+        recordUsage: async entry => {accounted.push(entry);}
+      }));
+      const server=app.listen(0,'127.0.0.1');
+      try {
+        await new Promise(resolve=>server.once('listening',resolve));
+        const post=async()=>{
+          const response=await fetch(
+            `http://127.0.0.1:${server.address().port}/llm/chat`,{
+              method:'POST',headers:{'content-type':'application/json'},
+              body:JSON.stringify({model:'gpt-6.1-terra',messages:[{role:'user',content:'Read'}],
+                tools:[tool],validate_tool_arguments:true,sessionId:'typed-fixture'})
+            });
+          return {status:response.status,body:await response.json()};
+        };
+        assert.equal((await post()).status,200);
+        assert.deepEqual(observed[0].tools,[tool],
+          'real Jobs router must forward native generated JSON Schema unchanged');
+        nextArguments={...args,counts:{reads:'bad'}};
+        const rejected=await post();
+        assert.equal(rejected.status,422);
+        assert.match(rejected.body.reason,/counts.reads: expected integer/);
+        assert.equal(accounted.length,2,'both provider calls consume tokens');
+        assert.ok(!JSON.stringify(rejected.body).includes('sample.scala'));
+      } finally {
+        await new Promise((resolve,reject)=>server.close(err=>err?reject(err):resolve()));
+      }
     } finally {
       await records.delete(executionId).catch(()=>{});
       await records.close();

@@ -16,8 +16,6 @@ import { llmFailureResponse } from './llm/transportError.js';
 import { MAX_TOKENS, resolveMaxTokens, checkModelContextWindow } from './llm/modelConfig.js';
 import { parseTypedToolCalls } from './llm/typedToolArguments.js';
 
-const router = express.Router();
-
 // Pricing per 1,000,000 tokens in USD (OpenAI only for now)
 // USD per 1,000,000 tokens
 const PRICING = {
@@ -96,6 +94,16 @@ async function getApiKeyForUser(userId, providerId) {
   }
 }
 
+// The same router logic is used in Jobs and in isolated HTTP integration tests.
+// Production uses the real credential store, provider adapters and usage ledger.
+export function createLlmRouter({
+  apiKeyForUser = getApiKeyForUser,
+  adapters = {openai: openaiAdapter, anthropic: anthropicAdapter,
+    gemini: geminiAdapter, grok: grokAdapter, deepseek: deepseekAdapter},
+  recordUsage = incrementUsage
+} = {}) {
+const router = express.Router();
+
 // List supported model prefixes and known models
 router.get('/models', (_req, res) => {
   const providers = [
@@ -160,7 +168,7 @@ router.post('/chat', async (req, res) => {
     }
 
     const provider = inferProvider(model);
-    const apiKey = await getApiKeyForUser(userId, provider);
+    const apiKey = await apiKeyForUser(userId, provider);
     if (!apiKey) {
       return res.status(400).json({
         error: `Missing ${provider} credential for user. Set it via POST /workflows/creds/${provider} with { value: "<api-key>" }.`
@@ -190,25 +198,7 @@ router.post('/chat', async (req, res) => {
       tool_choice
     });
 
-    let result;
-    switch (provider) {
-      case 'anthropic':
-        result = await anthropicAdapter.chat(params);
-        break;
-      case 'gemini':
-        result = await geminiAdapter.chat(params);
-        break;
-      case 'grok':
-        result = await grokAdapter.chat(params);
-        break;
-      case 'deepseek':
-        result = await deepseekAdapter.chat(params);
-        break;
-      case 'openai':
-      default:
-        result = await openaiAdapter.chat(params);
-        break;
-    }
+    const result = await (adapters[provider] || adapters.openai).chat(params);
 
     const { message, usage } = result || {};
     const total_cost = provider === 'openai' ? estimateCost(model, usage) : null;
@@ -228,7 +218,7 @@ router.post('/chat', async (req, res) => {
     // Best-effort usage aggregation (graceful no-op if missing context)
     try {
       const projectId = req.projectId; // from middleware/header
-      await incrementUsage({
+      await recordUsage({
         userId,
         projectId,
         sessionId,
@@ -266,4 +256,7 @@ router.post('/chat', async (req, res) => {
   }
 });
 
-export default router;
+return router;
+}
+
+export default createLlmRouter();

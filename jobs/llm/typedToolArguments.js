@@ -73,7 +73,12 @@ export function parseTypedToolCalls(message, tools) {
     declared.set(tool.function.name,tool.function.parameters);
   }
   if (!Array.isArray(message?.tool_calls)) return [];
+  const seenCallIds = new Set();
   return message.tool_calls.map((call,index) => {
+    if (typeof call?.id !== 'string' || call.id.length === 0 || seenCallIds.has(call.id)) {
+      throw new TypeError(`Missing or duplicate typed tool call id at index ${index}`);
+    }
+    seenCallIds.add(call.id);
     const name = call?.function?.name;
     if (call?.type !== 'function' || typeof name !== 'string' || !declared.has(name)) {
       throw new TypeError(`Unknown or malformed typed tool call at index ${index}`);

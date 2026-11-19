@@ -23,6 +23,10 @@ test('typed tool args: reject malformed, missing, extra, wrong type and wrong fu
   }
   assert.throws(()=>parseTypedToolCalls(call(valid,'UNKNOWN'),tools),/Unknown/);
   assert.throws(()=>parseTypedToolCalls(call(valid),[...tools,...tools]),/unique/);
+  assert.throws(()=>parseTypedToolCalls({tool_calls:[{type:'function',
+    function:{name:'READ_TYPED',arguments:valid}}]},tools),/call id/);
+  const one=call(valid).tool_calls[0];
+  assert.throws(()=>parseTypedToolCalls({tool_calls:[one,{...one}]},tools),/duplicate typed tool call id/);
   assert.deepEqual(parseTypedToolCalls({content:'No tool'},tools),[]);
 });
 test('typed tool args: unsupported schemas fail closed',()=>{
