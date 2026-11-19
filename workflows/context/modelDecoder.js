@@ -31,7 +31,6 @@ export function validateKala(kala) {
 
 const defaultFilters = [
   { name: 'collapseGroupReplacer' },
-  { name: 'fileContentsLimiter', options: { filesLimit: 7, versionsPerFile: 2 } },
   { name: 'sizeLimiter' },
   { name: 'toolCallBackfill' }
 ];

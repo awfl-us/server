@@ -54,8 +54,8 @@ Scope and responsibilities
   - [ { name: "sizeLimiter", options: { maxTokens: 24000 } }, { name: "toolCallBackfill" } ]
   - Rationale: prune first, then normalize tool-call chains on the final window
 - TopicContext preset filter order
-  - [ { name: "collapseGroupReplacer" }, { name: "fileContentsLimiter", options: { filesLimit: 7, versionsPerFile: 2 } }, { name: "sizeLimiter", options: { maxTokens: 20000 } }, { name: "toolCallBackfill" } ]
-  - Rationale: collapse groups early to shrink the window before content/file pruning and token budgeting; always run toolCallBackfill last
+  - [ { name: "collapseGroupReplacer" }, { name: "sizeLimiter", options: { maxTokens: 20000 } }, { name: "toolCallBackfill" } ]
+  - Rationale: collapse groups early to shrink the window before token budgeting; always run toolCallBackfill last
 
 Key files
 - functions/jobs/context/topicContextYoj.js: assembles messages and applies the filter pipeline
@@ -98,6 +98,6 @@ Guidelines for this agent
 Maintenance notes
 - sizeLimiter default maxContentChars: 50,000
 - General default pipeline order: sizeLimiter first, then toolCallBackfill
-- TopicContext preset pipeline: collapseGroupReplacer -> fileContentsLimiter -> sizeLimiter -> toolCallBackfill
+- TopicContext preset pipeline: collapseGroupReplacer -> sizeLimiter -> toolCallBackfill
 - collapseGroupReplacer reads user-scoped paths when ctx.userId is provided; otherwise falls back to legacy non-user-scoped paths
 - toolCallBackfill normalizes ordering (assistant tool_call followed immediately by its tool responses), inserts synthetic replies when missing, and converts orphan tool messages to system role by default
