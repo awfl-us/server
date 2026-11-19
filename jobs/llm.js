@@ -14,6 +14,7 @@ import { incrementUsage } from './llm/usage.js';
 import { calculateOpenAiCost } from './llm/cost.js';
 import { llmFailureResponse } from './llm/transportError.js';
 import { MAX_TOKENS, resolveMaxTokens, checkModelContextWindow } from './llm/modelConfig.js';
+import { parseTypedToolCalls } from './llm/typedToolArguments.js';
 
 const router = express.Router();
 
@@ -152,7 +153,7 @@ router.post('/chat', async (req, res) => {
       return res.status(401).json({ error: 'Unauthorized: missing or invalid user' });
     }
 
-    const { messages, model = 'gpt-4', temperature = 0.7, max_tokens, max_completion_tokens, response_format, tools, tool_choice, sessionId, workflow_name } = req.body || {};
+    const { messages, model = 'gpt-4', temperature = 0.7, max_tokens, max_completion_tokens, response_format, tools, tool_choice, sessionId, workflow_name, validate_tool_arguments = false } = req.body || {};
 
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: 'Missing or invalid "messages" array in request body.' });
@@ -212,6 +213,18 @@ router.post('/chat', async (req, res) => {
     const { message, usage } = result || {};
     const total_cost = provider === 'openai' ? estimateCost(model, usage) : null;
 
+    // New typed-tool callers may explicitly opt in. Existing agent tool
+    // routing and response behavior remain unchanged. Do not return or log
+    // potentially sensitive raw model arguments on validation failure.
+    let typedToolError = null;
+    if (validate_tool_arguments === true) {
+      try {
+        parseTypedToolCalls(message, tools);
+      } catch (err) {
+        typedToolError = err instanceof Error ? err.message : 'Invalid tool arguments';
+      }
+    }
+
     // Best-effort usage aggregation (graceful no-op if missing context)
     try {
       const projectId = req.projectId; // from middleware/header
@@ -228,6 +241,14 @@ router.post('/chat', async (req, res) => {
       console.warn('[llm] incrementUsage failed (non-fatal):', e?.message || e);
     }
 
+    // Validation happens after inference, so the failed typed completion is
+    // still billed and saved in usage accounting before returning HTTP 422.
+    if (typedToolError) {
+      return res.status(422).json({
+        error: 'Typed tool arguments failed validation', reason: typedToolError,
+        total_cost
+      });
+    }
     res.status(200).json({ message, usage, total_cost });
   } catch (error) {
     // Do not log the provider error object wholesale: it can contain
