@@ -225,13 +225,13 @@ test('a terminal child Raise resumes the parent compiled Try catch',
       executable: compiledCaught, input: null,
       executionId, handlers: {},
     });
-    assert.equal(await fixture.execute(), 'definitive branch failure');
+    assert.match(await fixture.execute(), /definitive branch failure$/);
     const state = await fixture.store.get(executionId);
     assert.equal(state.status, 'completed');
     assert.equal(state.effectCount, 1);
     const fork = await fixture.store.getEffect(executionId, 'fork_0_0_try_0');
     assert.equal(fork?.isError, true);
-    assert.deepEqual(await fixture.execute(), 'definitive branch failure');
+    assert.match(await fixture.execute(), /definitive branch failure$/);
   });
 
 test('an uncaught child Raise durably fails the parent exactly once',

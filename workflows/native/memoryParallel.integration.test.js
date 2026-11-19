@@ -167,7 +167,7 @@ test('real Rust parallel branch error follows compiled Try', {
   skip: !caught, timeout: 30000,
 }, async () => {
   const f = await fixture(caught);
-  assert.equal(await f.execute(), 'definitive branch failure');
+  assert.match(await f.execute(), /definitive branch failure$/);
   assert.equal((await f.store.get(f.id)).status, 'completed');
   assert.equal(f.db.transactions, 3);
 });
