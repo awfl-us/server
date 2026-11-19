@@ -7,6 +7,11 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createServer} from 'node:http';
+import express from 'express';
+import {PostgresStorage} from '../storage/postgres/storage.js';
+import {createFirebaseDbRouter} from '../jobs/firebaseDbApi.js';
+import {workflowsUserInject} from '../jobs/userAuth.js';
+import {projectIdMiddleware} from '../workflows/projects/util.js';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import pg from 'pg';
@@ -185,4 +190,54 @@ test('crash after HTTP response: PostgreSQL restarts memory workflow; effect key
       }finally{await reopened.records.close();}
     }finally{if(child&&!child.killed)child.kill('SIGKILL');
       await http.close();await db.records.delete(id);await db.records.close();}
+});
+
+
+test('real scoped Jobs /firebase Express routes use isolated PostgreSQL, fence concurrent locks',
+  {skip:!enabled,timeout:45_000},async()=>{
+    const pool=new pg.Pool({connectionString:DB,max:8});
+    const storage=new PostgresStorage({pool});
+    await storage.initialize();
+    const app=express();
+    app.use(express.json());
+    app.use(workflowsUserInject);
+    app.use(projectIdMiddleware);
+    app.use('/firebase',createFirebaseDbRouter({getStorage:()=>storage}));
+    const server=app.listen(0,'127.0.0.1');await once(server,'listening');
+    const handlers=createLocalJobsHttpHandlers({identity:IDENTITY,jobsOrigin:JOBS_ORIGIN,
+      localJobsUrl:`http://127.0.0.1:${server.address().port}/`,seen:[],missing:[],failedRequests:[]});
+    const documentId='fixture-'+randomUUID();
+    const lockId='lock-'+randomUUID();
+    const collection='reconcile.fixtures';
+    const scope=`users/${IDENTITY.userId}/projects/${IDENTITY.projectId}/`;
+    let counter=0;
+    const call=(method,path,body)=>handlers[method]({identity:IDENTITY,
+      args:{url:JOBS_ORIGIN+path,auth:{type:'OIDC'},...(body&&{body})},
+      idempotencyKey:`native_${'0'.repeat(32)}:root:call_${++counter}`});
+    try {
+      const created=await call('http.post','/firebase/create',{
+        collection,id:documentId,contents:{role:'user',content:'fixture stored with production router'}});
+      assert.equal(created.code,200);
+      const read=await call('http.post','/firebase/read',{collection,id:documentId});
+      assert.equal(read.body.content,'fixture stored with production router');
+      assert.equal((await storage.get(scope+collection+'/'+documentId)).data.role,'user');
+      await assert.rejects(call('http.post','/firebase/create',{
+        collection,id:documentId,contents:{content:'duplicate'}}),/HTTP 409/);
+      const locks=await Promise.allSettled(['owner-a','owner-b'].map(owner=>
+        call('http.post','/firebase/locks/acquire',{collection:'reconcile.locks',
+          id:lockId,owner,ttlSeconds:60})));
+      assert.equal(locks.filter(x=>x.status==='fulfilled').length,1,
+        'real Jobs router must grant only one concurrent lock');
+      assert.equal(locks.filter(x=>x.status==='rejected').length,1);
+      const winner=locks[0].status==='fulfilled'?'owner-a':'owner-b';
+      const released=await call('http.post','/firebase/locks/release',{
+        collection:'reconcile.locks',id:lockId,owner:winner});
+      assert.equal(released.code,200);
+    }finally{
+      await storage.delete(scope+collection+'/'+documentId).catch(()=>{});
+      await storage.delete(scope+'reconcile.locks/'+lockId).catch(()=>{});
+      await new Promise((resolve,reject)=>server.close(e=>e?reject(e):resolve()));
+      await storage.close();
+      await pool.end();
+    }
 });
