@@ -77,3 +77,17 @@ Testing:
 
 Use AWFL_NATIVE_LOCAL_BUILD_REPORT to additionally validate all generated
 binary hashes in the runtime smoke test.
+
+## Reconciliation tests (optional test-only fixture API)
+
+The new `scripts/reconcileScenario.mjs` is invoked from `workflows/scripts/reconcile-test`. It extends the existing native local runner with *optional*, explicit `respondHttp`, `storageHandler`, `callbackFixtureHandlers`, and `drainDetached` parameters. These do **not** alter the production native worker or Jobs HTTP endpoints; they run only when the developer explicitly passes a fixture. A deterministic in-memory Jobs/LLM/GCS/callback setup runs the real compiled ProjectManager native ELF and verifies root message roles. The route responder fails on unknown requests, preserving the existing Jobs-origin/identity guards.
+
+For example, after building the workflows native closure, execute:
+
+```bash
+node scripts/reconcileScenario.mjs --report /path/to/build-report.json --scenario basic
+node scripts/reconcileScenario.mjs --report /path/to/build-report.json --scenario no-query
+node scripts/reconcileScenario.mjs --report /path/to/build-report.json --scenario basic --strict-background
+```
+
+The strict-background run is **expected to fail currently** on simulated topic/summarization detached native children; it is a non-green integration gate. The normal basic and no-query foreground tests pass; they should not be conflated with success of the complete background agent lifecycle. None of the fixture modes makes an OpenAI request or connects to production PostgreSQL. See the workflows testing guide for fidelity levels and outstanding work.
