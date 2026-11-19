@@ -78,14 +78,28 @@ No production deploy and no live provider call occurred here.
   PostgreSQL. Restarted worker returns the saved failure without reissuing
   the HTTP request. Memory-mode and HTTP suites pass 10/10.
 
-**Unresolved workflow-level issue:** `EventHandler` persists user input before
-acquiring its session lock. On a busy lock, `Locks.acquireBool` returns false
-and EventHandler skips completion. The existing single-run fixture always
-returns acquired, so it does not prove that a contended turn is eventually
-answered. Next gate: two concurrent Project Manager requests on a *shared*
-Postgres session while a tool callback is delayed, with exact message,
-charge, callback and terminal-state assertions. Avoid changing this contract
-without reproducing and verifying the full behavior.
+**Workflow-level contention bug reproduced and corrected (WF-02/WF-04):**
+Two compiled native Project Manager roots using PostgreSQL memory-mode
+execution and the actual Jobs session lock routes previously both returned
+`completed`, although only one assistant response existed for two saved
+user turns. The revised Scala `EventHandler` moves user/task persistence
+inside the acquired-lock branch, raises a 409 for busy requests, and
+propagates failure to the native execution status. The repeatable
+`scripts/reconcileMemoryConcurrency.test.mjs` verifies the first root
+completes, the second is explicitly `failed` with error code 409 without
+saving an orphaned user message, and retrying the rejected turn after the
+lock releases completes once. Final messages are
+`user, assistant, user, assistant` and exactly two foreground model calls.
+It uses the **actual compiled Rust Project Manager**, PostgreSQL native
+memory roots and the real Jobs Express lock routes; it does not deploy
+the workflow or invoke a live LLM. The rebuilt closure passed 26/26 native
+binaries, and three existing strict-background scenarios and typed Ista
+native integration passed after the fix.
+
+**Still open:** delay a real tool callback while concurrent session turns
+arrive and verify tool result sequencing, terminal status and billing.
+The caller/UI must resubmit a rejected 409; automatic queuing is not
+part of this change, and long-lived lock renewal is not yet verified.
 
 **Scope of 422 check:** the compiled memory-mode fixture exercised a native
 HTTP effect, not the entire EventHandler `/llm/chat` request. A legacy
