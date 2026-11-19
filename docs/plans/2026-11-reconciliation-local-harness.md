@@ -42,3 +42,16 @@ closed for unknown routes and background response schemas.
 
 These are local native/in-memory fixtures. Persistent Postgres, real Jobs HTTP,
 crash recovery and live OpenAI/prompt-cache comparison remain untested.
+
+## Phase 0 real PostgreSQL / process-restart follow-up — 2026-11-19
+
+- `scripts/compose.reconcile-postgres.yml`: optional localhost-only PostgreSQL 17 for reproducible local tests, fixed dev-only database `awfl_reconcile` and password, named volume. In the Scala GKE consumer, a user-owned local PostgreSQL 17.12 was started from Debian packages (Docker unavailable). No Cloud SQL or live Firebase credentials were used.
+- `scripts/reconcilePostgresNative.test.mjs`: three tests execute the **real compiled** `helpers-ToolDefs` native ELF with `NativeMemoryExecutionPilotStore` and `PostgresAtomicRecords`, exercise actual localhost HTTP requests through `createLocalJobsHttpHandlers`, SQL persisted completion/replay, subprocess SIGKILL/expired lease fencing, and a crash after HTTP return but before terminal state commit. Effect idempotency key is preserved across retry; test endpoint deduplication is required for a single logical effect. `scripts/reconcilePg{Claim,Effect}Child.mjs` are test-only subprocess programs.
+- Existing PostgreSQL document/event/atomic integration tests: 11 passed. **Combined native + SQL: 14/14 pass**. Requires `PGTEST_URL` for local `/awfl_reconcile`, refuses external hosts. The workflows `reconcile-test postgres` command wires the native report automatically.
+- Separate `reconcile-test durable` executes 23 native journal tests (22 passed, 1 skipped unrelated binary) with a compiled `helpers-ToolDefs` binary, in an in-memory Firestore-compatible adapter; this is **not** evidence that the PostgreSQL memory-store has a durable per-effect journal.
+
+Remaining: full authenticated local Jobs Express service with isolated PG-backed document Storage, repeated ProjectManager turns, cross-session scheduling, and a real durable journal crash/restart test using persistent storage. No production flags, GKE RBAC, or database cutovers were changed.
+
+### Combined gate result
+
+`reconcile-test all --strict-background` with isolated `PGTEST_URL` and the compiled 26-workflow report returned exit 0. Cold Rust build is relatively expensive (~262 s); subsequent unchanged rebuild compiled/verified in 7.6 s. Native replay fixtures and all storage recovery tests passed. The workflows launcher rejects non-loopback PostgreSQL URLs and wrong database names before any SQL test invocation. Remaining work is running a real Jobs Express app against local Postgres and durable-journal crash/restart in a persistent backing store.
