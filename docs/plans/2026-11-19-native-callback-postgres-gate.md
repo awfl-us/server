@@ -1,5 +1,7 @@
 # Native callbacks: real Jobs HTTP + isolated PostgreSQL gate
 
+> **Active priority: PostgreSQL memory-mode execution for latency.** Legacy durable per-effect Firestore journaling is intentionally deferred. It is not a release gate for the current `wip-old` work.
+
 2026-11-19, wip-old reconciliation, test-only.
 
 ## Confirmed
@@ -52,9 +54,9 @@ also removes an unnecessary GCP permission dependency from native misses.
 
 ## Remaining acceptance work
 
-- Native durable effect-journal persistence across actual process crash
-  (different from memory-mode restart), with no repeated externally
-  committed side effects.
+- PostgreSQL memory-mode recovery and stable effect idempotency across actual
+  process crash; do not claim per-effect journaling. The legacy durable
+  journal migration is deferred and not an acceptance gate.
 - Session lock behavior with concurrent tool callbacks/LLM continuation,
   including slow/failing tools.
 - Native EventHandler HTTP 422 propagation for rejected typed tool arguments.

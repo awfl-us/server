@@ -1,5 +1,8 @@
 # Native Rust workflow execution (experimental, opt-in)
 
+
+> **CURRENT EXECUTION POLICY (2026-11-19): MEMORY MODE FIRST.** For latency reasons, new native Rust workflows and current `wip-old` reconciliation use **memory-mode execution with PostgreSQL-backed execution records**. **Durable mode (the legacy Firestore-specific per-effect journal) is on the back burner.** It is maintained for compatibility, but migrating it to PostgreSQL, implementing additional durable journal tests, or making it an acceptance gate is **out of scope unless explicitly reprioritized**. Memory-mode testing must cover stable external-effect idempotency, callback persistence, Postgres lease fencing, and crash/restart replay; do not describe memory mode as having durable per-effect exactly-once journals.
+
 **Storage selection update — November 14, 2026:** AWFL selected **PostgreSQL 15 on Cloud SQL `db-f1-micro`** for native execution state after [1,800 successful managed-service benchmark cycles](../../docs/storage-pilot-managed-three-backend-benchmark-2026-11-14.md). Sequential guarded completion p50: PostgreSQL **5.20 ms**, Firestore **45.06 ms**, RTDB **40.49 ms**. The high-concurrency PostgreSQL p99 outlier is accepted at current scale; no dedicated-core upgrade is planned. **Production still uses Firestore; the native memory-mode PostgreSQL implementation is complete on a feature branch but is not the deployed provider. The legacy durable native store remains Firestore-specific.** [Next steps: PostgreSQL storage integration](../../docs/postgres-storage-migration-plan.md). Historical Firestore references below describe the earlier implementation.
 
 
