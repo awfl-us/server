@@ -12,7 +12,8 @@ const enabled=Boolean(url);
 if(enabled){
   const parsed=new URL(url);
   if(!['127.0.0.1','localhost','[::1]'].includes(parsed.hostname) ||
-    parsed.pathname!=='/awfl_reconcile') throw new Error('Refusing non-isolated PostgreSQL URL');
+    !['/awfl_reconcile','/benchmark_ci'].includes(parsed.pathname))
+    throw new Error('Refusing non-isolated PostgreSQL URL');
 }
 
 test('session lock remains exclusive across concurrent requests and tool continuation',

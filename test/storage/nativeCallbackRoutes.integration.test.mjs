@@ -11,9 +11,9 @@ const enabled=Boolean(process.env.PGTEST_URL);
 if (enabled) {
   const url=new URL(process.env.PGTEST_URL);
   if (!['127.0.0.1','localhost','[::1]'].includes(url.hostname) ||
-      url.pathname!=='/awfl_reconcile' ||
+      !['/awfl_reconcile','/benchmark_ci'].includes(url.pathname) ||
       !['postgres:','postgresql:'].includes(url.protocol)) {
-    throw new Error('Refusing callback test outside loopback /awfl_reconcile');
+    throw new Error('Refusing callback test outside isolated loopback databases');
   }
 }
 const origin='https://jobs.example.org';
