@@ -70,7 +70,11 @@ router.post('/:id', async (req, res) => {
     snap ||= await store.get(docPath);
     // The MCP workspace/request control plane intentionally stays in
     // Firestore even when Jobs callback documents use PostgreSQL.
-    if (!snap && selectedStorageBackend() === 'postgres') {
+    // Native callback IDs are only registered in the selected native store.
+    // A missing native ID must not trigger a legacy MCP Firestore read (or
+    // produce an unrelated permission error instead of a clean 404).
+    if (!snap && selectedStorageBackend() === 'postgres' &&
+        !/^n[a-f0-9]{32}$/.test(id)) {
       const legacy = await getFirestore().doc(docPath).get();
       if (legacy.exists && legacy.data()?.kind === 'mcp_request') {
         snap = { data: legacy.data() };
