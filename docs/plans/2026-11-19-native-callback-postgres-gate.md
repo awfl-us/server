@@ -62,3 +62,33 @@ also removes an unnecessary GCP permission dependency from native misses.
 - Native EventHandler HTTP 422 propagation for rejected typed tool arguments.
 - Provider canary and code merge/release after all applicable gates.
 No production deploy and no live provider call occurred here.
+
+## Session lock / memory-mode HTTP error checkpoint (2026-11-19)
+
+- Real Jobs PostgreSQL lock routes: 12 simultaneous acquisitions yielded one
+  winner; another session could acquire independently; stale owner releases
+  did not unlock; expired owner takeover and lease TTL were checked.
+  `test/storage/sessionLocksPostgres.integration.test.mjs` passes alongside
+  the existing Jobs storage parity test (2/2).
+- Lock fixes: report `released:false` for non-owner releases; validate TTL
+  ranges; on expiry assign the new owner's requested TTL rather than reusing
+  the expired owner's TTL.
+- Confirmed HTTP 422 is classified by native HTTP handlers and persisted as
+  a terminal error by a real compiled memory-mode Rust workflow backed by
+  PostgreSQL. Restarted worker returns the saved failure without reissuing
+  the HTTP request. Memory-mode and HTTP suites pass 10/10.
+
+**Unresolved workflow-level issue:** `EventHandler` persists user input before
+acquiring its session lock. On a busy lock, `Locks.acquireBool` returns false
+and EventHandler skips completion. The existing single-run fixture always
+returns acquired, so it does not prove that a contended turn is eventually
+answered. Next gate: two concurrent Project Manager requests on a *shared*
+Postgres session while a tool callback is delayed, with exact message,
+charge, callback and terminal-state assertions. Avoid changing this contract
+without reproducing and verifying the full behavior.
+
+**Scope of 422 check:** the compiled memory-mode fixture exercised a native
+HTTP effect, not the entire EventHandler `/llm/chat` request. A legacy
+replay harness remained in `waiting_effect` when its synthetic 422 was
+thrown as a generic unconfirmed Error. Test actual Jobs-route validation
+and native EventHandler terminal state together before closing that gate.

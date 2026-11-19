@@ -96,15 +96,21 @@ export function createFirebaseDbRouter({ getStorage = getDocumentStorage } = {})
   router.post('/locks/acquire', async (req, res) => {
     const { collection, id, ttlSeconds = 300, owner } = req.body || {};
     if (!collection || !id || !owner) return res.status(400).json({ error: 'Missing required fields: collection, id, or owner' });
+    if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds < 1 || ttlSeconds > 3600) {
+      return res.status(400).json({ error: 'ttlSeconds must be an integer from 1 to 3600' });
+    }
     try {
       const store = await storage(), path = docId(scope(req, collection), id);
       const now = Math.floor(Date.now() / 1000);
       const result = await store.transaction(async tx => {
         const doc = await tx.get(path), prior = doc?.data || {};
         const created = seconds(prior.created);
-        const ttl = typeof prior.ttlSeconds === 'number' ? prior.ttlSeconds : Number(ttlSeconds) || 300;
-        if (!doc || created + ttl <= now) {
-          const value = { created: now, owner: String(owner), ttlSeconds: ttl };
+        const previousTtl = Number.isSafeInteger(prior.ttlSeconds) && prior.ttlSeconds > 0
+          ? prior.ttlSeconds : ttlSeconds;
+        if (!doc || created + previousTtl <= now) {
+          // A new owner supplies a new lease duration; never inherit the
+          // duration of the previous, expired owner.
+          const value = { created: now, owner: String(owner), ttlSeconds };
           if (doc) await tx.put(path, value); else await tx.create(path, value);
           return { acquired: true, owner, created: now };
         }
@@ -122,11 +128,13 @@ export function createFirebaseDbRouter({ getStorage = getDocumentStorage } = {})
     if (!collection || !id || !owner) return res.status(400).json({ error: 'Missing required fields: collection, id, or owner' });
     try {
       const store = await storage(), path = docId(scope(req, collection), id);
-      await store.transaction(async tx => {
+      const released = await store.transaction(async tx => {
         const doc = await tx.get(path);
-        if (doc?.data?.owner === owner) await tx.delete(path);
+        if (doc?.data?.owner !== String(owner)) return false;
+        await tx.delete(path);
+        return true;
       });
-      return res.status(200).json({ released: true });
+      return res.status(200).json({ released });
     } catch (error) {
       console.error('Error releasing lock:', error);
       return res.status(500).json({ error: 'Failed to release lock: ' + error.message });

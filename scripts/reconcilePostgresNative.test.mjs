@@ -18,6 +18,7 @@ import pg from 'pg';
 import {PostgresAtomicRecords} from '../storage/pilot/adapters/postgres.js';
 import {NativeMemoryExecutionPilotStore} from '../storage/pilot/memoryExecutionState.js';
 import {runNativeMemoryWorkflow} from '../workflows/native/memoryWorker.js';
+import {NativeConfirmedHttpFailure} from '../workflows/native/effectErrors.js';
 import {localReleases,createLocalJobsHttpHandlers} from './nativeLocalDev.mjs';
 
 const DB=process.env.PGTEST_URL;
@@ -104,6 +105,31 @@ test('native Rust workflow persists PostgreSQL result and replays without duplic
       assert.deepEqual(http.failedRequests,[]);
     }finally{await http.close();await db.records.delete(id);await db.records.close();}
 });
+
+test('native PostgreSQL memory mode persists confirmed HTTP 422 as a terminal failure',
+  {skip:!enabled,timeout:45_000},async()=>{
+    const releases=await localReleases(REPORT),id=executionId();
+    const db=await makeStore();let calls=0;
+    try{
+      await createExecution(db.store,releases,id);
+      const handlers={'http.get':async()=>{
+        calls++;throw new NativeConfirmedHttpFailure(422);
+      }};
+      const result=await runNativeMemoryWorkflow({store:db.store,releases,
+        handlers,executionId:id,...IDENTITY});
+      assert.equal(result.status,'failed');
+      assert.equal((await db.store.get(id)).status,'failed');
+      assert.equal(calls,1);
+      const restarted=await makeStore();
+      try{
+        const replay=await runNativeMemoryWorkflow({store:restarted.store,releases,
+          handlers:{'http.get':()=>{throw Error('must not repeat failed request');}},
+          executionId:id,...IDENTITY});
+        assert.deepEqual(replay,result,'terminal failure survives process replacement');
+        assert.equal(calls,1);
+      }finally{await restarted.records.close();}
+    }finally{await db.records.delete(id);await db.records.close();}
+  });
 
 test('SIGKILL of leased worker: new PostgreSQL connection recovers; old epoch fenced',
   {skip:!enabled,timeout:50_000},async()=>{

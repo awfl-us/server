@@ -135,6 +135,9 @@ test('redirects, HTTP errors, bad server credentials and oversized outcomes fail
   status = 403;
   await assert.rejects(handlers['http.post'](request(args)),
     error => error instanceof NativeConfirmedHttpFailure && error.status === 403);
+  status = 422;
+  await assert.rejects(handlers['http.post'](request(args)),
+    error => error instanceof NativeConfirmedHttpFailure && error.status === 422);
   status = 200;
   responseBody = { bulk: 'x'.repeat(140_000) };
   await assert.rejects(handlers['http.post'](request(args)), /response body too large/);
