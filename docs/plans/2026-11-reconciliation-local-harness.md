@@ -17,7 +17,7 @@
 ## Next implementation gates
 
 1. Verify `segmentsForSession` and nested `StriderInput` shapes against current real Jobs endpoints and native child input; make strict background mode pass with no false positives. Add targeted async scheduler tests ensuring it is drained in assertions.
-2. Add deterministic fake `READ_FILE` tool return with correct tool-call ID and callback, and exercise the **full** tool-call/continuation roundtrip; failure paths for missing callbacks, malformed tool outputs, and native recovery.
+2. **Completed standard READ_FILE roundtrip.** Extend with missing/delayed callbacks, malformed tool outputs, incorrect tool-call IDs, budget exhaustion and native crash/recovery assertions.
 3. Stand up an isolated Postgres DB and local Jobs on localhost:5055 with test-only user/project and LLM responses; validate actual Postgres persistence/locking and retry using existing storage tests. Never widen GCP IAM to get local tests to pass.
 4. After local checks, compare one isolated canary to production-shaped behavior; measure response, usage, context capture, cache and error telemetry. No Google Workflows.
 

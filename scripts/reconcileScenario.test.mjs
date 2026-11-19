@@ -45,3 +45,25 @@ test('recorded and dynamic fixture handlers are isolated from production service
   assert.deepEqual(invoke(f,'/agents/default/tools',{},'GET').body.tools,[]);
   assert.deepEqual(invoke(f,'/firebase/segmentsForSession',{windowSeconds:1200}).body.segments.length,1);
 });
+
+
+test('tool roundtrip registers a semantic READ_FILE tool and correlates callback IDs',async()=>{
+  const f=makeReconciliationFixture({scenario:'tool-roundtrip'});
+  assert.deepEqual(invoke(f,'/agents/default/tools',{},'GET').body.tools,['READ_FILE']);
+  assert.equal(invoke(f,'/tools/list',{},'GET').body.items[0].function.name,'READ_FILE');
+  const call=f.callbackCreate();
+  const created=await call;
+  const callbackId=new URL(created.url).pathname.split('/').at(-1);
+  assert.equal(invoke(f,'/callbacks',{callback_url:created.url}).body.id,callbackId);
+  invoke(f,'/events',{data:{callback_id:callbackId,tool_call:{function:{name:'READ_FILE'}}}});
+  const result=await f.callbackAwait({args:{callback:created}});
+  assert.equal(result.http_request.body.content,'{"debug":true}');
+  assert.equal(result.http_request.body.filepath,'/tmp/reconcile-config.json');
+  assert.equal(invoke(f,'/llm/chat',{messages:[]}).body.message.tool_calls[0].id,'read-fixture-1');
+  assert.equal(invoke(f,'/llm/chat',{messages:[]}).body.message.role,'assistant');
+});
+
+test('unknown callback identity is rejected rather than generating a fake tool result',async()=>{
+  const f=makeReconciliationFixture({scenario:'tool-roundtrip'});
+  await assert.rejects(f.callbackAwait({args:{callback:{url:'https://jobs-4wmfqir74q-uc.a.run.app/callbacks/unknown'}}}),/No tool registered/);
+});

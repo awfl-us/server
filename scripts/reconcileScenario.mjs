@@ -11,7 +11,7 @@ import { resolve } from 'node:path';
 import { runLocalProjectManager } from './nativeLocalDev.mjs';
 import { createNativeStorageEffectHandler } from '../workflows/native/storageEffects.js';
 
-export const scenarios = Object.freeze(['basic', 'no-query']);
+export const scenarios = Object.freeze(['basic', 'no-query', 'tool-roundtrip']);
 
 export function makeReconciliationFixture({ scenario = 'basic', query = 'Read the config.', sessionId = 'reconcile-session' } = {}) {
   if (!scenarios.includes(scenario)) throw new Error('Unknown reconciliation scenario: ' + scenario);
@@ -21,7 +21,25 @@ export function makeReconciliationFixture({ scenario = 'basic', query = 'Read th
     {create_time:Date.now()/1000-60,value:{role:'user',content:'Previous user turn'}});
   const requests = [];
   const modelRequests = [];
-  const llmReplies = [{role:'assistant',content:'The configuration enables debug logging.'}];
+  const callbackTools = new Map();
+  let callbackSequence = 0;
+  const llmReplies = scenario === 'tool-roundtrip'
+    ? [{role:'assistant',content:'',tool_calls:[{type:'function',id:'read-fixture-1',
+        function:{name:'READ_FILE',arguments:JSON.stringify({filepath:'/tmp/reconcile-config.json'})}}]},
+      {role:'assistant',content:'The configuration enables debug logging.'}]
+    : [{role:'assistant',content:'The configuration enables debug logging.'}];
+  const toolDef={type:'function',function:{name:'READ_FILE',description:'Read a file',
+    parameters:{type:'object',properties:{filepath:{type:'string'}},required:['filepath']}},
+    workflowName:'tools-CliTools'};
+  const callbackCreate=async()=>({url:`https://jobs-4wmfqir74q-uc.a.run.app/callbacks/test-${++callbackSequence}`});
+  const callbackAwait=async({args})=>{
+    const id=new URL(args.callback.url).pathname.split('/').at(-1);
+    const tool=callbackTools.get(id);
+    if(!tool) throw new Error(`No tool registered for callback ${id}`);
+    return {http_request:{body:tool==='READ_FILE'
+      ? {content:'{"debug":true}',filepath:'/tmp/reconcile-config.json'}
+      : {output:'fixture script completed',exitCode:0,error:''}}};
+  };
   const key = body => `${body.collection}/${body.id}`;
   const messages = () => [...docs.entries()]
     .filter(([id]) => id.includes('messages/'))
@@ -70,18 +88,23 @@ export function makeReconciliationFixture({ scenario = 'basic', query = 'Read th
           total_cost:0,usage:{completion_tokens:10,completion_tokens_details:{accepted_prediction_tokens:0,audio_tokens:0,reasoning_tokens:0,rejected_prediction_tokens:0},prompt_tokens:20,prompt_tokens_details:{audio_tokens:0,cached_tokens:0},total_tokens:30}});
       }
       case 'GET /agents/session/reconcile-session': return ok({sessionId,agentId:'default'});
-      case 'GET /agents/default/tools': return ok({tools:[]});
-      case 'GET /tools/list': case 'GET /jobs/tools/list': return ok({items:[]});
+      case 'GET /agents/default/tools': return ok({tools:scenario === 'tool-roundtrip' ? ['READ_FILE'] : []});
+      case 'GET /tools/list': case 'GET /jobs/tools/list': return ok({items:scenario === 'tool-roundtrip' ? [toolDef] : []});
       case 'GET /jobs/tasks/by-session/reconcile-session': return ok({tasks:[]});
       case 'POST /workflows/exec/status/update': return ok({});
-      case 'POST /callbacks': return ok({id:'fixture-callback'});
+      case 'POST /callbacks': return ok({id:String(body.callback_url||'').split('/').at(-1)});
       case 'POST /producer/start': return ok(true);
       case 'POST /workflows/events': return ok({ok:true});
-      case 'POST /events': case 'POST /events/response': return ok({ok:true});
+      case 'POST /events': case 'POST /events/response': {
+        if(body.data?.callback_id && body.data?.tool_call?.function?.name)
+          callbackTools.set(body.data.callback_id,body.data.tool_call.function.name);
+        return ok({ok:true});
+      }
       default: throw new Error(`Unmocked AWFL endpoint ${method} ${path} (${effectId})`);
     }
   };
-  return {docs,requests,modelRequests,respond,messages,sessionId,scenario,query};
+  return {docs,requests,modelRequests,callbackTools,callbackCreate,callbackAwait,
+    respond,messages,sessionId,scenario,query};
 }
 
 export async function runReconciliationScenario({reportPath,scenario='basic', log=()=>{},
@@ -105,8 +128,8 @@ export async function runReconciliationScenario({reportPath,scenario='basic', lo
     }})
   }});
   const callbackFixtureHandlers={
-    'callback.create': async () => ({url:'https://jobs-4wmfqir74q-uc.a.run.app/callbacks/fixture-callback'}),
-    'callback.await': async () => ({http_request:{body:{output:'fixture script completed',exitCode:0,error:''}}}),
+    'callback.create':fixture.callbackCreate,
+    'callback.await':fixture.callbackAwait,
   };
   const native=await runLocalProjectManager({reportPath:resolve(reportPath),
     input,identity:{userId:'reconcile-user',projectId:'reconcile-project'},
@@ -125,11 +148,33 @@ function assertBaseline(result) {
     'detached/native child execution failed');
   assert.deepEqual(result.native.missing,[],'unhandled native HTTP calls');
   const roles=result.messages.map(x=>x.value?.role||x.role).filter(Boolean);
-  if(result.scenario==='basic') assert.equal(roles.filter(x=>x==='user').length,1,'duplicate user insert');
+  if(result.scenario!=='no-query') assert.equal(roles.filter(x=>x==='user').length,1,'duplicate user insert');
   else assert.equal(roles.filter(x=>x==='user').length,1,
     'nil query duplicated or dropped previously persisted user turn');
-  assert.equal(roles.filter(x=>x==='assistant').length,1,'exactly one assistant response');
-  assert.equal(result.modelRequests.length,1,'exactly one mock LLM request');
+  const isTool=result.scenario==='tool-roundtrip';
+  assert.equal(roles.filter(x=>x==='assistant').length,isTool?2:1,
+    'incorrect number of assistant messages');
+  if(isTool) {
+    assert.equal(roles.filter(x=>x==='tool').length,1,'missing or duplicate tool result');
+    const stored=result.messages.map(x=>x.value||x);
+    const called=stored.find(x=>x.tool_calls?.length)?.tool_calls?.[0];
+    const tool=stored.find(x=>x.role==='tool');
+    assert.equal(called?.id,'read-fixture-1','tool invocation id mismatch');
+    assert.equal(tool?.tool_call_id,'read-fixture-1','tool response id mismatch');
+    assert.deepEqual(JSON.parse(tool?.content||'{}'),{
+      content:'{"debug":true}',filepath:'/tmp/reconcile-config.json'});
+    const next=result.modelRequests[1]?.messages||[];
+    const callIdx=next.findIndex(x=>x.role==='assistant'&&x.tool_calls?.some(y=>y.id==='read-fixture-1'));
+    const resultIdx=next.findIndex(x=>x.role==='tool'&&x.tool_call_id==='read-fixture-1');
+    assert.ok(callIdx>=0 && resultIdx>callIdx,
+      'LLM continuation missing ordered assistant-call/tool-result pair');
+    assert.equal(next[resultIdx].content,tool.content,
+      'LLM continuation tool content differs from persisted result');
+    assert.equal(next.filter(x=>x.role==='user').length,1,
+      'LLM continuation injected an unexpected user message');
+  }
+  assert.equal(result.modelRequests.length,isTool?2:1,
+    'incorrect mock LLM request count');
   return {scenario:result.scenario,status:result.native.status,
     effects:result.native.effectCount,modelCalls:result.modelRequests.length,
     messages:roles,elapsedMs:result.native.durationMs,

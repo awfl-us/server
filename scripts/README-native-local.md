@@ -87,7 +87,8 @@ For example, after building the workflows native closure, execute:
 ```bash
 node scripts/reconcileScenario.mjs --report /path/to/build-report.json --scenario basic
 node scripts/reconcileScenario.mjs --report /path/to/build-report.json --scenario no-query
+node scripts/reconcileScenario.mjs --report /path/to/build-report.json --scenario tool-roundtrip
 node scripts/reconcileScenario.mjs --report /path/to/build-report.json --scenario basic --strict-background
 ```
 
-The strict-background run is **expected to fail currently** on simulated topic/summarization detached native children; it is a non-green integration gate. The normal basic and no-query foreground tests pass; they should not be conflated with success of the complete background agent lifecycle. None of the fixture modes makes an OpenAI request or connects to production PostgreSQL. See the workflows testing guide for fidelity levels and outstanding work.
+The strict-background run is **expected to fail currently** on simulated topic/summarization detached native children; it is a non-green integration gate. The normal basic, no-query and native READ_FILE tool-roundtrip foreground tests pass; they should not be conflated with success of the complete background agent lifecycle. None of the fixture modes makes an OpenAI request or connects to production PostgreSQL. See the workflows testing guide for fidelity levels and outstanding work.
