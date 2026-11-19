@@ -161,12 +161,11 @@ Currently supported:
   - components: topicInfos, summaries, messages (all Yoj reads with framing)
   - filters (default order):
     1. `collapseGroupReplacer`
-    2. `fileContentsLimiter` with `{ filesLimit: 7, versionsPerFile: 2 }`
-    3. `sizeLimiter` with the shared LLM model's context-message budget
+    2. `sizeLimiter` with the shared LLM model's context-message budget
        (`100000` for `gpt-6.1-terra`, `17000` without a configured model),
        capped separately from the model's total context window.
        `maxContentChars: 50000` remains the default.
-    4. `toolCallBackfill`
+    3. `toolCallBackfill`
 
 If no `model` or `presetId` is provided, the decoder defaults to an empty component list and applies the default filters `[ sizeLimiter(24000), toolCallBackfill ]`.
 
@@ -221,7 +220,7 @@ Available filters:
     - `stripOrphanToolId` (boolean, default: true) — remove tool_call_id from orphaned messages
 
 Composition tips:
-- In TopicContext preset, order is: `collapseGroupReplacer` -> `fileContentsLimiter` -> `sizeLimiter` -> `toolCallBackfill`.
+- In TopicContext preset, order is: `collapseGroupReplacer` -> `sizeLimiter` -> `toolCallBackfill`.
 - In general, run pruning/size filters (e.g., `sizeLimiter`) BEFORE `toolCallBackfill` so orphan detection, ordering, and backfills are accurate on the final window.
 - If you include `fileContentsLimiter`, consider placing it before `sizeLimiter` to shrink oversized file payloads prior to token budgeting.
 
@@ -237,8 +236,9 @@ context window sizes and per-model history budgets. The history budget does
 `/llm/chat` also performs a conservative full-request preflight for models
 with a configured context window, taking into account tools, messages and the
 reserved output. The provider remains authoritative on actual token counts.
-The default 50000-character per-message truncation and `fileContentsLimiter`
-still apply separately and can affect prompt-cache reuse.
+The default 50000-character per-message truncation remains active and can affect
+prompt-cache reuse. `fileContentsLimiter` is **disabled by default** to preserve
+cached history; callers may explicitly opt into it when context pressure demands it.
 - Unknown filters are skipped with a warning.
 
 ## Upstream promotion
@@ -270,7 +270,6 @@ POST /context/topicContextYoj/run
       { "kind": "yoj", "name": "messages", "framing": "Summary of older conversation messages:\r" }
     ],
     "filters": [
-      { "name": "fileContentsLimiter", "options": { "filesLimit": 7, "versionsPerFile": 2 } },
       { "name": "sizeLimiter", "options": { "maxTokens": 20000 } },
       { "name": "toolCallBackfill" }
     ]
@@ -303,7 +302,6 @@ POST /context/topicContextYoj/run
   "model": {
     "components": [ { "kind": "yoj", "name": "messages" } ],
     "filters": [
-      { "name": "fileContentsLimiter", "options": { "filesLimit": 7, "versionsPerFile": 2 } },
       { "name": "sizeLimiter", "options": { "maxTokens": 22000 } },
       "toolCallBackfill"
     ]
