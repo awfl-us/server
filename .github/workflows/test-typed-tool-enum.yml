@@ -1,0 +1,22 @@
+name: Typed tool schema interoperability
+on:
+  pull_request:
+    paths:
+      - 'workflows/tools/index.js'
+      - 'workflows/tools/normalizeParameters.test.js'
+      - 'jobs/llm/typedToolArguments.js'
+      - 'jobs/llm/typedToolArguments.test.js'
+      - '.github/workflows/test-typed-tool-enum.yml'
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - run: node --test jobs/llm/typedToolArguments.test.js workflows/tools/normalizeParameters.test.js

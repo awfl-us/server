@@ -132,7 +132,7 @@ function parseNamesFilter(q) {
   return new Set(out.map(String).map(s => s.trim()).filter(Boolean));
 }
 
-function normalizeParameters(params) {
+export function normalizeParameters(params) {
   // Coerce to { type: 'object', properties: {...}, required: [] }
   const out = { type: 'object', properties: {}, required: [] };
   if (!params || typeof params !== 'object') return out;
@@ -141,12 +141,16 @@ function normalizeParameters(params) {
   out.properties = {};
   for (const [k, v] of Object.entries(props || {})) {
     if (!v || typeof v !== 'object') {
-      out.properties[k] = { type: String(v || 'string'), enum: [] };
+      out.properties[k] = { type: String(v || 'string') };
       continue;
     }
     const t = typeof v.type === 'string' ? v.type : 'string';
-    const e = Array.isArray(v.enum) ? v.enum : [];
-    out.properties[k] = { type: t, enum: e };
+    // Absence of a constraint is NOT an empty enum. The previous always-on
+    // `enum: []` made ordinary tool arguments fail typed validation.
+    out.properties[k] = {
+      type: t,
+      ...(Array.isArray(v.enum) && v.enum.length > 0 ? { enum: v.enum } : {})
+    };
   }
 
   out.required = Array.isArray(params.required) ? params.required.filter(Boolean) : [];

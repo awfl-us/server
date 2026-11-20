@@ -3,7 +3,7 @@
  * Supports precisely the subset emitted by workflow-utils JsonSchema; any
  * unrecognized schema keyword fails closed rather than weakening validation.
  */
-const allowed = new Set(['type', 'title', 'properties', 'required', 'items', 'oneOf', 'additionalProperties']);
+const allowed = new Set(['type', 'title', 'properties', 'required', 'items', 'oneOf', 'additionalProperties', 'enum']);
 const own = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
 const plainObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -30,6 +30,14 @@ export function validateSchema(schema, value, path = '$') {
     type === 'number' ? typeof value === 'number' && Number.isFinite(value) :
     type === 'null' ? value === null : typeof value === type;
   if (!correct) return [`${path}: expected ${type}`];
+  if (own(schema, 'enum')) {
+    if (!Array.isArray(schema.enum) || schema.enum.length === 0) {
+      throw new TypeError(`Invalid enum schema at ${path}`);
+    }
+    if (!schema.enum.some(option => JSON.stringify(option) === JSON.stringify(value))) {
+      return [`${path}: value is not an allowed enum member`];
+    }
+  }
   if (type === 'array') {
     if (!own(schema,'items')) throw new TypeError(`Array schema missing items at ${path}`);
     return value.flatMap((item,index) => validateSchema(schema.items,item,`${path}[${index}]`));

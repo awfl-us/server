@@ -36,3 +36,19 @@ test('typed tool args: unsupported schemas fail closed',()=>{
   assert.deepEqual(validateSchema({oneOf:[{type:'string'},{type:'string'}]},'a'),
     ['$: expected exactly one matching variant (got 2)']);
 });
+test('typed tool arguments accept real enum constraints and reject invalid values',()=>{
+  const toolsWithEnum = [{type:'function',function:{name:'READ_FILE',parameters:{
+    type:'object',required:['filepath'],properties:{
+      filepath:{type:'string'},encoding:{type:'string',enum:['utf-8','base64']}
+    }
+  }}}];
+  const message = args => ({tool_calls:[{id:'call-read',type:'function',
+    function:{name:'READ_FILE',arguments:JSON.stringify(args)}}]});
+  assert.deepEqual(parseTypedToolCalls(message({filepath:'README.md'}),toolsWithEnum)[0].arguments,
+    {filepath:'README.md'});
+  assert.deepEqual(parseTypedToolCalls(message({filepath:'README.md',encoding:'utf-8'}),toolsWithEnum)[0].arguments,
+    {filepath:'README.md',encoding:'utf-8'});
+  assert.throws(()=>parseTypedToolCalls(message({filepath:'README.md',encoding:'invalid'}),toolsWithEnum),
+    /allowed enum member/);
+  assert.throws(()=>validateSchema({type:'string',enum:[]},'utf-8'),/Invalid enum schema/);
+});
