@@ -18,6 +18,7 @@ import {runNativeMemoryWorkflow,nativeMemoryAsyncSchedulerFor} from '../workflow
 import {localReleases,createReplayHttpHandlers} from './nativeLocalDev.mjs';
 import {makeReconciliationFixture} from './reconcileScenario.mjs';
 import {createNativeStorageEffectHandler} from '../workflows/native/storageEffects.js';
+import {createNativeLogEffectHandler} from '../workflows/native/logEffects.js';
 import {createFirebaseDbRouter} from '../jobs/firebaseDbApi.js';
 import {createLlmRouter} from '../jobs/llm.js';
 import realOpenaiAdapter from '../jobs/providers/openai.js';
@@ -41,8 +42,9 @@ if(LIVE&&!KEY)throw Error('Live mode requires AWFL_STRIDER_OPENAI_API_KEY or OPE
 if(!['live',undefined].includes(process.env.AWFL_STRIDER_PROVIDER))
   throw Error('AWFL_STRIDER_PROVIDER must be unset or live');
 
-test('Strider launches native ProjectManager to generate and persist a conversation summary',
-  {skip:!enabled,timeout:120000},async()=>{
+for(const scenario of ['sequential','contended','provider-failure','callback-failure'])
+test('Strider → native ProjectManager → Postgres summary: '+scenario,
+  {skip:!enabled||(LIVE&&scenario!=='sequential'),timeout:120000},async()=>{
   process.env.NODE_ENV='test';
   process.env.GCP_PROJECT||='awfl-us';
   const identity={userId:'strider-pm-'+randomUUID().replaceAll('-',''),projectId:'local-pm-test'};
@@ -79,8 +81,22 @@ test('Strider launches native ProjectManager to generate and persist a conversat
   }
 
   const seen=[],missing=[],modelRequests=[],modelWorkflows=[],lockEvents=[];
-  let usageWrites=0,callbackCreates=0;
+  let usageWrites=0,callbackCreates=0,callbackAwaits=0;
+  const createdCallbackUrls=new Set(),awaitedCallbackUrls=new Set();
+  let failProvider=scenario==='provider-failure';
+  let failCallback=scenario==='callback-failure';
+  // Hold the first completed model request until the competing workflow
+  // observes the *real* Postgres owner-scoped lock. No timing sleeps or fake
+  // locks: both compiled native workflows execute concurrently.
+  let notifyModelStarted,releaseModel;
+  const modelStarted=new Promise(resolve=>{notifyModelStarted=resolve;});
+  const modelRelease=new Promise(resolve=>{releaseModel=resolve;});
   const adapter=LIVE?realOpenaiAdapter:{chat:async ({messages,tool_choice,tools})=>{
+    if(failProvider){failProvider=false;throw new Error('injected provider outage');}
+    if(scenario==='contended'){
+      notifyModelStarted();
+      await modelRelease;
+    }
     const name=tool_choice?.function?.name;
     assert.equal(name,'summaries','Sadhaka must explicitly choose the summary output function');
     const outputTools=tools.filter(t=>t.function?.name===name);
@@ -144,9 +160,25 @@ test('Strider launches native ProjectManager to generate and persist a conversat
       return raw[operation](effect);
     };
   }
-  handlers['callback.create']=async (...args)=>{callbackCreates++;return fixture.callbackCreate(...args);};
-  handlers['callback.await']=fixture.callbackAwait;
-  handlers['log.write']=async()=>null;
+  handlers['callback.create']=async (...args)=>{
+    callbackCreates++;
+    const result=await fixture.callbackCreate(...args);
+    createdCallbackUrls.add(result.url);
+    return result;
+  };
+  handlers['callback.await']=async (...args)=>{
+    callbackAwaits++;
+    const url=args[0]?.args?.callback?.url;
+    if(url)awaitedCallbackUrls.add(url);
+    if(failCallback&&modelRequests.length>0){
+      failCallback=false;
+      throw new Error('injected callback transport failure after model response');
+    }
+    return fixture.callbackAwait(...args);
+  };
+  // Never bypass the native authenticated logging size/identity checks.
+  const logs=[];
+  handlers['log.write']=createNativeLogEffectHandler({info:entry=>logs.push(entry)});
   const mockFile=Buffer.from('echo harmless\n');
   handlers['storage.object_get']=createNativeStorageEffectHandler({storage:{
     bucket:()=>({file:()=>({getMetadata:async()=>[{size:mockFile.length}],
@@ -155,26 +187,94 @@ test('Strider launches native ProjectManager to generate and persist a conversat
     overlapSeconds:60,env:{...identity,sessionId,model:MODEL,
       BASE_URL:'https://jobs-4wmfqir74q-uc.a.run.app',background:false,
       workdir:'/tmp/reconcile-sandbox'}};
-  const createExecution=async()=>{
+  const createExecution=async(targetStore=store)=>{
     const executionId='native_'+randomUUID().replaceAll('-','');
-    await store.create({executionId,...identity,workflowName:root.workflowName,
+    await targetStore.create({executionId,...identity,workflowName:root.workflowName,
       artifactSha256:root.sha256,protocolVersion:2,
       allowedOperations:[...root.allowedOperations],
       parallelVersion:root.parallelVersion,streamIpcVersion:root.streamIpcVersion,
       trustedGlobalsVersion:root.trustedGlobalsVersion,input});
     return executionId;
   };
-  let scheduler;
+  let scheduler,initialRun,competingPool,competingStorage;
+  const assertNoLockLeak=async()=>{
+    assert.equal((await storage.query({collection:scope('locks.summaries.SegKala')})).length,0,
+      'all segment locks must be deleted after terminal native execution');
+    const grants=lockEvents.filter(e=>e.path==='/firebase/locks/acquire'&&e.status===200);
+    const releases=lockEvents.filter(e=>e.path==='/firebase/locks/release'&&e.status===200);
+    assert.deepEqual(releases.map(x=>x.owner).sort(),grants.map(x=>x.owner).sort(),
+      'every granted lock must be released by the identical materialized owner');
+  };
   try{
     const executionId=await createExecution();
-    const result=await runNativeMemoryWorkflow({store,releases,handlers,
+    initialRun=runNativeMemoryWorkflow({store,releases,handlers,
       executionId,...identity});
+    if(scenario==='contended'){
+      await modelStarted;
+      // A second native worker uses its own execution-store instance and
+      // independent PostgreSQL connection pool, not the first worker's store.
+      competingPool=new pg.Pool({connectionString:DB,max:2});
+      competingStorage=new PostgresStorage({pool:competingPool});
+      await competingStorage.initialize();
+      const competingStore=new NativeMemoryExecutionPilotStore({records:
+        new DocumentAtomicRecords({storage:competingStorage,collection})});
+      const competingId=await createExecution(competingStore);
+      const competing=await runNativeMemoryWorkflow({store:competingStore,releases,handlers,
+        executionId:competingId,...identity});
+      assert.equal((await competingStore.get(competingId)).status,'completed',JSON.stringify(competing));
+      const attempts=lockEvents.filter(e=>e.path==='/firebase/locks/acquire');
+      assert.equal(attempts.length,2,JSON.stringify(lockEvents));
+      assert.equal(attempts.filter(e=>e.status===409).length,1,
+        'only one concurrent Strider may hold the real Postgres lock');
+      assert.equal(modelRequests.length,1,'the loser must never invoke ProjectManager');
+      assert.equal((await storage.query({collection:summariesCollection})).length,0,
+        'the winning model is held before a summary may be persisted');
+      releaseModel();
+    }
+    const result=await initialRun;
+    if(scenario==='provider-failure'||scenario==='callback-failure'){
+      assert.equal((await store.get(executionId)).status,'failed',JSON.stringify(result));
+      assert.equal((await storage.query({collection:summariesCollection})).length,0,
+        'failed model or callback must never commit an incomplete summary');
+      assert.equal(lockEvents.filter(e=>e.path==='/firebase/locks/acquire').length,1);
+      assert.deepEqual(lockEvents.filter(e=>e.path==='/firebase/locks/release')
+        .map(e=>({status:e.status,released:e.response.released})),
+        [{status:200,released:true}],
+        'failure must release precisely the same owner-scoped lock');
+      const retryId=await createExecution();
+      const retry=await runNativeMemoryWorkflow({store,releases,handlers,
+        executionId:retryId,...identity});
+      assert.equal((await store.get(retryId)).status,'completed',JSON.stringify(retry));
+      assert.equal((await storage.query({collection:summariesCollection})).length,1,
+        'retry after failure must create exactly one summary');
+      assert.equal(modelRequests.length,2,
+        'failed attempt and successful retry must each reach the Jobs LLM router');
+      assert.ok(awaitedCallbackUrls.size>0,'the native callback-await path must actually run');
+      assert.ok([...awaitedCallbackUrls].every(url=>createdCallbackUrls.has(url)),
+        'all callback waits must refer to a callback created by this run');
+      if(scenario==='callback-failure')
+        assert.equal(modelRequests.length,2,
+          'callback failure must occur after the first typed model response, before retry');
+      assert.equal(lockEvents.filter(e=>e.path==='/firebase/locks/acquire').length,2);
+      assert.ok(lockEvents.filter(e=>e.path==='/firebase/locks/acquire')
+        .every(e=>e.status===200&&e.response.acquired===true));
+      assert.ok(lockEvents.filter(e=>e.path==='/firebase/locks/release')
+        .every(e=>e.status===200&&e.response.released===true));
+      await assertNoLockLeak();
+      assert.deepEqual(missing,[]);
+      console.log('STRIDER_RETRY_LOCAL_PASS',JSON.stringify({scenario,
+        modelCalls:modelRequests.length,callbackCreates,callbackAwaits,
+        locks:lockEvents.length,logs:logs.length}));
+      return;
+    }
     assert.equal((await store.get(executionId)).status,'completed',JSON.stringify(result));
     assert.deepEqual(missing,[]);
     assert.equal(modelRequests.length,1,'native Strider must call ProjectManager exactly once');
     assert.ok(modelWorkflows.every(w=>['codebase-ProjectManager','helpers-Convo'].includes(w)),
       'typed completion must go through native ProjectManager / Convo');
     assert.ok(callbackCreates>=1,'native Sadhaka must create and await a typed callback');
+    assert.ok(awaitedCallbackUrls.size>0&&[...awaitedCallbackUrls]
+      .every(url=>createdCallbackUrls.has(url)),'every callback wait must have a matching create');
     assert.equal(usageWrites,1);
     const rows=await storage.query({collection:summariesCollection});
     assert.equal(rows.length,1,'the generated summary must be persisted by the actual Jobs DB route');
@@ -189,23 +289,29 @@ test('Strider launches native ProjectManager to generate and persist a conversat
     assert.equal((await store.get(replayId)).status,'completed');
     assert.equal(modelRequests.length,1,'same segment should not require a second PM/model call');
     assert.equal((await storage.query({collection:summariesCollection})).length,1);
-    assert.equal(seen.filter(x=>x.path==='/firebase/locks/acquire').length,2,
+    assert.equal(seen.filter(x=>x.path==='/firebase/locks/acquire').length,scenario==='contended'?3:2,
       JSON.stringify(lockEvents));
     assert.equal(seen.filter(x=>x.path==='/firebase/locks/release').length,2,
       JSON.stringify(lockEvents));
     assert.ok(lockEvents.filter(e=>e.path==='/firebase/locks/acquire')
-      .every(e=>e.status===200&&e.response.acquired===true),
-      'both native Strider executions must acquire their owner-scoped lock');
+      .filter(e=>e.status===200).every(e=>e.response.acquired===true),
+      'every granted owner must really acquire its lock');
+    assert.equal(lockEvents.filter(e=>e.path==='/firebase/locks/acquire'&&e.status===409).length,
+      scenario==='contended'?1:0,'the contended loser must receive one 409');
     assert.ok(lockEvents.filter(e=>e.path==='/firebase/locks/release')
       .every(e=>e.status===200&&e.response.released===true),
       'both native Strider executions must actually delete their lock');
+    await assertNoLockLeak();
     scheduler=nativeMemoryAsyncSchedulerFor({store,releases,handlers});
     await scheduler.drain({timeoutMs:12000});
     console.log('STRIDER_PROJECT_MANAGER_LOCAL_PASS',JSON.stringify({
       mode:LIVE?'live':'deterministic',model:MODEL,root:root.workflowName,
       modelCalls:modelRequests.length,summary,records:rows.length,callbackCreates,
-      viaJobsLlm:true,viaJobsPostgres:true,duplicateCalls:0}));
+      viaJobsLlm:true,viaJobsPostgres:true,duplicateCalls:0,scenario,
+      contention409s:lockEvents.filter(e=>e.path==='/firebase/locks/acquire'&&e.status===409).length}));
   }finally{
+    releaseModel();
+    await initialRun?.catch(()=>{});
     await scheduler?.close();
     await new Promise(resolve=>server.close(resolve));
     for(const doc of await storage.query({collection}))await storage.delete(doc.path);
@@ -214,6 +320,7 @@ test('Strider launches native ProjectManager to generate and persist a conversat
       for(const doc of await storage.query({collection:name}))await storage.delete(doc.path);
     }
     await storage.delete(scope(`convo.sessions/${sessionId}`)).catch(()=>{});
+    await competingStorage?.close();await competingPool?.end();
     await storage.close();await pool.end();
   }
 });

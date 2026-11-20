@@ -29,7 +29,8 @@ for (const {workflow,outputTool,collectionPattern,count=1,failRead=false,largeSt
   {workflow:'assistant-ExtractTopics',outputTool:'topicInfos',collectionPattern:/topic/i,count:4},
   {workflow:'Summaries-Convo',outputTool:'summaries',collectionPattern:/summar/i,failRead:true},
   {workflow:'Summaries-All',outputTool:'summaries',collectionPattern:/summar/i,largeStoredItem:true},
-]) test('compiled '+workflow+' '+(failRead?'releases its lock after a read failure':largeStoredItem?'handles a 6KB previously stored summary':'invokes native typed Sadhaka and persists one result'),
+  {workflow:'assistant-ExtractTopics-All',outputTool:'topicInfos',collectionPattern:/topic/i,largeStoredItem:true},
+]) test('compiled '+workflow+' '+(failRead?'releases its lock after a read failure':largeStoredItem?'handles a 6KB previously stored '+(outputTool==='topicInfos'?'topic record':'summary'):'invokes native typed Sadhaka and persists one result'),
 {skip:!enabled,timeout:90000},async()=>{
   process.env.NODE_ENV='test';process.env.GCP_PROJECT||='awfl-us';
   const pool=new pg.Pool({connectionString:DB,max:5});
@@ -59,7 +60,11 @@ for (const {workflow,outputTool,collectionPattern,count=1,failRead=false,largeSt
       return {code:503,body:{error:'Injected Strider read failure'}};
     if(largeStoredItem && method==='POST' && path==='/firebase/list' && collectionPattern.test(col))
       return {code:200,body:{documents:[{id:'long-existing-summary',
-        data:{create_time:Date.now()/1000-3600,value:{title:'Long summary',summary:'x'.repeat(6000)}},
+        data:{create_time:Date.now()/1000-3600,value:outputTool==='topicInfos'
+          ? {topics:[{topic:'AWFL',breadth:'engineering',depth:'deep',startingPoint:'test',
+            endingPoint:'verified',details:'x'.repeat(6000)}],nuggets:[],reflections:[],
+            artifacts:[],shouldSaveReflection:false}
+          : {title:'Long summary',summary:'x'.repeat(6000)}},
         subcollections:[]}]}};
     if(isDirectSegment && method==='POST' && path==='/firebase/list'
        && collectionPattern.test(col)) {
