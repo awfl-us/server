@@ -87,7 +87,7 @@ test('original Ista factory + generic Sadhaka: native callback and typed first o
     if (process.env.AWFL_SADHAKA_DEBUG === '1')
       console.log('SADHAKA_REQUEST',method,path,JSON.stringify(args?.body ?? {}).slice(0,200));
     if(method==='POST' && path==='/llm/chat') {
-      if(args.body?.workflow_name !== 'codebase-ProjectManager')
+      if(!['codebase-ProjectManager','helpers-Convo'].includes(args.body?.workflow_name))
         return fixture.respond({method,path,args,effectId});
       assert.equal(args.body.validate_tool_arguments,true);
       assert.equal(args.body.tool_choice?.function?.name,'summaries');

@@ -95,7 +95,7 @@ export function makeReconciliationFixture({ scenario = 'basic', query = 'Read th
       case 'POST /llm/chat': {
         modelRequests.push(body);
         assert.ok(Array.isArray(body.messages),'llm must receive messages array');
-        if (scenario === 'typed-tool-roundtrip' && body.workflow_name === 'codebase-ProjectManager') {
+        if (scenario === 'typed-tool-roundtrip' && ['codebase-ProjectManager','helpers-Convo'].includes(body.workflow_name)) {
           const readTools=body.tools.filter(tool=>tool.function?.name==='READ_FILE');
           assert.deepEqual(readTools,[{type:toolDef.type,function:toolDef.function}],
             'generated READ_FILE schema must be preserved and routing metadata removed');
@@ -194,8 +194,8 @@ function assertBaseline(result) {
   if(result.scenario!=='no-query') assert.equal(roles.filter(x=>x==='user').length,1,'duplicate user insert');
   else assert.equal(roles.filter(x=>x==='user').length,1,
     'nil query duplicated or dropped previously persisted user turn');
-  const foregroundRequests=result.modelRequests.filter(x=>x.workflow_name==='codebase-ProjectManager');
-  const backgroundRequests=result.modelRequests.filter(x=>x.workflow_name!=='codebase-ProjectManager');
+  const foregroundRequests=result.modelRequests.filter(x=>['codebase-ProjectManager','helpers-Convo'].includes(x.workflow_name));
+  const backgroundRequests=result.modelRequests.filter(x=>!['codebase-ProjectManager','helpers-Convo'].includes(x.workflow_name));
   const isTool=result.scenario==='tool-roundtrip' || result.scenario==='typed-tool-roundtrip';
   assert.equal(roles.filter(x=>x==='assistant').length,isTool?2:1,
     'incorrect number of assistant messages');

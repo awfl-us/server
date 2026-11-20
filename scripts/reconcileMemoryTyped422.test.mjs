@@ -62,7 +62,7 @@ for(const op of ['http.get','http.post','http.patch','http.delete']){
       if(!response.ok) throw new NativeConfirmedHttpFailure(response.status);
       return {code:response.status,body:content};
     }
-    if(path==='/llm/chat' && effect.args.body?.workflow_name==='codebase-ProjectManager'){
+    if(path==='/llm/chat' && ['codebase-ProjectManager','helpers-Convo'].includes(effect.args.body?.workflow_name)){
       assert.equal(effect.args.body.validate_tool_arguments,true,
         'compiled Scala tool completion must opt in to validation');
       const response=await fetch(url+'/llm/chat',{method:'POST',
