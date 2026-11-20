@@ -52,7 +52,7 @@ for(const op of ['http.get','http.post','http.patch','http.delete']){
       if(!response.ok) throw new NativeConfirmedHttpFailure(response.status);
       return {code:response.status,body:content};
     }
-    if(path==='/llm/chat' && ['codebase-ProjectManager','helpers-Convo'].includes(effect.args.body?.workflow_name)){
+    if(path==='/llm/chat' && ['codebase-ProjectManager','helpers-Convo'].includes(effect.args.body?.workflow_name) && !effect.args.body?.tool_choice?.function?.name){
       foregroundCalls++;
       if(foregroundCalls===1){onFirstModel();await firstAllowed;}
     }

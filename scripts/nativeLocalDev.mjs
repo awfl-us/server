@@ -7,7 +7,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { NativeExecutionStore } from '../workflows/native/executionStore.js';
 import { runNativeWorkflow, nativeAsyncSchedulerFor } from '../workflows/native/worker.js';
-import { runNativeMemoryWorkflow } from '../workflows/native/memoryWorker.js';
+import { runNativeMemoryWorkflow, nativeMemoryAsyncSchedulerFor } from '../workflows/native/memoryWorker.js';
 import { createNativeLogEffectHandler } from '../workflows/native/logEffects.js';
 import { createNativeStorageEffectHandler } from '../workflows/native/storageEffects.js';
 import { createNativeCallbackEffects } from '../workflows/native/callbackEffects.js';
@@ -345,10 +345,12 @@ export async function runLocalProjectManager({
     });
   } catch (cause) { error = String(cause?.message || cause); }
   let detachedDrainError = null;
-  if (drainDetached && executionMode === 'durable') {
+  if (drainDetached) {
     // The underlying worker schedules self-continuations and summaries with a
     // per-store detached scheduler; wait for those children, not only the root.
-    const scheduler = nativeAsyncSchedulerFor({store, releases, handlers});
+    const scheduler = executionMode === 'memory'
+      ? nativeMemoryAsyncSchedulerFor({store, releases, handlers})
+      : nativeAsyncSchedulerFor({store, releases, handlers});
     let timeout;
     try {
       await Promise.race([

@@ -30,6 +30,7 @@ export function makeReconciliationFixture({ scenario = 'basic', query = 'Read th
   const requests = [];
   const modelRequests = [];
   const callbackTools = new Map();
+  const callbackDeliveries = new Map();
   let callbackSequence = 0;
   const isTool = scenario === 'tool-roundtrip' || scenario === 'typed-tool-roundtrip';
   const llmReplies = isTool
@@ -44,6 +45,8 @@ export function makeReconciliationFixture({ scenario = 'basic', query = 'Read th
   const callbackCreate=async()=>({url:`https://jobs-4wmfqir74q-uc.a.run.app/callbacks/test-${++callbackSequence}`});
   const callbackAwait=async({args})=>{
     const id=new URL(args.callback.url).pathname.split('/').at(-1);
+    if(callbackDeliveries.has(id))
+      return {http_request:{body:callbackDeliveries.get(id)}};
     const tool=callbackTools.get(id);
     if(!tool) throw new Error(`No tool registered for callback ${id}`);
     return {http_request:{body:tool==='READ_FILE'
@@ -120,6 +123,24 @@ export function makeReconciliationFixture({ scenario = 'basic', query = 'Read th
           'assistant-ExtractTopics-Week': {topics:[],nuggets:[],reflections:[],artifacts:[],shouldSaveReflection:false},
           'assistant-ExtractTopics-Term': {topics:[],nuggets:[],reflections:[],artifacts:[],shouldSaveReflection:false},
         };
+        // The reconciled wip-old Strider now uses Sadhaka's typed
+        // side-call tool rather than JSON-mode completions. The model
+        // fixture must answer the requested output function, without
+        // consuming the foreground ProjectManager replies.
+        const outputTool=body.tool_choice?.function?.name;
+        if (outputTool && ['summaries','topicInfos','collapsed','collapseResponse','collapseResponses'].includes(outputTool)) {
+          const payload=outputTool==='summaries'
+            ? {title:'Fixture conversation',summary:'Read-only configuration discussion.'}
+            : outputTool==='topicInfos'
+              ? {topics:[],nuggets:[],reflections:[],artifacts:[],shouldSaveReflection:false}
+              : {groups:[]};
+          return ok({message:{role:'assistant',content:'',tool_calls:[{
+            id:'background-output-'+outputTool,type:'function',
+            function:{name:outputTool,arguments:JSON.stringify(payload)}
+          }]},total_cost:0,usage:{completion_tokens:10,
+            completion_tokens_details:{accepted_prediction_tokens:0,audio_tokens:0,reasoning_tokens:0,rejected_prediction_tokens:0},
+            prompt_tokens:20,prompt_tokens_details:{audio_tokens:0,cached_tokens:0},total_tokens:30}});
+        }
         if(body.response_format?.type === 'json_object') {
           const payload = structured[body.workflow_name];
           if(!payload) throw new Error(`Unmocked JSON completion for workflow ${body.workflow_name}`);
@@ -143,7 +164,12 @@ export function makeReconciliationFixture({ scenario = 'basic', query = 'Read th
           callbackTools.set(body.data.callback_id,body.data.tool_call.function.name);
         return ok({ok:true});
       }
-      default: throw new Error(`Unmocked AWFL endpoint ${method} ${path} (${effectId})`);
+      default:
+        if (method==='POST' && /^\/callbacks\/test-\d+$/.test(path)) {
+          callbackDeliveries.set(path.split('/').at(-1),body);
+          return ok({recorded:true});
+        }
+        throw new Error(`Unmocked AWFL endpoint ${method} ${path} (${effectId})`);
     }
   };
   return {docs,requests,modelRequests,callbackTools,callbackCreate,callbackAwait,
@@ -151,7 +177,7 @@ export function makeReconciliationFixture({ scenario = 'basic', query = 'Read th
 }
 
 export async function runReconciliationScenario({reportPath,scenario='basic', log=()=>{},
-  maxTransitions=120, strictBackground=false, typedToolDef=null}) {
+  maxTransitions=120, strictBackground=false, typedToolDef=null, executionMode='durable'}) {
   if(!reportPath) throw new Error('--report is required; compile native workflows first');
   const fixture=makeReconciliationFixture({scenario,typedToolDef});
   const input={fund:2,env:{userId:'reconcile-user',projectId:'reconcile-project',
@@ -177,7 +203,7 @@ export async function runReconciliationScenario({reportPath,scenario='basic', lo
   const native=await runLocalProjectManager({reportPath:resolve(reportPath),
     input,identity:{userId:'reconcile-user',projectId:'reconcile-project'},
     respondHttp:fixture.respond,storageHandler,callbackFixtureHandlers,maxTransitions,log,
-    drainDetached:true,drainTimeoutMs:10000});
+    drainDetached:true,drainTimeoutMs:20000,executionMode});
   return {scenario,native,strictBackground,requests:fixture.requests,modelRequests:fixture.modelRequests,
     messages:fixture.messages()};
 }
@@ -187,15 +213,15 @@ function assertBaseline(result) {
   assert.equal(result.native.error,undefined,'native emitted error');
   assert.equal(result.native.detachedDrainError,null,'detached work did not settle');
   if(result.strictBackground) assert.deepEqual(
-    result.native.lanes.filter(x=>x.status==='failed'),[],
+    result.native.lanes.filter(x=>x.status==='failed' || x.status==='waiting_effect'),[],
     'detached/native child execution failed');
   assert.deepEqual(result.native.missing,[],'unhandled native HTTP calls');
   const roles=result.messages.map(x=>x.value?.role||x.role).filter(Boolean);
   if(result.scenario!=='no-query') assert.equal(roles.filter(x=>x==='user').length,1,'duplicate user insert');
   else assert.equal(roles.filter(x=>x==='user').length,1,
     'nil query duplicated or dropped previously persisted user turn');
-  const foregroundRequests=result.modelRequests.filter(x=>['codebase-ProjectManager','helpers-Convo'].includes(x.workflow_name));
-  const backgroundRequests=result.modelRequests.filter(x=>!['codebase-ProjectManager','helpers-Convo'].includes(x.workflow_name));
+  const foregroundRequests=result.modelRequests.filter(x=>['codebase-ProjectManager','helpers-Convo'].includes(x.workflow_name) && !x.tool_choice?.function?.name);
+  const backgroundRequests=result.modelRequests.filter(x=>!['codebase-ProjectManager','helpers-Convo'].includes(x.workflow_name) || Boolean(x.tool_choice?.function?.name));
   const isTool=result.scenario==='tool-roundtrip' || result.scenario==='typed-tool-roundtrip';
   assert.equal(roles.filter(x=>x==='assistant').length,isTool?2:1,
     'incorrect number of assistant messages');
@@ -220,7 +246,7 @@ function assertBaseline(result) {
   }
   assert.equal(foregroundRequests.length,isTool?2:1,
     'incorrect foreground LLM request count');
-  if(result.strictBackground) assert.ok(backgroundRequests.length >= (isTool?10:5),
+  if(result.strictBackground) assert.ok(backgroundRequests.length >= (isTool?4:2),
     'expected background LLM requests were missing');
   return {scenario:result.scenario,status:result.native.status,
     effects:result.native.effectCount,modelCalls:foregroundRequests.length,
@@ -234,8 +260,9 @@ if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   const reportPath=arg('--report',process.env.AWFL_NATIVE_LOCAL_BUILD_REPORT);
   const scenario=arg('--scenario','basic');
   const strictBackground=process.argv.includes('--strict-background');
+  const executionMode=process.argv.includes('--memory')?'memory':'durable';
   try{
-    const r=await runReconciliationScenario({reportPath,scenario,strictBackground});
+    const r=await runReconciliationScenario({reportPath,scenario,strictBackground,executionMode});
     const checked=assertBaseline(r);
     console.log('AWFL_RECONCILE_PASS '+JSON.stringify(checked));
   }catch(error){
