@@ -16,7 +16,7 @@ const REPORT=process.env.AWFL_STRIDER_NATIVE_REPORT;
 const enabled=Boolean(DB && REPORT);
 if(enabled){const u=new URL(DB);if(!['localhost','127.0.0.1','[::1]'].includes(u.hostname)||u.pathname!=='/awfl_reconcile')throw Error('isolated Postgres only');}
 
-for (const {workflow,outputTool,collectionPattern,count=1} of [
+for (const {workflow,outputTool,collectionPattern,count=1,failRead=false} of [
   {workflow:'Summaries-Convo',outputTool:'summaries',collectionPattern:/summar/i},
   {workflow:'assistant-ExtractTopics-Convo',outputTool:'topicInfos',collectionPattern:/topic/i},
   {workflow:'context-ContextCollapser-SegKala',outputTool:'collapsed',collectionPattern:/collaps/i},
@@ -26,7 +26,8 @@ for (const {workflow,outputTool,collectionPattern,count=1} of [
   {workflow:'assistant-ExtractTopics-All',outputTool:'topicInfos',collectionPattern:/topic/i,count:4},
   {workflow:'assistant-ExtractTopics-Backfill',outputTool:'topicInfos',collectionPattern:/topic/i,count:4},
   {workflow:'assistant-ExtractTopics',outputTool:'topicInfos',collectionPattern:/topic/i,count:4},
-]) test('compiled '+workflow+' invokes native typed Sadhaka and persists one result',
+  {workflow:'Summaries-Convo',outputTool:'summaries',collectionPattern:/summar/i,failRead:true},
+]) test('compiled '+workflow+' '+(failRead?'releases its lock after a read failure':'invokes native typed Sadhaka and persists one result'),
 {skip:!enabled,timeout:90000},async()=>{
   process.env.NODE_ENV='test';process.env.GCP_PROJECT||='awfl-us';
   const pool=new pg.Pool({connectionString:DB,max:5});
@@ -52,6 +53,8 @@ for (const {workflow,outputTool,collectionPattern,count=1} of [
   const respond=effect=>{
     const {method,path,args}=effect;
     const col=String(args?.body?.collection||'');
+    if(failRead && method==='POST' && path==='/firebase/list' && collectionPattern.test(col))
+      return {code:503,body:{error:'Injected Strider read failure'}};
     if(isDirectSegment && method==='POST' && path==='/firebase/list'
        && collectionPattern.test(col)) {
       return {code:200,body:{documents:persistedOutputs.map((data,i)=>({
@@ -74,6 +77,15 @@ for (const {workflow,outputTool,collectionPattern,count=1} of [
   try{
     const result=await runNativeMemoryWorkflow({store,releases,handlers,
       executionId,...identity});
+    if(failRead){
+      assert.equal(result.status,'failed',JSON.stringify(result));
+      assert.equal((await store.get(executionId)).status,'failed');
+      assert.equal(seen.filter(x=>x.path==='/firebase/locks/acquire').length,1);
+      assert.equal(seen.filter(x=>x.path==='/firebase/locks/release').length,1,
+        'a failure after acquiring a Strider lock must release it exactly once');
+      assert.deepEqual(missing,[]);
+      return;
+    }
     assert.equal((await store.get(executionId)).status,'completed',JSON.stringify(result));
     assert.deepEqual(missing,[]);
     const typed=fixture.modelRequests.filter(x=>x.tool_choice?.function?.name===outputTool);
