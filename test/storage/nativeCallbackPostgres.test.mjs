@@ -42,9 +42,21 @@ test('independent PostgreSQL clients atomically deliver and wake native callback
       assert.deepEqual(first, second);
       path = `users/${identity.userId}/callbacks/${nativeCallbackIdFromUrl(first.url, jobsOrigin)}`;
       const body = {result: 'ok', nested: {count: 2}};
+      // Prove that delivery comes AFTER the independent reader's LISTEN has
+      // installed its initial snapshot, rather than merely hitting the
+      // already-delivered fast path in callback.await.
+      const originalSubscribe = a.storage.subscribe.bind(a.storage);
+      let subscriptionReady;
+      const subscribed = new Promise(resolve => { subscriptionReady = resolve; });
+      a.storage.subscribe = async (...args) => {
+        const unsubscribe = await originalSubscribe(...args);
+        subscriptionReady();
+        return unsubscribe;
+      };
       const waiting = callbackA['callback.await']({
         args: {callback: first, timeout: 5}, identity,
       });
+      await subscribed;
       const deliveries = await Promise.all([
         recordNativeCallbackDelivery({storage: a.storage, ref: path, body, identity}),
         recordNativeCallbackDelivery({storage: b.storage, ref: path, body, identity}),
