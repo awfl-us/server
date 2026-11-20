@@ -20,7 +20,7 @@ export const logTermsCollection = (name) => `log.terms.${name}`;
 export async function listBetweenFlat(userId, projectId, collectionPath, begin, end, opts={}) {
   const store=await getDocumentStorage();
   const where=[
-    {field:'create_time',op:'>',value:begin},
+    {field:'create_time',op:opts.includeBegin ? '>=' : '>',value:begin},
     {field:'create_time',op:'<=',value:end},
   ];
   if(opts.user_id!=null&&String(opts.user_id))
@@ -121,7 +121,12 @@ export async function buildYojMessages({ name, kala, userId, projectId, framing 
     case 'SegKala': {
       const { sessionId, end, windowSeconds } = kala;
       const begin = end - windowSeconds;
-      documents = await listBetweenFlat(userId, projectId, convoCollection(sessionId, name), begin, end);
+      // SegKala windows are anchored at the first message timestamp. Include
+      // that exact lower boundary for chat messages; otherwise the first
+      // message is silently omitted from the initial summary. Keep the
+      // existing exclusive lower bound for summary reads and all other Kala.
+      documents = await listBetweenFlat(userId, projectId, convoCollection(sessionId, name), begin, end,
+        { includeBegin: name === 'messages' });
       break;
     }
     case 'SessionKala': {

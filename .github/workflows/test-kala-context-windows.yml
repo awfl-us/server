@@ -1,0 +1,20 @@
+name: Kala context and segment windows
+on:
+  pull_request:
+    paths:
+      - 'workflows/context/lib/prakriya.js'
+      - 'workflows/context/__tests__/prakriya.test.mjs'
+      - '.github/workflows/test-kala-context-windows.yml'
+permissions:
+  contents: read
+jobs:
+  kala-context:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - run: npm run -s test:context -- --runInBand workflows/context/__tests__/prakriya.test.mjs
