@@ -48,7 +48,7 @@ jobs:
           node-version: '22'
       - name: Install PostgreSQL client for real integration test
         run: npm install --ignore-scripts --no-audit --no-fund
-      - name: Test execution-state contract and mocked adapters plus real PostgreSQL concurrency
+      - name: Test storage contract, native callbacks, and cross-client session locks on PostgreSQL
         env:
           PGTEST_URL: postgres://benchmark-ci:benchmark-ci@127.0.0.1:5432/benchmark_ci
         run: node --test --test-concurrency=1 test/storage/*.test.mjs
