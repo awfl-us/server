@@ -1,0 +1,87 @@
+name: Compiled native ProjectManager PostgreSQL lifecycle
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/test-compiled-projectmanager-lifecycle.yml'
+      - 'scripts/reconcileMemoryCallbackConcurrency.test.mjs'
+      - 'scripts/reconcileMemoryConcurrency.test.mjs'
+      - 'scripts/reconcileMemoryTyped422.test.mjs'
+      - 'scripts/reconcilePostgresNative.test.mjs'
+      - 'scripts/reconcileSessionStatusPostgres.test.mjs'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  compiled-projectmanager-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      PGTEST_URL: postgres://reconcile-ci:reconcile-ci@127.0.0.1:5432/awfl_reconcile
+      AWFL_NATIVE_LOCAL_BUILD_REPORT: ${{ github.workspace }}/_compiler-rust/target/native-dev-generated/codebase-ProjectManager/build-report.json
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: reconcile-ci
+          POSTGRES_USER: reconcile-ci
+          POSTGRES_DB: awfl_reconcile
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U reconcile-ci -d awfl_reconcile"
+          --health-interval 3s
+          --health-timeout 5s
+          --health-retries 15
+    steps:
+      - name: Checkout server under test
+        uses: actions/checkout@v4
+      - name: Checkout current workflow definitions (read-only)
+        uses: actions/checkout@v4
+        with:
+          repository: awfl-us/workflows
+          ref: main
+          path: _workflows
+      - name: Checkout native compiler used by the verified publisher
+        uses: actions/checkout@v4
+        with:
+          repository: awfl-us/compiler-rust
+          ref: bc913e1d1cba809db2ff2b84686b3bbb82a840b6
+          path: _compiler-rust
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install server test dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: sbt/setup-sbt@v1
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - name: Install local static-link verification tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y musl-tools binutils file
+      - name: Compile real native ProjectManager closure (never publish)
+        run: |
+          set -euo pipefail
+          python3 _workflows/scripts/native-dev.py codebase-ProjectManager \
+            --recursive \
+            --compiler "$GITHUB_WORKSPACE/_compiler-rust"
+          test -f "$AWFL_NATIVE_LOCAL_BUILD_REPORT"
+      - name: Run isolated PostgreSQL compiled lifecycle acceptance tests
+        run: |
+          set -euo pipefail
+          node --test --test-concurrency=1 \
+            scripts/reconcilePostgresNative.test.mjs \
+            scripts/reconcileMemoryCallbackConcurrency.test.mjs \
+            scripts/reconcileMemoryConcurrency.test.mjs \
+            scripts/reconcileMemoryTyped422.test.mjs \
+            scripts/reconcileSessionStatusPostgres.test.mjs
