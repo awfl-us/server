@@ -110,6 +110,15 @@ try{
     handlers:{},executionId:id,...identity});
   assert.deepEqual(replay,result,'terminal failure must not repeat provider call');
   assert.equal(accounted,1);
+  const statuses=fixture.requests.filter(x=>x.path==='/workflows/exec/status/update'
+    &&x.body.execId===id).map(x=>x.body);
+  assert.deepEqual(statuses.map(x=>x.status),['Running','Failed'],
+    'typed LLM validation error must produce terminal Failed rather than Done');
+  assert.deepEqual(statuses.map(x=>x.ended),[false,true]);
+  assert.match(String(statuses.at(-1)?.error),/422/);
+  console.log('STATUS_TYPED_FAILURE_PASS',JSON.stringify({
+    transitions:statuses.map(x=>x.status),error:statuses.at(-1)?.error
+  }));
   console.log('TYPED_422_MEMORY_PASS',JSON.stringify({
     status:persisted.status,code:result.error?.code,
     providerCalls:invalidReplies,accounted,roles:fixture.messages().map(m=>m.value?.role)}));

@@ -118,6 +118,35 @@ try{
     ['user','assistant','tool','assistant','user','assistant']);
   assert.deepEqual(fixture.messages().filter(m=>m.value?.role==='user').map(m=>m.value?.content),
     ['first turn','second turn'],'each accepted user turn must be stored once');
+  const statusFor=id=>fixture.requests.filter(req=>
+    req.path==='/workflows/exec/status/update'&&req.body.execId===id);
+  // A workflow that schedules detached tool feedback ends its own native
+  // execution before the continuation finishes. Its status remains Running;
+  // only the distinct terminal continuation records Done.
+  const allStatuses=fixture.requests.filter(req=>req.path==='/workflows/exec/status/update');
+  const continuationEnds=allStatuses.filter(req=>
+    ![first,second,retry].includes(req.body.execId)&&req.body.status==='Done'&&
+    req.body.ended===true);
+  assert.ok(continuationEnds.length>0,
+    'detached tool feedback continuation must independently report Done');
+  for(const [id,expected] of [
+    [first,['Running']],
+    [second,['Running','Failed']],
+    [retry,['Running','Done']]
+  ]){
+    const transitions=statusFor(id);
+    assert.deepEqual(transitions.map(x=>x.body.status),expected,
+      `Status trait must record ${expected.join(' → ')} for ${id}`);
+    assert.deepEqual(transitions.map(x=>x.body.ended),
+      expected.map(status=>status!=='Running'),
+      'only terminal lifecycle event should set ended=true');
+  }
+  assert.match(String(statusFor(second).at(-1)?.body.error),/Session is busy|409/);
+  console.log('STATUS_LIFECYCLE_PARITY_PASS',JSON.stringify({
+    first:statusFor(first).map(x=>x.body.status),
+    busy:statusFor(second).map(x=>x.body.status),
+    retry:statusFor(retry).map(x=>x.body.status),detachedDone:continuationEnds.length
+  }));
   console.log('CONCURRENT_MEMORY_RESULT',JSON.stringify({firstStatus:(await store.get(first)).status,secondStatus:(await store.get(second)).status,
      a:av?.status||'completed',b:b?.status||'completed',bError:b?.error,
      foregroundCalls,roles:fixture.messages().map(m=>m.value?.role),users:fixture.messages().filter(m=>m.value?.role==='user').map(m=>m.value?.content),
