@@ -22,6 +22,7 @@ jest.unstable_mockModule('../../../storage/service.js', () => ({
     const docs = STUB_COLLECTION_DOCS.get(collection) || [];
     return docs.filter(({ data }) => where.every(({ field, op, value }) => {
       if (op === '>') return data[field] > value;
+      if (op === '>=') return data[field] >= value;
       if (op === '<=') return data[field] <= value;
       if (op === '==') return data[field] === value;
       throw new Error(`Unexpected operator: ${op}`);
@@ -111,6 +112,58 @@ describe('prakriya.buildYojMessages - WeekKala', () => {
     expect(result[3].content).toContain('Later summary');
     expect(result.every(m => !Object.keys(m).includes('create_time'))).toBe(true);
     expect(JSON.stringify(result)).not.toContain('create_time');
+  });
+
+  test('SegKala includes the first user message exactly on the lower boundary, without widening summary reads', async () => {
+    const firstMessage = 1795198050.258966;
+    const segmentEnd = firstMessage + 1200;
+    STUB_COLLECTION_DOCS.set('convo.sessions/first-session/messages', [
+      makeDoc('first', { create_time: firstMessage,
+        value: { role: 'user', content: 'First user request' } }),
+      makeDoc('reply', { create_time: firstMessage + 5,
+        value: { role: 'assistant', content: 'First answer' } }),
+      makeDoc('out-of-window', { create_time: firstMessage - 0.001,
+        value: { role: 'user', content: 'Before window' } }),
+    ]);
+    STUB_COLLECTION_DOCS.set('convo.sessions/first-session/summaries', [
+      makeDoc('prior', { create_time: firstMessage,
+        value: { title: 'Earlier summary' } }),
+    ]);
+    const kala = { kind: 'SegKala', sessionId: 'first-session',
+      end: segmentEnd, windowSeconds: 1200 };
+    const args = { kala, userId: 'user-1', projectId: 'proj-1' };
+    const messages = await buildYojMessages({ ...args, name: 'messages' });
+    const summaries = await buildYojMessages({ ...args, name: 'summaries' });
+    expect(messages.map(m => m.content)).toEqual(['First user request', 'First answer']);
+    expect(summaries).toEqual([]);
+  });
+
+  test('SessionKala reads only segment summaries from the current session and 8-hour interval', async () => {
+    const end = 1795205010.258966;
+    STUB_COLLECTION_DOCS.set('convo.sessions/s1/summaries', [
+      makeDoc('older', { create_time: end - 9 * 3600, value: { title: 'Outside interval' } }),
+      makeDoc('first', { create_time: end - 2 * 3600, value: { title: 'Earlier segment' } }),
+      makeDoc('latest', { create_time: end, value: { title: 'Current segment' } }),
+      makeDoc('future', { create_time: end + 1, value: { title: 'Future segment' } }),
+    ]);
+    const res = await buildYojMessages({ name: 'summaries',
+      kala: { kind: 'SessionKala', sessionId: 's1', sessionEnd: end },
+      userId: 'user-1', projectId: 'proj-1' });
+    expect(res.map(m => JSON.parse(m.content.replace(/^\(Session\)\s*/, '')).title))
+      .toEqual(['Earlier segment', 'Current segment']);
+  });
+
+  test('TermKala aggregates weekly summaries only from its term interval', async () => {
+    const begin = 1_700_000_000, end = begin + 91 * 86400;
+    STUB_COLLECTION_DOCS.set('log.weekly.summaries', [
+      makeDoc('before', { create_time: begin, value: { title: 'Older term' } }),
+      makeDoc('inside', { create_time: begin + 604800, value: { title: 'This term' } }),
+      makeDoc('after', { create_time: end + 1, value: { title: 'Future term' } }),
+    ]);
+    const res = await buildYojMessages({ name: 'summaries',
+      kala: { kind: 'TermKala', begin, end }, userId: 'user-1', projectId: 'proj-1' });
+    expect(res.map(m => JSON.parse(m.content.replace(/^\(Term\)\s*/, '')).title))
+      .toEqual(['This term']);
   });
 
   test('messages gating: messages for WeekKala returns empty list', async () => {
