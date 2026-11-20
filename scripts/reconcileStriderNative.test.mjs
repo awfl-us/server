@@ -10,13 +10,14 @@ import {runNativeMemoryWorkflow} from '../workflows/native/memoryWorker.js';
 import {localReleases,createReplayHttpHandlers} from './nativeLocalDev.mjs';
 import {makeReconciliationFixture} from './reconcileScenario.mjs';
 import {createNativeStorageEffectHandler} from '../workflows/native/storageEffects.js';
+import {createNativeLogEffectHandler} from '../workflows/native/logEffects.js';
 
 const DB=process.env.PGTEST_URL;
 const REPORT=process.env.AWFL_STRIDER_NATIVE_REPORT;
 const enabled=Boolean(DB && REPORT);
 if(enabled){const u=new URL(DB);if(!['localhost','127.0.0.1','[::1]'].includes(u.hostname)||u.pathname!=='/awfl_reconcile')throw Error('isolated Postgres only');}
 
-for (const {workflow,outputTool,collectionPattern,count=1,failRead=false} of [
+for (const {workflow,outputTool,collectionPattern,count=1,failRead=false,largeStoredItem=false} of [
   {workflow:'Summaries-Convo',outputTool:'summaries',collectionPattern:/summar/i},
   {workflow:'assistant-ExtractTopics-Convo',outputTool:'topicInfos',collectionPattern:/topic/i},
   {workflow:'context-ContextCollapser-SegKala',outputTool:'collapsed',collectionPattern:/collaps/i},
@@ -27,7 +28,8 @@ for (const {workflow,outputTool,collectionPattern,count=1,failRead=false} of [
   {workflow:'assistant-ExtractTopics-Backfill',outputTool:'topicInfos',collectionPattern:/topic/i,count:4},
   {workflow:'assistant-ExtractTopics',outputTool:'topicInfos',collectionPattern:/topic/i,count:4},
   {workflow:'Summaries-Convo',outputTool:'summaries',collectionPattern:/summar/i,failRead:true},
-]) test('compiled '+workflow+' '+(failRead?'releases its lock after a read failure':'invokes native typed Sadhaka and persists one result'),
+  {workflow:'Summaries-All',outputTool:'summaries',collectionPattern:/summar/i,largeStoredItem:true},
+]) test('compiled '+workflow+' '+(failRead?'releases its lock after a read failure':largeStoredItem?'handles a 6KB previously stored summary':'invokes native typed Sadhaka and persists one result'),
 {skip:!enabled,timeout:90000},async()=>{
   process.env.NODE_ENV='test';process.env.GCP_PROJECT||='awfl-us';
   const pool=new pg.Pool({connectionString:DB,max:5});
@@ -55,6 +57,10 @@ for (const {workflow,outputTool,collectionPattern,count=1,failRead=false} of [
     const col=String(args?.body?.collection||'');
     if(failRead && method==='POST' && path==='/firebase/list' && collectionPattern.test(col))
       return {code:503,body:{error:'Injected Strider read failure'}};
+    if(largeStoredItem && method==='POST' && path==='/firebase/list' && collectionPattern.test(col))
+      return {code:200,body:{documents:[{id:'long-existing-summary',
+        data:{create_time:Date.now()/1000-3600,value:{title:'Long summary',summary:'x'.repeat(6000)}},
+        subcollections:[]}]}};
     if(isDirectSegment && method==='POST' && path==='/firebase/list'
        && collectionPattern.test(col)) {
       return {code:200,body:{documents:persistedOutputs.map((data,i)=>({
@@ -69,7 +75,10 @@ for (const {workflow,outputTool,collectionPattern,count=1,failRead=false} of [
     respond});
   handlers['callback.create']=fixture.callbackCreate;
   handlers['callback.await']=fixture.callbackAwait;
-  handlers['log.write']=async()=>null;
+  // Match the production authenticated log-effect constraints. A historical
+  // Ista.read logged complete document JSON and failed once it exceeded 4KB.
+  const logs=[];
+  handlers['log.write']=createNativeLogEffectHandler({info:entry=>logs.push(entry)});
   const script=Buffer.from('echo harmless\n');
   handlers['storage.object_get']=createNativeStorageEffectHandler({storage:{
     bucket:()=>({file:()=>({getMetadata:async()=>[{size:script.length}],
@@ -84,6 +93,13 @@ for (const {workflow,outputTool,collectionPattern,count=1,failRead=false} of [
       assert.equal(seen.filter(x=>x.path==='/firebase/locks/release').length,1,
         'a failure after acquiring a Strider lock must release it exactly once');
       assert.deepEqual(missing,[]);
+      return;
+    }
+    if(largeStoredItem){
+      assert.equal((await store.get(executionId)).status,'completed',JSON.stringify(result));
+      assert.deepEqual(missing,[]);
+      assert.ok(logs.length>0,'authenticated log handler was exercised');
+      console.log('STRIDER_LARGE_ITEM_PASS',JSON.stringify({workflow,logs:logs.length}));
       return;
     }
     assert.equal((await store.get(executionId)).status,'completed',JSON.stringify(result));
