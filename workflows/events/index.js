@@ -187,7 +187,8 @@ router.get('/stream', async (req, res) => {
       lastSeenTime = replayItems.at(-1)?.create_time ?? since_time;
 
       console.log("[events/stream] Last seen time: ", lastSeenTime, ", since_id: ", since_id, ", since_time: ", since_time)
-      console.log("[events/stream] Replay items: ", JSON.stringify(replayItems))
+      console.info('[events/stream] replay', {workspaceId, sessionId,
+        replayCount: replayItems.length, lastSeenTime});
 
       if (sessionId) {
         // Session-scoped workspace: include only that session's events. Background flag is ignored per new model.
@@ -219,14 +220,12 @@ router.get('/stream', async (req, res) => {
         // Project-wide workspace: send *all* project events (no filtering by live sessions)
         for (const ev of replayItems) {
           sse.sendEvent(ev);
-          console.log("[events/stream] Sent event: ", JSON.stringify(ev));
           lastSeenTime = ev.create_time;
         }
         if (replayItems?.length) incCounter('relay_events_replayed_total', replayItems.length);
 
         // Subscribe to all future project events
         const unsub = await backend.subscribeProject((ev) => {
-          console.log("[events/stream] Sending event: ", JSON.stringify(ev));
           const ok = sse.sendEvent(ev);
           if (!ok) {
             incCounter('relay_events_dropped_total');
