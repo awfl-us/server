@@ -6,6 +6,8 @@ on:
       - 'workflows/tools/normalizeParameters.test.js'
       - 'jobs/llm/typedToolArguments.js'
       - 'jobs/llm/typedToolArguments.test.js'
+      - 'jobs/llm/typedToolHttp.test.js'
+      - 'jobs/llm.js'
       - '.github/workflows/test-typed-tool-enum.yml'
 permissions:
   contents: read
@@ -19,4 +21,4 @@ jobs:
         with:
           node-version: '22'
       - run: npm install --ignore-scripts --no-audit --no-fund
-      - run: node --test jobs/llm/typedToolArguments.test.js workflows/tools/normalizeParameters.test.js
+      - run: node --test jobs/llm/typedToolArguments.test.js jobs/llm/typedToolHttp.test.js workflows/tools/normalizeParameters.test.js

@@ -107,3 +107,38 @@ test('legacy Jobs /llm/chat remains unvalidated by default',async()=>{
     assert.equal(billed.length,1);
   });
 });
+
+test('Jobs validates exact provider-visible tools after stripping legacy Scala nil schema metadata',async()=>{
+  // Legacy ToolDefProperty serializes optional enum/items/required as null;
+  // the OpenAI adapter sees these stripped, so validation must use that schema.
+  const legacyProperty = (type) => ({type,properties:{},enum:null,required:null,items:null});
+  const legacyTool = {type:'function',function:{name:'READ_FILE',
+    description:'Read project file',parameters:{
+      ...legacyProperty('object'),
+      properties:{filepath:legacyProperty('string')},required:['filepath']
+    }}};
+  const validArgs={filepath:'README.md'};
+  await withRouter([toolMessage(JSON.stringify(validArgs),'READ_FILE')],async ({post,seen,billed})=>{
+    const response=await post({...request,tools:[legacyTool]});
+    assert.equal(response.status,200,JSON.stringify(response.body));
+    assert.deepEqual(seen[0].tools[0].function.parameters,{
+      type:'object',properties:{filepath:{type:'string',properties:{}}},required:['filepath']
+    });
+    assert.deepEqual(JSON.parse(response.body.message.tool_calls[0].function.arguments),validArgs);
+    assert.equal(billed.length,1);
+  });
+});
+
+test('real Jobs still rejects invalid arguments after Scala nil schema normalization',async()=>{
+  const legacyTool={type:'function',function:{name:'READ_FILE',parameters:{
+    type:'object',properties:{filepath:{type:'string',enum:null,items:null}},
+    required:['filepath'],enum:null,items:null,additionalProperties:false
+  }}};
+  await withRouter([toolMessage('{"filepath":42}','READ_FILE')],async ({post,seen,billed})=>{
+    const response=await post({...request,tools:[legacyTool]});
+    assert.equal(response.status,422);
+    assert.match(response.body.reason,/filepath: expected string/);
+    assert.equal(billed.length,1);
+    assert.equal(seen[0].tools[0].function.parameters.properties.filepath.enum,undefined);
+  });
+});
