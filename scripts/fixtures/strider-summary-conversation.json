@@ -1,0 +1,18 @@
+[
+  {
+    "role": "user",
+    "content": "Keep PostgreSQL-backed memory mode for AWFL latency. Durable mode remains deferred."
+  },
+  {
+    "role": "assistant",
+    "content": "Agreed: native Rust memory mode with PostgreSQL remains the target."
+  },
+  {
+    "role": "user",
+    "content": "The Strider reconciliation should release aggregation locks on failure."
+  },
+  {
+    "role": "assistant",
+    "content": "The lock release is now in the failure handler and is verified with a native test."
+  }
+]
