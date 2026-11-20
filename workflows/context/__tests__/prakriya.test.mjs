@@ -26,7 +26,7 @@ jest.unstable_mockModule('../../../storage/service.js', () => ({
       if (op === '<=') return data[field] <= value;
       if (op === '==') return data[field] === value;
       throw new Error(`Unexpected operator: ${op}`);
-    })).map(({ id, data }) => ({ id, path: `${collection}/${id}`, data: { ...data } }));
+    })).map(({ id, data, createdAt }) => ({ id, path: `${collection}/${id}`, data: { ...data }, createdAt }));
   },
 }));
 
@@ -112,6 +112,43 @@ describe('prakriya.buildYojMessages - WeekKala', () => {
     expect(result[3].content).toContain('Later summary');
     expect(result.every(m => !Object.keys(m).includes('create_time'))).toBe(true);
     expect(JSON.stringify(result)).not.toContain('create_time');
+  });
+
+  test('summary whose window-end timestamp is in the future precedes a later user message', async () => {
+    const base = 1795216604;
+    const first = makeDoc('m1', { create_time: base, value: { role: 'user', content: 'Hi' } });
+    const reply = makeDoc('m2', { create_time: base + 500,
+      value: { role: 'assistant', content: 'Hello' } });
+    const second = makeDoc('m3', { create_time: base + 688,
+      value: { role: 'user', content: 'Second message' } });
+    const summary = { ...makeDoc('s1', { create_time: base + 1077,
+      value: { title: 'Greeting' } }),
+      createdAt: new Date((base + 510) * 1000).toISOString() };
+    STUB_COLLECTION_DOCS.set('convo.sessions/s1/messages', [first, reply, second]);
+    STUB_COLLECTION_DOCS.set('convo.sessions/s1/summaries', [summary]);
+    const args = { userId: 'u', projectId: 'p',
+      kala: { kind: 'SegKala', sessionId: 's1', end: base + 1200,
+        windowSeconds: 1200 }, includeDocId: true };
+    const msgs = await buildYojMessages({ ...args, name: 'messages' });
+    const summaries = await buildYojMessages({ ...args, name: 'summaries' });
+    const ordered = interleaveContextMessages([...summaries, ...msgs]);
+    expect(ordered.map(m => m.docId)).toEqual(['m1', 'm2', 's1', 'm3']);
+    expect(summary.data.create_time).toBe(base + 1077);
+    expect(ordered.every(m => !Object.keys(m).includes('createdAt'))).toBe(true);
+  });
+
+  test('already-persisted summary is visible before its logical window closes', async () => {
+    const now = 1795217200;
+    STUB_COLLECTION_DOCS.set('convo.sessions/s1/summaries', [
+      { ...makeDoc('already-written', { create_time: now + 550, value: { title: 'Available' } }),
+        createdAt: new Date((now - 80) * 1000).toISOString() },
+      { ...makeDoc('written-later', { create_time: now + 600, value: { title: 'Future' } }),
+        createdAt: new Date((now + 100) * 1000).toISOString() },
+    ]);
+    const result = await buildYojMessages({ name: 'summaries',
+      kala: { kind: 'SegKala', sessionId: 's1', end: now, windowSeconds: 1200 },
+      userId: 'u', projectId: 'p', includeDocId: true });
+    expect(result.map(m => m.docId)).toEqual(['already-written']);
   });
 
   test('SegKala includes the first user message exactly on the lower boundary, without widening summary reads', async () => {
