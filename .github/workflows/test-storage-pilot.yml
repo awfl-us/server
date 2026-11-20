@@ -52,6 +52,10 @@ jobs:
         env:
           PGTEST_URL: postgres://benchmark-ci:benchmark-ci@127.0.0.1:5432/benchmark_ci
         run: node --test --test-concurrency=1 test/storage/*.test.mjs
+      - name: Verify native callbacks with real PostgreSQL
+        env:
+          PGTEST_URL: postgres://benchmark-ci:benchmark-ci@127.0.0.1:5432/benchmark_ci
+        run: node --test test/storage/nativeCallbackPostgres.test.mjs
       - name: Test finite Firestore migration codecs and missing-parent traversal
         run: python3 -m unittest discover -s scripts/migrations -p '*_test.py' -v
       - name: Verify native callback backend ownership during staged cutover
