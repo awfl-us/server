@@ -21,15 +21,23 @@ export async function listBetweenFlat(userId, projectId, collectionPath, begin, 
   const store=await getDocumentStorage();
   const where=[
     {field:'create_time',op:opts.includeBegin ? '>=' : '>',value:begin},
-    {field:'create_time',op:'<=',value:end},
+    {field:'create_time',op:'<=',value:end + (opts.publishedAheadSeconds || 0)},
   ];
   if(opts.user_id!=null&&String(opts.user_id))
     where.push({field:'user_id',op:'==',value:opts.user_id});
   const docs=await readDocuments(store,{
     collection:projectScopedCollectionPath(userId,projectId,collectionPath),where,
   });
-  docs.sort((a,b)=>a.data.create_time-b.data.create_time||a.path.localeCompare(b.path));
-  return docs.map(doc=>({id:doc.id,data:doc.data}));
+  // A summary may be written before its logical Kala end. Only expose the
+  // ahead-of-window document once it *actually exists* as of this read's end;
+  // historical reads must not pull a document created in the future.
+  const eligible = opts.publishedAheadSeconds ? docs.filter(doc => {
+    if (doc.data.create_time <= end) return true;
+    const writtenAt = Date.parse(doc.createdAt ?? '');
+    return Number.isFinite(writtenAt) && writtenAt / 1000 <= end;
+  }) : docs;
+  eligible.sort((a,b)=>a.data.create_time-b.data.create_time||a.path.localeCompare(b.path));
+  return eligible.map(doc=>({id:doc.id,data:doc.data,createdAt:doc.createdAt}));
 }
 
 export async function listBetween(userId, projectId, collectionPath, begin, end, opts={}) {
@@ -126,7 +134,11 @@ export async function buildYojMessages({ name, kala, userId, projectId, framing 
       // message is silently omitted from the initial summary. Keep the
       // existing exclusive lower bound for summary reads and all other Kala.
       documents = await listBetweenFlat(userId, projectId, convoCollection(sessionId, name), begin, end,
-        { includeBegin: name === 'messages' });
+        { includeBegin: name === 'messages',
+          // These records use the FUTURE Kala window-end as `create_time`,
+          // even when written early. Include already-persisted results from
+          // the 20-minute segment lookahead, not just matured window ends.
+          publishedAheadSeconds: ['summaries', 'topicInfos', 'topicInfo'].includes(name) ? 1200 : 0 });
       break;
     }
     case 'SessionKala': {
@@ -176,7 +188,13 @@ export async function buildYojMessages({ name, kala, userId, projectId, framing 
         msg.execId = wrapperExecId;
       }
       if (includeDocId && doc?.id) msg.docId = doc.id;
-      return timestampContextMessage(msg, datum.create_time);
+      // Kala create_time is the logical segment END. It may be in the future
+      // when the summary finishes before the segment closes. Keep that value
+      // for window/dedup queries, but order this generated system message by
+      // when its storage document was actually inserted.
+      const insertedAt = Date.parse(doc?.createdAt ?? '');
+      return timestampContextMessage(msg,
+        Number.isFinite(insertedAt) ? insertedAt / 1000 : datum.create_time);
     });
   }
 
