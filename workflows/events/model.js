@@ -1,6 +1,7 @@
 import { getDocumentStorage } from '../../storage/service.js';
 import { selectedStorageBackend } from '../../storage/factory.js';
 import { projectScopedCollectionPath } from '../utils.js';
+import { clampReplayAfter, isUnexpiredRelayEvent } from './replayFreshness.js';
 
 function env(name, def) {
   const v = process.env[name];
@@ -188,16 +189,18 @@ class DocumentEventBackend {
   }
   async queryRecent(collection,limit=100){
     const store=await getDocumentStorage();
-    const docs=await store.query({collection,orderBy:{field:'create_time',direction:'desc'},
+    const docs=await store.query({collection,
+      where:[{field:'create_time',op:'>',value:clampReplayAfter(null,this.ttlSec)}],
+      orderBy:{field:'create_time',direction:'desc'},
       limit:Math.min(Math.max(Number(limit)||100,1),1000)});
-    return docs.map(d=>d.data).reverse();
+    return docs.map(d=>d.data).filter(d=>isUnexpiredRelayEvent(d,this.ttlSec)).reverse();
   }
   async queryAfter(collection,afterTime,limit=500,{inclusive=false}={}){
     const store=await getDocumentStorage();
     const docs=await store.query({collection,where:[{field:'create_time',
-      op:inclusive?'>=':'>',value:afterTime}],orderBy:{field:'create_time',direction:'asc'},
+      op:inclusive?'>=':'>',value:clampReplayAfter(afterTime,this.ttlSec)}],orderBy:{field:'create_time',direction:'asc'},
       limit:Math.min(Math.max(Number(limit)||500,1),1000)});
-    return docs.map(d=>d.data);
+    return docs.map(d=>d.data).filter(d=>isUnexpiredRelayEvent(d,this.ttlSec));
   }
   async subscribeCollection(collection,onEvent,{after_time=null}={}) {
     const store=await getDocumentStorage();
@@ -205,14 +208,16 @@ class DocumentEventBackend {
     // A live bounded subscription must track the newest page. An ascending
     // LIMIT 1000 becomes permanently pinned to historical records once the
     // collection grows; new MCP commands and agent events are never delivered.
+    const effectiveAfter=clampReplayAfter(after_time,this.ttlSec);
     const query={collection,orderBy:{field:'create_time',direction:'desc'},limit:1000,
-      ...(after_time&&{where:[{field:'create_time',op:'>',value:after_time}]})};
+      where:[{field:'create_time',op:'>',value:effectiveAfter}]};
     return store.subscribe(query,event=>{
       if(event.type==='error'){console.error('[relay document subscribe] error',event.error);return;}
       // The SQL query selects the newest page, but deliver events in time order.
       const docs=Array.isArray(event.value)?[...event.value].reverse():[];
       for(const doc of docs){
         const record=doc.data;
+        if(!isUnexpiredRelayEvent(record,this.ttlSec))continue;
         if(seen.has(record.id))continue;
         seen.add(record.id);
         if(seen.size>3000)seen.clear();
