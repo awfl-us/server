@@ -31,17 +31,19 @@ class CompatDocument {
 // compatibility surface for Agents MCP. Fetches use bounded Storage pages,
 // never an unbounded in-memory collection scan or an extra HTTP service.
 class CompatQuery {
-  constructor(storage,path,{where=[],orderBy=null,offset=0,limit=null}={}) {
+  constructor(storage,path,{where=[],orderBy=null,offset=0,limit=null,cursor=null}={}) {
     this.storage=storage;
     this.path=path;
     this.filters=where;
     this.order=orderBy;
     this.skip=offset;
     this.take=limit;
+    this.cursor=cursor;
   }
   options(changes) {
     return new CompatQuery(this.storage,this.path,{
-      where:this.filters,orderBy:this.order,offset:this.skip,limit:this.take,...changes,
+      where:this.filters,orderBy:this.order,offset:this.skip,limit:this.take,
+      cursor:this.cursor,...changes,
     });
   }
   where(field,op,value) {
@@ -58,6 +60,12 @@ class CompatQuery {
     if(!Number.isSafeInteger(value)||value<1||value>1000) throw new RangeError('invalid query limit');
     return this.options({limit:value});
   }
+  startAfter(snapshot) {
+    const path=snapshot?.ref?.path;
+    if(typeof path!=='string'||!path.startsWith(this.path+'/'))
+      throw new TypeError('startAfter requires a document snapshot from the same collection');
+    return this.options({cursor:path});
+  }
   spec() {
     return {collection:this.path,where:this.filters,
       orderBy:this.order||{field:'__name__',direction:'asc'}};
@@ -70,7 +78,7 @@ class CompatQuery {
     if(this.take!==null && need>maxDocuments)
       throw new RangeError('query exceeds compatibility limit');
     const docs=[];
-    let startAfter;
+    let startAfter=this.cursor||undefined;
     while(docs.length<need) {
       const count=Math.min(1000,need-docs.length);
       const page=await this.storage.query({

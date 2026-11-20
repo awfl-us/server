@@ -24,11 +24,12 @@ function memoryDb() {
     };
   }
   function collection(path) {
-    const options = { order: null, descending: false, offset: 0, limit: Infinity };
+    const options = { order: null, descending: false, offset: 0, limit: Infinity, after: null };
     const query = {
       doc(id) { return doc(path + '/' + (id || `auto${nextId++}`)); },
       orderBy(field, direction = 'asc') { options.order = field; options.descending = direction === 'desc'; return this; },
       offset(value) { options.offset = value; return this; },
+      startAfter(snapshot) { options.after = snapshot.id; return this; },
       limit(value) { options.limit = value; return this; },
       where(field, op, value) { options.filter = { field, op, value }; return this; },
       async get() {
@@ -42,6 +43,11 @@ function memoryDb() {
           return (x > y ? 1 : x < y ? -1 : a.id.localeCompare(b.id)) *
             (options.descending ? -1 : 1);
         });
+        if (options.after) {
+          const index = docs.findIndex(doc => doc.id === options.after);
+          if (index < 0) throw new Error('invalid test query cursor');
+          docs = docs.slice(index + 1);
+        }
         docs = docs.slice(options.offset, options.offset + options.limit);
         return { docs, empty: docs.length === 0 };
       },
@@ -221,4 +227,31 @@ test('shared execution status lookup preserves the existing no-status HTTP disti
   const result = await latestSessionExecutions(args);
   assert.equal(result.items[0].status, 'Running');
   assert.equal(result.items[0].execId, 'exec-1');
+});
+
+test('status lookup searches past newer child executions without lifecycle status', async () => {
+  const db = memoryDb();
+  const root = 'users/owner/projects/proj/';
+  const regs = root + 'workflowExecsBySession/';
+  const statuses = root + 'workflowExecStatus/';
+  const args = { db, userId: 'owner', projectId: 'proj', sessionId: 'many-children',
+    includeMetadata: true, limit: 2 };
+  await db.doc(regs + 'foreground').set({
+    sessionId: args.sessionId, execId: 'foreground', created: 1000,
+  });
+  await db.doc(statuses + 'foreground').set({status:'Done',ended:true});
+  await db.doc(regs + 'older').set({
+    sessionId: args.sessionId, execId: 'older', created: 900,
+  });
+  await db.doc(statuses + 'older').set({status:'Failed',ended:true});
+  for(let i=0;i<125;i++){
+    const id='child-'+String(i).padStart(3,'0');
+    await db.doc(regs + id).set({
+      sessionId: args.sessionId, execId:id, created:2000+Math.floor(i/3),
+    });
+  }
+  const result = await latestSessionExecutions(args);
+  assert.equal(result.hasRegistrations, true);
+  assert.deepEqual(result.items.map(item=>[item.execId,item.status]),
+    [['foreground','Done'],['older','Failed']]);
 });
