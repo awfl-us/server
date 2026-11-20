@@ -209,7 +209,9 @@ router.post('/chat', async (req, res) => {
     let typedToolError = null;
     if (validate_tool_arguments === true) {
       try {
-        parseTypedToolCalls(message, tools);
+        // Validate the exact tools sent to the provider after stripping legacy
+        // nullable schema metadata (ToolDefProperty enum/items/required).
+        parseTypedToolCalls(message, params.tools || []);
       } catch (err) {
         typedToolError = err instanceof Error ? err.message : 'Invalid tool arguments';
       }
@@ -234,6 +236,11 @@ router.post('/chat', async (req, res) => {
     // Validation happens after inference, so the failed typed completion is
     // still billed and saved in usage accounting before returning HTTP 422.
     if (typedToolError) {
+      // Emit only schema field paths/constraint diagnostics, never raw arguments.
+      console.warn('[llm] typed tool validation failed', JSON.stringify({
+        event: 'awfl_typed_tool_validation_failed',
+        model, workflowName: workflow_name || null, reason: typedToolError
+      }));
       return res.status(422).json({
         error: 'Typed tool arguments failed validation', reason: typedToolError,
         total_cost
