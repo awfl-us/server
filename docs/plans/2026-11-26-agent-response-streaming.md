@@ -205,7 +205,13 @@ Revised design: scoped hook keyed by user/project/session, open fetch SSE as soo
 - [ ] Implement incremental foreground output, terminal reconciliation without duplicate text, scoped reconnect/error handling and clean coexistence with tool output. Maintain backwards compatibility for servers/clients without streaming.
 - [ ] Test real terminal output (including multiple concurrent sessions/continuations if supported), tool dispatch, disconnect, final usage, and legacy mode. Record tests and release compatibility matrix.
 
-Investigation record: pending.
+### Phase 7 investigation — 2026-11-26
+
+Reviewed CLI main `4127833`: consumer/sse_consumer.py, sse_parser.py, routing.py, response_handler/event_logger.py and session_state.py, utils/logging.py, main.py and execution CI. The workspace project stream executes tools under leader lease and initial GCS restore barrier; session stream logs durable content/status/cost. Do not modify either cursor semantics or project dispatch. Existing prompt_toolkit PromptSession clears/replays the last 20 log lines between prompts; log_unique prints full lines and deduplicates adjacent text, so printing each partial token as a log line would corrupt history and duplicate final text. Existing MCP output batching is unrelated.
+
+Design: separate optional session-only live SSE task started only in interactive CLI (not cloud/headless execution consumer), reuse authenticated headers and resolved project/session, no extra workspace or cursor writes, cancel on session change and shutdown; 404/503 fallback to durable logs, bounded reconnect/backoff on transport errors, auth headers refreshed each connection. Preview state keyed response/attempt and sequence, with bounded pending deltas and request-targeted snapshot assembly; do not concatenate across a gap, request reconnect on persistent gaps. PromptSession dynamic multiline message renders preview above editable input and invalidates on every accepted delta (no artificial batching); preview is transient, bounded visible tail for terminal size, safe control characters, not persisted to log_lines. Legacy content event with responseId atomically clears preview and tombstones ID before normal final logging, preserving cost/status/tools and preventing late snapshot resurrection. Failed/tool-only responses clear preview; terminal text stays until durable final or timeout. No duplicate permanent text; headless/older server behavior unchanged. Tests pure state and real aiohttp HTTP SSE, session scope switch, tool/log routing, real PTY prompt rendering if available, and existing full unittest suite. Add CI coverage. Actual live compiled agent-to-CLI remains Phase 8; production live flag stays off.
+
+
 
 ## 8. End-to-end release and observability
 
