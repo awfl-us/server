@@ -1,6 +1,6 @@
 # Agent response streaming — Responses API + PostgreSQL live events
 
-**Status (2026-11-26): Phase 1 Terra/Sol default in source; Phase 2 provider streaming live-tested; Phase 3 PostgreSQL transport benchmarked; Phase 6 web rendering implemented and Chromium-tested; CLI and end-to-end production enablement remain gated.**
+**Status (2026-11-26): Phase 1 Terra/Sol default in source; Phase 2 provider streaming live-tested; Phase 3 PostgreSQL transport benchmarked; Phase 7 CLI streaming implemented and PTY-tested; Phase 8 end-to-end release and production enablement outstanding.**
 **First milestone: migrate OpenAI to the Responses API, independently of streaming.**
 **Execution priority: memory mode; durable per-effect journaling remains deferred.**
 
@@ -213,6 +213,13 @@ Design: separate optional session-only live SSE task started only in interactive
 
 
 
+### Phase 7 implementation checkpoint — 2026-11-26
+
+- CLI main `c77dd0a8802d85a6e076254747e5878d79a50ae7`: interactive-only live SSE preview using existing resolved project/session and auth headers; independent of durable cursor and project tool dispatch. Optional `AWFL_LIVE_RESPONSES=0` disables preview. No extra subscription for headless consumers. Incremental prompt invalidation on accepted deltas, bounded eight-line/4096-character visible tail; full authoritative answer retained through existing durable log path. Sequence/attempt fences, bounded snapshots and pending deltas, scope cancellation, TTL and tombstones. No artificial text batching, no additional persistence or workspace mutation. Final durable content clears preview before logging; status/cost/tools retain existing behavior. CLI README updated.
+- Local `PYTHONPATH=src python -m unittest discover -s tests -v`: 91 passed, 0 failed, no skips (8 new tests). Real aiohttp HTTP fixture checks authentication headers, fragmented Unicode, reconnect snapshot and silent-socket scope change; 503/404 fallback preserves normal logging. PromptSession pipe-input test and real POSIX PTY subprocess verify first and second deltas visible before terminal completion, draft input retained, one final log entry and unchanged tool routing. PTY fixture uses synthetic events, not live model inference. Main execution CI and release publication now include regression suite; no new PyPI release created yet. Actual multi-session compiled inference through CLI remains Phase 8 gate.
+- Web deployment run 45849413093 failed before Chromium execution: ubuntu-latest resolved to 26.04 unsupported by Playwright 1.58.2. Web fix `0433845541ca3c6402da6a310f7cb6edff2469a2` pins ubuntu-24.04 and installs Playwright outside app dependency tree, preserving npm ci lockfile state. Retains mandatory browser gate. New deployment pending; earlier browser-image fixture passed. CI install had reported dependency audit findings; no unrelated dependency changes made, and isolated installation avoids altering tested lockfile dependencies.
+- Next: Phase 8 investigate actual topology and connection limits, commit scoped enablement/test plan, verify web/CLI CI and actual production revisions, run real agent-to-client tests and rollback checks. Production streaming is still disabled.
+
 ## 8. End-to-end release and observability
 
 - [ ] **Investigate and update plan.** Review actual deployment topology, release/publish workflows, flags, monitoring, cost and current production baselines. Document exact release order, isolated canary environment, rollout and rollback procedure; commit before rollout changes.
@@ -223,7 +230,7 @@ Investigation record: pending.
 
 ## Current checkpoint / next action
 
-Next: verify main CI/CD, serving revisions and scoped production Terra session; investigate and revise Phase 3 PostgreSQL transient bus and benchmark before implementation. Additional model families remain a compatibility follow-up before changing their routing. No database schema, infrastructure or production configuration changed. Live Terra adapter calls completed; no notification benchmarks yet. Other providers, first-class DSL streams, durable per-delta replay and additional message brokers are out of initial scope unless evidence requires revisiting them.
+Phases 1–7 implementation slices landed on main; native workflow publication and isolated provider, PostgreSQL, web Chromium and CLI PTY tests passed. Production streaming remains disabled. Phase 8 is next: investigate connection budget and deployment topology, commit rollout and rollback plan, verify current serving revisions, rerun web CI after runner fix, validate actual compiled Terra agent through PostgreSQL to web/CLI and verify production before enablement. Other model families remain on Chat Completions until independently validated. No new broker, per-delta durable writes or intentional batching.
 
 ## References
 
