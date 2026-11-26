@@ -1,0 +1,107 @@
+# Agent response streaming — Responses API + PostgreSQL live events
+
+**Status (2026-11-26): PLAN ONLY. Implementation not started.**
+**First milestone: migrate OpenAI to the Responses API, independently of streaming.**
+**Execution priority: memory mode; durable per-effect journaling remains deferred.**
+
+## Goals and decisions
+
+- Stream foreground assistant text continuously from the provider to web and eventually CLI: forward every provider text delta immediately, without intentional time/token batching. Network/provider framing may still coalesce bytes.
+- Try PostgreSQL LISTEN/NOTIFY as the transient cross-process transport. No per-delta conversation writes, relay document writes, new always-running relay, Redis, or NATS for the first implementation.
+- AWFL owns conversation history, tool execution, context selection, Kala windows, usage accounting, and lifecycle. Keep the existing workflow result and HTTP effect contract where practical; no Rust compiler/runtime changes assumed.
+- Preserve nonstreamed and structured completions and other providers. Explicitly opt in only user-facing output; never leak side-call, Strider, reasoning or raw partial tool arguments. Do not execute incomplete tool calls.
+- Persist completed assistant messages through the existing Convo/Ista path. Partial output is transient and must not enter Yoj or prompt context. A crashed producer can lose partial output; never claim durable replay.
+- Do not change production until the relevant validation gates pass. Use isolated local/CI tests and an isolated Cloud SQL benchmark; live provider canaries require a scoped budget and test session.
+
+## Mandatory investigate → revise plan → implement workflow
+
+For **every numbered phase**, first inspect the actual main-branch source, current deployment/configuration where relevant, tests, and callers (including dependent repositories). Record the reviewed commit SHAs, file paths, existing contracts, evidence and any deviations/alternatives in that phase's Investigation record. **Commit a revision to this plan before implementing that phase**, replacing provisional suggestions with the architecture that fits the code. Identify exact changes, tests, compatibility concerns, unresolved decisions, rollback and any new dependencies. Do not blindly implement the examples in this document. If investigation reveals a broader change, document why and resolve it before proceeding; avoid parallel competing abstractions. After implementation, update the plan with PR/commit links, commands/results, failures or skips, deployment status and remaining work. A phase is complete only after the evidence is recorded. Keep other repository docs in sync and link to this canonical plan.
+
+Status key: [ ] pending, [x] done. All implementation phases currently pending.
+
+## 1. OpenAI Responses API migration (nonstreaming first)
+
+- [ ] **Investigate and update plan.** Review server `jobs/providers/openai.js`, `openaiMessages.js`, `openaiCapture.js`, adapter tests, installed OpenAI SDK version, `jobs/llm.js`, `jobs/llm/{modelConfig,cost,usage,transportError,typedToolArguments}.js`, capture/diff scripts and consumers of `raw`/usage. Trace `workflow-utils` Llm/ChatMessage/Convo and the workflows EventHandler, Convo, typed Ista/Sadhaka and tool feedback paths. Inventory models and actual text/JSON/tool request shapes, including forced tool choice and existing GPT-6.1 Terra settings. Check official Responses docs and verify model capabilities with a live canary rather than assuming Chat Completions parameters carry over. Commit the revised migration design and compatibility matrix before writing code.
+- [ ] Implement Responses request conversion at the provider boundary: map history to ordered input items (roles, content, function_call and function_call_output), preserve call_id linkage, adapt tool definitions/choice, text/JSON format, max output tokens, reasoning and temperature by model. Preserve absent/null semantics, typed tool schema validation and tool errors. Explicitly evaluate Responses strict-schema defaults against existing AWFL optional/legacy tool schemas; do not silently alter them.
+- [ ] Keep AWFL's explicit, chronological Yoj-derived context authoritative; prefer stateless requests with store:false and no previous_response_id/provider-managed conversation. Investigate reasoning-item round-trip requirements for supported reasoning models (including encrypted content if needed) and document compatibility or a deliberate supported restriction. Preserve prompt caching characteristics and remove only transport-incompatible metadata, not context semantics.
+- [ ] Normalize typed output items back to the existing message/tool_calls contract, preserving function call IDs (not item IDs), complete arguments, text/null, multi-call ordering and usage. Normalize input/output/cached/reasoning token fields for cost and usage aggregation, request correlation, context capture and cache-diff diagnostics. Handle refusal, incomplete/failed responses, truncation and HTTP/provider errors explicitly; no silent successful empty completion or dispatch of partial arguments.
+- [ ] Update existing unit/mock HTTP tests (endpoint and request/response schema), tool validation, usage and capture tests; add multi-turn/multi-tool feedback and JSON/forced-tool fixtures. Test real compiled Project Manager (memory-mode path), summaries and typed Sadhaka, then live GPT-6.1 Terra with explicit budget, plus representative configured OpenAI model families. Compare prompt/cache/usage and tool behavior against baseline; do not switch unrelated providers.
+- [ ] Decide migration flag/rollback and release strategy during investigation; make Responses the intended default after parity is demonstrated. Finish and record phase 1 before enabling streaming.
+
+Investigation record: pending. Initial anchor: main currently calls client.chat.completions.create(payload); existing router expects {message, usage}, validates tools after inference and aggregates usage. Capture/diff tooling currently uses Chat Completions shapes. These are starting points, not an exhaustive inventory.
+
+## 2. Provider streaming and completion normalization
+
+- [ ] **Investigate and update plan.** Review phase 1 implementation, actual Responses SDK streaming helper/final-response behavior, typed event taxonomy, provider termination and abort semantics, adapter interfaces and runtime HTTP timeouts. Decide whether the SDK can assemble the final response directly instead of maintaining a duplicate custom tool accumulator. Commit revised design before implementation.
+- [ ] Add optional provider-neutral streaming callback/sink. Forward user-visible output_text deltas immediately, preserving order, while the request remains active. Use SDK final response or an item/content-index-aware accumulator and share normalization with nonstreaming. Handle multi-item output, tool argument fragments, refusal, failure, cancellation and incomplete completion; only final validated tools may dispatch.
+- [ ] Keep the same completed HTTP JSON response to the workflow. Do not change the DSL runtime or make browser connection ownership control inference. Retain bounded accumulated text and sequence state in producer memory for recovery; enforce memory/backpressure limits and explicit terminal state. Use one usage accounting path, no billing per delta. Ensure publisher failures do not abort inference or falsely mark an incomplete stream successful; final durable result remains authoritative.
+- [ ] Tests: exact final equivalence, immediate delta arrival before completion, split Unicode/multi-tool events, slow/failing subscriber, no text/tool leak, interrupted provider stream, usage/cost and nonstream regression. Live streaming provider canary with Terra before transport rollout.
+
+Investigation record: pending.
+
+## 3. PostgreSQL transient event bus and performance gate
+
+- [ ] **Investigate and update plan.** Inspect `storage/postgres/storage.js`, connection/pool lifecycle, Cloud SQL proxy/IAM, configured connection cap and database sizing, `workflows/events/{model,index,sse}.js`, scoped event API, and actual API/Jobs service topology (Cloud Run and GKE). Distinguish existing document subscriptions and durable event logs from a new transient path. Review notification transaction/size semantics, reconnect behavior and tenant boundaries. Commit revised transport and benchmark protocol before implementation.
+- [ ] Implement a narrow provider-neutral live-event interface with PostgreSQL implementation; share existing connection factory/lifecycle where appropriate without changing durable Storage semantics. Publish each provider delta in its own prompt commit (no long transaction or batching); persistent pooled sender(s) and dedicated autocommit LISTEN connection per active receiving process. Route by trusted user/project/session plus response ID, attempt/producer ID and monotonic sequence. Authenticate at service boundaries; never log sensitive text. Notifications are visible to database roles with access to the channel: assess role isolation and payload confidentiality; no arbitrary client access.
+- [ ] Respect PostgreSQL payload ceiling (default strictly below 8 KB in UTF-8); handle oversized events via size-only fragmentation or explicitly tested recovery, not timed coalescing. Bound queued work, memory and connection use, preserve per-response ordering, isolate slow clients, detect gaps and duplicates, reconnect/re-LISTEN. No document inserts, per-delta SELECT/replay, or durable stream cursor locks for this path.
+- [ ] Benchmark real cross-process notification latency on local PostgreSQL and existing isolated Cloud SQL benchmark database, with separate publisher/listener pools and realistic message sizes. Measure 50/100/500/1000 deltas/s, multiple concurrent sessions/Jobs/API instances, p50/p95/p99, delivered/lost/duplicate counts, backlog, CPU, connections and interference with normal workflow/document traffic. Include reconnect and slow listener scenarios. No load against production traffic. Provisional target: p95 publish-to-receive <50 ms at 100 deltas/s with no loss during healthy connection and no material regression in representative workflow latency; define concrete load and regression thresholds in investigation. If unacceptable, stop and revise transport choice rather than quietly batching or deploying new infrastructure.
+- [ ] Record actual results, commands, machine/DB configuration and limits. Unit and real Postgres integration tests (cross-process, ordering, auth-scope routing, disconnect, payload sizes and no per-delta persisted documents).
+
+Investigation record: pending. Initial anchor: existing adapter uses LISTEN/NOTIFY to trigger rereads; relay currently writes both project and session documents. Nov 16 scoped-stream benchmark measured document operations, not notification-only delivery.
+
+## 4. Workflow opt-in and message identity
+
+- [ ] **Investigate and update plan.** Inspect workflow-utils `services/Llm.scala`, `utils/Convo.scala`, `utils/Events.scala`, `ista/Convo.scala`, environment/exec IDs and Ista write identity; workflows `helpers/Convo.scala`, `EventHandler.scala`, ToolDispatcher, lifecycle/Striders, detached continuations, sideCall and background flags. Trace how persisted message IDs reach Yoj and how legacy CLI events are consumed. Commit revised minimal typed contract and identity scheme before editing Scala.
+- [ ] Add an optional user-visible streaming configuration at the LLM/conversation boundary. Explicit foreground opt-in; disable for typed JSON extraction, Sadhaka, summaries, internal/background work. Do not conflate skipAddMessages with visibility without auditing all callers. Keep existing workflow output/cost/tool dispatch semantics. Ensure each invocation/attempt has stable correlation with its final persisted message across continuation, retries and multiple completions per turn.
+- [ ] Define response.started/delta/completed/failed (names provisional), sequence, snapshot and terminal semantics. Emit completed only after the authoritative Ista message commits, or distinguish provider-finished from persisted. Retain legacy final delivery where required; avoid duplicate visible messages. Handle tool-only/empty output without a phantom assistant bubble. Failure/cancel must clear partial UI without persisting it as successful.
+- [ ] Test compiled workflows locally: text only, content + tool calls + continuation, tool-only, typed output, lock contention, detached continuations and Strider windows. Verify exactly one final persisted message per successful completion, no partial history/extra background steps, correct usage and failure propagation. Coordinate workflow-utils publishing and dependent workflow release; no compiler change unless investigation demonstrates necessity.
+
+Investigation record: pending.
+
+## 5. Session SSE, cross-replica delivery and reconnect
+
+- [ ] **Investigate and update plan.** Trace existing SSE endpoint auth, workspace heartbeat, cursors, CORS/proxies, Cloud Run request timeout/concurrency, listener lifetime, tenant filtering, browser auth and CLI routes. Determine how any API replica receives a session's live events regardless of the producing Jobs instance. Design snapshot recovery across processes; commit protocol and resource limits before implementing.
+- [ ] Expose an authenticated session-scoped SSE subscription (reuse primitives where appropriate); no workspace creation, GKE consumer startup or heartbeat mutation. Verify user/project/session access before registering and before forwarding. Subscribe before readiness signal; keep existing workspace/tool streams intact. One listener per active API process, local fan-out to authorized subscribers; no affinity requirement. Handle backpressure, abort, timeouts, auth renewal and bounded per-client state.
+- [ ] Implement explicit late-join/gap recovery across replicas. A Jobs memory map alone is not accessible to a different API replica: investigate a transient request/reply snapshot over PostgreSQL notifications (subscribe first, request by scoped ID/session, producer responds with snapshot sequence and bounded payload frames); alternatively justify an architecture-compatible recovery design. Merge snapshot and buffered later deltas without gap/duplicate; fence stale producer attempts. On producer crash or lost terminal event, reconcile with persisted Yoj/execution status and timeouts; never promise durable delta replay. Never let a client disconnect cancel an independent agent turn.
+- [ ] Integration tests with multiple real server/Jobs processes, two API replicas, same-session clients, other tenants, no active workspace, join mid-response, disconnect/reconnect, failed producer, API restart, slow clients, terminal event vs persistence race, and timeout/cleanup. Verify streaming connections close cleanly and do not pin idle infrastructure unnecessarily; document cost/concurrency implications.
+
+Investigation record: pending.
+
+## 6. Web rendering and reconciliation
+
+- [ ] **Investigate and update plan.** Inspect web `src/hooks/useTopicContextYoj.ts`, `src/pages/Sessions.tsx`, session polling, Yoj rendering/key normalization, API URL/auth helpers, and scroll logic. Determine real persisted ID availability and ordering; use existing conventions and update this plan with exact reducer/state merge and connection lifecycle before implementing.
+- [ ] Add authenticated streaming fetch/SSE parser (or existing compatible helper), sequence-aware active response overlay keyed by stable ID, snapshot recovery and final merge with persisted Yoj. Open connection before submission where possible; no workspace dependency. Forward all received deltas without artificial delay; rendering may follow normal browser scheduling. Avoid unbounded rerenders, duplicate responses, stale-session updates, phantom tool-only bubbles and leaking internal output. Poll/reload remains authoritative for summaries, tools, completion and nonstreamed paths.
+- [ ] Test reducer/parser, split UTF-8/SSE frames, duplicate/gap/out-of-order events, persisted-before-terminal and terminal-before-persisted, auth failure, reconnect/refresh, session change, multiple completions and failure. Test in Chromium against actual local server/compiled agent; preserve existing scroll behavior: follow bottom when already there; never jump if user is reading older messages. Record screenshots or trace evidence and actual first-visible-text timing.
+
+Investigation record: pending.
+
+## 7. CLI parity and compatibility
+
+- [ ] **Investigate and update plan.** Review current CLI SSE consumer and message/tool callback dispatch, filters, terminal renderer, reconnect behavior and version compatibility. Decide how to support new live response events without affecting tool execution or legacy consumers; commit revised approach before implementation.
+- [ ] Implement incremental foreground output, terminal reconciliation without duplicate text, scoped reconnect/error handling and clean coexistence with tool output. Maintain backwards compatibility for servers/clients without streaming.
+- [ ] Test real terminal output (including multiple concurrent sessions/continuations if supported), tool dispatch, disconnect, final usage, and legacy mode. Record tests and release compatibility matrix.
+
+Investigation record: pending.
+
+## 8. End-to-end release and observability
+
+- [ ] **Investigate and update plan.** Review actual deployment topology, release/publish workflows, flags, monitoring, cost and current production baselines. Document exact release order, isolated canary environment, rollout and rollback procedure; commit before rollout changes.
+- [ ] Run real compiled Project Manager using GPT-6.1 Terra and PostgreSQL memory-mode execution; multiple simultaneous sessions/Jobs/API instances; tool loop, summaries/Kala windows, typed side calls, refresh/reconnect and failure/cancellation. Exercise browser and CLI. Confirm first provider delta arrives at clients before provider completion, no intentional batching, no per-delta document storage, correct final content/cost and no duplicate tools/messages. Measure provider-first-text, publish-to-receive, receive-to-render, overall runtime, database load, dropped/gap/recovery counts and pool pressure. Compare streaming off/on against baseline; no raw content in telemetry.
+- [ ] Release independently gated server/Responses migration first; publish compatible workflow-utils and workflows, deploy server/API and web/CLI in a backwards-compatible order, enable foreground streaming through a reversible flag after canary. Verify live production with scoped test session and logs, document actual deployed versions, known limitations, rollback and ownership. Do not mark production deployed based solely on merge or CI.
+
+Investigation record: pending.
+
+## Current checkpoint / next action
+
+Next: phase 1 investigation and plan revision commit. No code, database schema, infrastructure, or production settings changed by this plan. No live API calls or notification benchmarks yet. Other providers, first-class DSL streams, durable per-delta replay and additional message brokers are out of initial scope unless evidence requires revisiting them.
+
+## References
+
+- OpenAI Responses migration: https://developers.openai.com/api/docs/guides/migrate-to-responses
+- OpenAI streaming: https://developers.openai.com/api/docs/guides/streaming-responses
+- OpenAI function calling: https://developers.openai.com/api/docs/guides/function-calling
+- PostgreSQL 15 LISTEN: https://www.postgresql.org/docs/15/sql-listen.html
+- PostgreSQL 15 NOTIFY: https://www.postgresql.org/docs/15/sql-notify.html
+- Existing benchmark: ../postgres-scoped-streams-benchmark-2026-11-16.md
+- Existing memory-mode architecture: ../../workflows/native/MEMORY.md
+- Existing reconciliation/release status: 2026-11-19-wip-old-production-release.md
