@@ -7,6 +7,13 @@ import {selectedStorageBackend} from '../../storage/factory.js';
 import {requireEnvKey} from '../crypto.js';
 
 let components;
+// Explicit project allowlist during rollout. A global rollout must separately
+// choose '*' after the connection budget is verified. Missing config fails closed.
+export function liveResponseScopeEnabled(scope,env=process.env){
+  if(env.AWFL_LIVE_RESPONSES_ENABLED!=='1'||!scope?.projectId)return false;
+  const projects=String(env.AWFL_LIVE_RESPONSES_PROJECTS||'').split(',').map(x=>x.trim()).filter(Boolean);
+  return projects.includes(scope.projectId)||projects.includes('*');
+}
 // Off by default: connection budget and production validation are release gates.
 export async function getLiveResponseComponents(){
   if(process.env.AWFL_LIVE_RESPONSES_ENABLED!=='1')return null;
@@ -34,9 +41,12 @@ async function build(){
   }catch(e){await Promise.allSettled([publisherPool.end(),listenerPool.end()]);connector?.close();throw e;}
   finally{key.fill(0);}
 }
-export async function getLiveResponseBus(){return (await getLiveResponseComponents())?.bus||null;}
+export async function getLiveResponseBus(scope){
+  if(!liveResponseScopeEnabled(scope))return null;
+  return (await getLiveResponseComponents())?.bus||null;
+}
 export async function createConfiguredResponseStream({scope}){
-  if(process.env.AWFL_LIVE_RESPONSES_ENABLED!=='1')return null;
+  if(!liveResponseScopeEnabled(scope))return null;
   if(!await authorizeResponseScope(scope,await getDocumentStorage()))return null;
   const live=await getLiveResponseComponents();
   return live?.snapshots.create({scope})||null;

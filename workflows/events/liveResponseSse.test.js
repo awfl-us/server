@@ -35,7 +35,7 @@ test('two API listeners recover a live response, forward deltas and revoke membe
   await wait(()=>hub.count===0);
 });
 
-import {getLiveResponseComponents,createConfiguredResponseStream} from './liveResponseService.js';
+import {getLiveResponseComponents,createConfiguredResponseStream,liveResponseScopeEnabled,getLiveResponseBus} from './liveResponseService.js';
 import {createPostgresConnectionOptions} from '../../storage/nativeMemory.js';
 test('live composition is off by default and shared connection options retain local and IAM guards',async()=>{
   const old=process.env.AWFL_LIVE_RESPONSES_ENABLED;
@@ -45,4 +45,20 @@ test('live composition is off by default and shared connection options retain lo
     assert.deepEqual(await createPostgresConnectionOptions({AWFL_POSTGRES_URL:'postgres://localhost/test'}),{options:{connectionString:'postgres://localhost/test'},connector:null});
     await assert.rejects(createPostgresConnectionOptions({AWFL_CLOUD_SQL_INSTANCE:'fixture',PGHOST:'localhost'}),/mutually exclusive/);
   }finally{if(old===undefined)delete process.env.AWFL_LIVE_RESPONSES_ENABLED;else process.env.AWFL_LIVE_RESPONSES_ENABLED=old;}
+});
+
+test('release allowlist is fail closed on both sides, explicit wildcard required for global rollout',async()=>{
+  const enabled={AWFL_LIVE_RESPONSES_ENABLED:'1'};
+  assert.equal(liveResponseScopeEnabled(scope,enabled),false);
+  assert.equal(liveResponseScopeEnabled(scope,{...enabled,AWFL_LIVE_RESPONSES_PROJECTS:'unrelated'}),false);
+  assert.equal(liveResponseScopeEnabled(scope,{...enabled,AWFL_LIVE_RESPONSES_PROJECTS:'other, '+scope.projectId}),true);
+  assert.equal(liveResponseScopeEnabled(scope,{...enabled,AWFL_LIVE_RESPONSES_PROJECTS:'*'}),true);
+  const previous=[process.env.AWFL_LIVE_RESPONSES_ENABLED,process.env.AWFL_LIVE_RESPONSES_PROJECTS];
+  try{
+    process.env.AWFL_LIVE_RESPONSES_ENABLED='1';process.env.AWFL_LIVE_RESPONSES_PROJECTS='unrelated';
+    assert.equal(await getLiveResponseBus(scope),null);
+    assert.equal(await createConfiguredResponseStream({scope}),null);
+  }finally{
+    for(const [i,name] of ['AWFL_LIVE_RESPONSES_ENABLED','AWFL_LIVE_RESPONSES_PROJECTS'].entries())if(previous[i]===undefined)delete process.env[name];else process.env[name]=previous[i];
+  }
 });

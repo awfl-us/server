@@ -39,5 +39,7 @@
   "AWFL_CLOUD_SQL_INSTANCE": "awfl-us:us-central1:awfl-native-storage-bench",
   "AWFL_POSTGRES_DB": "awfl_prod",
   "AWFL_POSTGRES_IAM_USER": "323709301334-compute@developer",
-  "AWFL_POSTGRES_POOL_SIZE": "3"
+  "AWFL_POSTGRES_POOL_SIZE": "3",
+  "AWFL_LIVE_RESPONSES_ENABLED": "1",
+  "AWFL_LIVE_RESPONSES_PROJECTS": "pmbench-152f82a5e40c4048ba38946a22ad094f"
 }

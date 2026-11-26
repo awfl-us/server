@@ -234,6 +234,10 @@ Release sequence: (1) baseline real Terra compiled PM on existing isolated bench
 
 
 
+### Phase 8 scoped canary preparation
+
+Baseline real production Terra session `0dd77c20-5a09-41e6-be45-bee8bf5bca42` in existing Project Manager benchmark project: completed with no execution error and 2 conversation messages, streaming disabled. Initial execution native_984476e3b6d748c1a1992345746bdaf8; last native_ccc14de7f6a008cadf7293a48e6dafb6. Authenticated SSE probe from cloud terminal using normal CLI auth returned HTTP 503 Live responses disabled (scope authorization passed). Read-only PostgreSQL baseline during workflow: 7 awfl_prod native-memory, 2 Cloud SQL admin, 1 observer. Added fail-closed project allowlist to API and Jobs; missing allowlist means no live responses even when flag set. Wildcard is explicit global opt-in, prohibited until capacity gate. 13/13 targeted tests passed. CI/CD configuration enables only existing benchmark project, not global traffic; rollback set AWFL_LIVE_RESPONSES_ENABLED=0 in tracked config and redeploy API/Jobs. Canary limited to a short sequential test with at most two listeners; verify connection headroom before testing. CI activation and actual SSE test pending. No database tier or replica changes.
+
 ## Current checkpoint / next action
 
 Phases 1–7 implementation slices landed on main; native workflow publication and isolated provider, PostgreSQL, web Chromium and CLI PTY tests passed. Production streaming remains disabled. Phase 8 is next: investigate connection budget and deployment topology, commit rollout and rollback plan, verify current serving revisions, rerun web CI after runner fix, validate actual compiled Terra agent through PostgreSQL to web/CLI and verify production before enablement. Other model families remain on Chat Completions until independently validated. No new broker, per-delta durable writes or intentional batching.

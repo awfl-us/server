@@ -17,7 +17,7 @@ export function createLiveResponseRouter({getBus,getStorage,maxClients=128,lifet
     try{
       storage=await getStorage();
       if(!await authorizeResponseScope(scope,storage))return res.status(404).json({error:'Session not found'});
-      bus=await getBus();
+      bus=await getBus(scope);
     }catch{return res.status(503).json({error:'Live responses unavailable'});}
     if(!bus)return res.status(503).json({error:'Live responses disabled'});
     if(res.destroyed)return;
