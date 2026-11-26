@@ -34,6 +34,7 @@ jobs:
       CARGO_BUILD_JOBS: '2'
       CARGO_INCREMENTAL: '0'
       PGTEST_URL: postgres://reconcile-ci:reconcile-ci@127.0.0.1:5432/awfl_reconcile
+      AWFL_REQUIRE_STREAMING_WORKFLOW: '1'
       AWFL_NATIVE_LOCAL_BUILD_REPORT: ${{ github.workspace }}/_compiler-rust/target/native-dev-generated/codebase-ProjectManager/build-report.json
     services:
       postgres:
