@@ -1,6 +1,6 @@
 # Agent response streaming — Responses API + PostgreSQL live events
 
-**Status (2026-11-26): PLAN ONLY. Implementation not started.**
+**Status (2026-11-26): Phase 1 source investigation started; migration is not enabled.**
 **First milestone: migrate OpenAI to the Responses API, independently of streaming.**
 **Execution priority: memory mode; durable per-effect journaling remains deferred.**
 
@@ -28,7 +28,18 @@ Status key: [ ] pending, [x] done. All implementation phases currently pending.
 - [ ] Update existing unit/mock HTTP tests (endpoint and request/response schema), tool validation, usage and capture tests; add multi-turn/multi-tool feedback and JSON/forced-tool fixtures. Test real compiled Project Manager (memory-mode path), summaries and typed Sadhaka, then live GPT-6.1 Terra with explicit budget, plus representative configured OpenAI model families. Compare prompt/cache/usage and tool behavior against baseline; do not switch unrelated providers.
 - [ ] Decide migration flag/rollback and release strategy during investigation; make Responses the intended default after parity is demonstrated. Finish and record phase 1 before enabling streaming.
 
-Investigation record: pending. Initial anchor: main currently calls client.chat.completions.create(payload); existing router expects {message, usage}, validates tools after inference and aggregates usage. Capture/diff tooling currently uses Chat Completions shapes. These are starting points, not an exhaustive inventory.
+### Phase 1 investigation checkpoint — 2026-11-26
+
+Reviewed trees: server 1f81db61b50d9f8477033b1f57ec95afd421eaf2; workflow-utils d7680d371a44a1e231f18700ffc535dc4ca07db6; workflows b35ffb9dccbb7733695bd610b18e42bc9c509f85. Reviewed provider, normalizer, capture, router, usage, cost, error, typed validator, model config, tests and CI; previously traced Scala Convo/EventHandler/ChatMessage. Official migration and function-calling guides confirm flat function schemas, explicit strict:false for legacy optional semantics, call_id linkage, text.format and stateless reasoning replay. Terra/Sol support reasoning.effort=none; other reasoning families need a separate compatibility decision. Legacy models listed in modelConfig include retired models: do not assume Responses support.
+
+**Revised implementation sequence (incremental, main-first CI/CD):**
+1. Introduce pure Responses request/output conversion with offline tests, preserving existing Chat Completions behavior. No production switch until canary. Existing CI deploys on every main push, so keep the new route opt-in behind a server configuration (default off) and add provider/LLM regression tests to the pre-deploy test step. No long-lived feature branches; atomic tested changes on main or short PR only if protection requires it.
+2. Use native fetch and SDK responses.create; package.json declares openai ^4.73.1 and there is no tracked lockfile in the inspected tree. Verify actually installed SDK support before changing dependencies. Keep old endpoint available as explicit rollback, not an automatic retry/fallback after a billable failure.
+3. Convert existing ordered message history without reordering system/user/assistant text and tool calls; use call_id for tool feedback, strip only metadata, flatten function schemas and explicitly preserve non-strict default. Inspect actual history shapes and model-specific parameter matrix; unsupported roles/content should fail explicitly rather than silently disappear. Use store:false, no provider-managed conversation. Initially gate reasoning-enabled tool loops that require encrypted reasoning replay until a compatible AWFL storage design or no-reasoning policy is verified; Terra/Sol with tools retain none. Do not change prompts or introduce reasoning records in Yoj in this initial slice.
+4. Normalize usage to current ChatToolResponse field names (including cached/reasoning counts), keep existing router validation and ledger, ensure billed incomplete/failed/refusal terminal responses are accounted for before returning a safe error (no partial tool dispatch). Capture exact wire payload, log normalized usage and request ID; cache diff must accept input items as well as historical messages and classify cross-protocol changes rather than treating them as empty context.
+5. Prove text, JSON, auto/forced tool, parallel tool calls and feedback with SDK mocks; run provider/LLM and cache diff tests, compiled PM local gate and scoped live Terra canary. Add actual model compatibility results before enabling. No automatic production enablement merely from a passing mock. Preserve existing native execution and other providers.
+
+**Still to verify before enabling:** installed SDK version; representative real input shapes; live model matrix; deployed configuration; reasoning replay for reasoning-enabled tools; compiled PM/Strider regression and actual usage/cache. No canary or implementation has run as of this checkpoint. The cloud consumer is initializing; use an isolated checkout to avoid touching shared work.
 
 ## 2. Provider streaming and completion normalization
 
@@ -93,7 +104,7 @@ Investigation record: pending.
 
 ## Current checkpoint / next action
 
-Next: phase 1 investigation and plan revision commit. No code, database schema, infrastructure, or production settings changed by this plan. No live API calls or notification benchmarks yet. Other providers, first-class DSL streams, durable per-delta replay and additional message brokers are out of initial scope unless evidence requires revisiting them.
+Next: phase 1 conversion slice and SDK verification after the investigation checkpoint. No code, database schema, infrastructure, or production settings changed by this plan revision. No live API calls or notification benchmarks yet. Other providers, first-class DSL streams, durable per-delta replay and additional message brokers are out of initial scope unless evidence requires revisiting them.
 
 ## References
 
