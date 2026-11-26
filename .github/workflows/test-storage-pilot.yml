@@ -5,6 +5,7 @@ on:
     paths:
       - 'storage/pilot/**'
       - 'storage/postgres/**'
+      - 'workflows/events/postgresLiveBus*.js'
       - 'test/storage/**'
       - 'scripts/benchmarks/**'
       - 'scripts/migrations/**'
@@ -15,6 +16,7 @@ on:
     paths:
       - 'storage/pilot/**'
       - 'storage/postgres/**'
+      - 'workflows/events/postgresLiveBus*.js'
       - 'test/storage/**'
       - 'scripts/benchmarks/**'
       - 'scripts/migrations/**'
