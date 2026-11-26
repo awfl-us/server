@@ -1,6 +1,6 @@
 # Agent response streaming — Responses API + PostgreSQL live events
 
-**Status (2026-11-26): Phase 1 adapter and mock tool-feedback integration tested; compiled CI and live provider gates outstanding.**
+**Status (2026-11-26): Phase 1 compiled CI and four live Terra adapter canaries passed; live native integration and cache comparison outstanding.**
 **First milestone: migrate OpenAI to the Responses API, independently of streaming.**
 **Execution priority: memory mode; durable per-effect journaling remains deferred.**
 
@@ -57,6 +57,13 @@ Reviewed trees: server 1f81db61b50d9f8477033b1f57ec95afd421eaf2; workflow-utils 
 - Local targeted run: `AWFL_DOCUMENT_STORAGE_BACKEND=firestore node --test scripts/reconcileResponsesNative.test.mjs scripts/reconcileScenario.test.mjs jobs/providers/openaiResponsesAdapter.test.js` — 11 passed, 0 failed, 1 skipped (compiled closure absent). Verified multiple function calls, feedback replay of each call ID, forced summary tool, JSON mode and one usage record per request. No real model inference.
 - Existing pre-deploy regression gate now includes the new HTTP/SDK tests; compiled Project Manager lifecycle CI also runs the full memory-mode tool/Strider case and is triggered for relevant main changes. This environment has no Scala/Rust/PostgreSQL toolchain or complete compiled closure, so the compiled gate must run in CI. The compiled case still mocks provider HTTP and storage/context fixtures: it is not live model evidence.
 - Live canary remains blocked locally: neither `OPENAI_API_KEY` nor `AWFL_STRIDER_OPENAI_API_KEY` is configured; no OpenAI-named Secret Manager entry was found. The existing Jobs application can use a configured user credential internally; do not extract a credential or change production-wide routing just to exercise a canary. Next investigate an authenticated scoped canary using that path or an explicitly supplied test credential. Production flag stays off until actual model and workflow compatibility is demonstrated.
+
+### Phase 1 live adapter and compiled CI checkpoint — 2026-11-26
+
+- [CI run 45833053928](https://github.com/awfl-us/server/actions/runs/45833053928) succeeded at `7900178`: 11 passed, 0 failed, 0 skipped. The actual compiled PM memory-mode Responses case logged `COMPILED_RESPONSES_GATE` with 16 model requests and persisted roles user → assistant → tool → assistant. Provider responses, context and tool effects were deterministic fixtures in that case.
+- Resolved the live credential blocker using the injected GCP identity, Secret Manager for the service encryption configuration, and the existing Jobs credential-loading path in an isolated process. The prior user/project scope was verified against its legacy Firestore record. No credential values logged or committed; no production conversation/usage writes (usage ledger isolated in memory). Production storage remains PostgreSQL; the credential source in this test was the existing legacy Firestore copy.
+- Four real GPT-6.1 Terra Responses calls passed via actual Jobs router and SDK, with stateless store:false: forced optional-field tool (75 tokens), stateless tool feedback (99), plain text (17), JSON object (30); all 4 usage records present; total 221 tokens, estimated $0.000381. The returned tool call ID was replayed in the next request and the expected violet value returned. Cache counts were zero for these short inputs; not a caching benchmark.
+- Next: reuse IAM-published compiled native workflow artifacts in an isolated replay fixture with real Terra inference and bounded spending, compare synthetic warm prompt caching across protocols, then decide the rollout. Production flag still off. This does not yet validate production native inference or other model families.
 
 ## 2. Provider streaming and completion normalization
 
@@ -121,7 +128,7 @@ Investigation record: pending.
 
 ## Current checkpoint / next action
 
-Next: check compiled Project Manager/Strider CI results, then run a scoped live Terra canary via an authorized test credential or existing Jobs credential path. Verify model compatibility and deployment before enabling Responses for validated models. No database schema, infrastructure or production configuration changed. No live API calls or notification benchmarks yet. Other providers, first-class DSL streams, durable per-delta replay and additional message brokers are out of initial scope unless evidence requires revisiting them.
+Next: run live Terra against the compiled workflow in an isolated fixture, compare synthetic cache behavior and verify production configuration before enabling validated models. No database schema, infrastructure or production configuration changed. Live Terra adapter calls completed; no notification benchmarks yet. Other providers, first-class DSL streams, durable per-delta replay and additional message brokers are out of initial scope unless evidence requires revisiting them.
 
 ## References
 
