@@ -1,6 +1,6 @@
 # Agent response streaming — Responses API + PostgreSQL live events
 
-**Status (2026-11-26): Phase 1 source investigation started; migration is not enabled.**
+**Status (2026-11-26): Phase 1 pure conversion slice implemented; migration is not enabled.**
 **First milestone: migrate OpenAI to the Responses API, independently of streaming.**
 **Execution priority: memory mode; durable per-effect journaling remains deferred.**
 
@@ -39,7 +39,9 @@ Reviewed trees: server 1f81db61b50d9f8477033b1f57ec95afd421eaf2; workflow-utils 
 4. Normalize usage to current ChatToolResponse field names (including cached/reasoning counts), keep existing router validation and ledger, ensure billed incomplete/failed/refusal terminal responses are accounted for before returning a safe error (no partial tool dispatch). Capture exact wire payload, log normalized usage and request ID; cache diff must accept input items as well as historical messages and classify cross-protocol changes rather than treating them as empty context.
 5. Prove text, JSON, auto/forced tool, parallel tool calls and feedback with SDK mocks; run provider/LLM and cache diff tests, compiled PM local gate and scoped live Terra canary. Add actual model compatibility results before enabling. No automatic production enablement merely from a passing mock. Preserve existing native execution and other providers.
 
-**Still to verify before enabling:** installed SDK version; representative real input shapes; live model matrix; deployed configuration; reasoning replay for reasoning-enabled tools; compiled PM/Strider regression and actual usage/cache. No canary or implementation has run as of this checkpoint. The cloud consumer is initializing; use an isolated checkout to avoid touching shared work.
+**Still to verify before enabling:** installed SDK version; representative real input shapes; live model matrix; deployed configuration; reasoning replay for reasoning-enabled tools; compiled PM/Strider regression and actual usage/cache. No live canary has run. The cloud consumer is initializing; use an isolated checkout to avoid touching shared work.
+
+**Implementation checkpoint:** Added jobs/providers/openaiResponses.js and openaiResponses.test.js as pure, unwired conversion functions. Five fixture cases executed against the same function bodies in a JavaScript isolate (ordered history, tool-only and invalid history, JSON format and strictness, final text/multi-tool usage, and terminal failure handling). Actual Node test execution and SDK verification remain pending; these fixtures are included in the main deployment's pre-deploy regression gate. Only text history is currently supported; non-text input is rejected explicitly pending caller audit. No production routing changes.
 
 ## 2. Provider streaming and completion normalization
 
@@ -104,7 +106,7 @@ Investigation record: pending.
 
 ## Current checkpoint / next action
 
-Next: phase 1 conversion slice and SDK verification after the investigation checkpoint. No code, database schema, infrastructure, or production settings changed by this plan revision. No live API calls or notification benchmarks yet. Other providers, first-class DSL streams, durable per-delta replay and additional message brokers are out of initial scope unless evidence requires revisiting them.
+Next: run the Node regression gate, inspect real history shapes and SDK support, then wire the adapter behind the disabled-by-default migration flag, update the ledger/capture diagnostic and run canaries. The pure converter is present but not invoked; no database schema, infrastructure or production configuration changed. No live API calls or notification benchmarks yet. Other providers, first-class DSL streams, durable per-delta replay and additional message brokers are out of initial scope unless evidence requires revisiting them.
 
 ## References
 

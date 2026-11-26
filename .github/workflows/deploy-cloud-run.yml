@@ -69,6 +69,7 @@ jobs:
           node --test mcp/tests/*.test.js workflows/oauth/tests/*.test.js agentsMcp/tests/*.test.js
           node --test workflows/workspace/storageTokens.test.js
           node --test observability/*.test.js
+          node --test jobs/providers/openaiResponses.test.js
 
       - name: Authenticate to Google Cloud (WIF/OIDC)
         uses: google-github-actions/auth@v2
