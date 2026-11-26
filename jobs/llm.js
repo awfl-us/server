@@ -200,14 +200,14 @@ router.post('/chat', async (req, res) => {
 
     const result = await (adapters[provider] || adapters.openai).chat(params);
 
-    const { message, usage } = result || {};
+    const { message, usage, failure } = result || {};
     const total_cost = provider === 'openai' ? estimateCost(model, usage) : null;
 
     // New typed-tool callers may explicitly opt in. Existing agent tool
     // routing and response behavior remain unchanged. Do not return or log
     // potentially sensitive raw model arguments on validation failure.
     let typedToolError = null;
-    if (validate_tool_arguments === true) {
+    if (!failure && validate_tool_arguments === true) {
       try {
         // Validate the exact tools sent to the provider after stripping legacy
         // nullable schema metadata (ToolDefProperty enum/items/required).
@@ -231,6 +231,12 @@ router.post('/chat', async (req, res) => {
       });
     } catch (e) {
       console.warn('[llm] incrementUsage failed (non-fatal):', e?.message || e);
+    }
+
+    // Responses can return a billable terminal failure with HTTP 200 upstream.
+    // Account for it once, then fail closed without returning partial tools.
+    if (failure) {
+      return res.status(502).json({ error: 'LLM response did not complete successfully', code: failure, total_cost });
     }
 
     // Validation happens after inference, so the failed typed completion is

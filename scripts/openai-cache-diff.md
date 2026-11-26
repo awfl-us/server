@@ -47,3 +47,7 @@ The baseline after chronological TopicContext ordering was **13,172 cached / 90,
 4. **Not everything is explained by the diffs.** Requests 2 and 3 had about 15k estimated identical JSON-message tokens before the first change, but OpenAI reported only 3,293 cached tokens. Cache reads happen at eligible stored breakpoints on the machines handling requests, not automatically at every shared token. Current GPT-5.6+ implicit caching defaults to the last eligible message, so moving/removing a trailing marker can prevent reuse of the newer, longer prefix even if an earlier segment still matches. Evaluate stable explicit breakpoints with telemetry before attributing all misses to historical edits.
 
 No production config changes are made by the script.
+
+## Responses API captures
+
+The diagnostic accepts both Chat Completions `messages` and Responses `input` items. Reported message counts refer to wire items for Responses, including function calls and outputs. Cross-protocol comparisons are explicitly labeled as protocol changes; cache-prefix estimates must not be interpreted as a directly comparable token prefix. The adapter retains normalized usage fields and exact request captures. See `docs/plans/2026-11-26-agent-response-streaming.md` for the migration gate.

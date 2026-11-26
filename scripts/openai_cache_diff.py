@@ -111,6 +111,11 @@ def canonical(value):
 def category(message):
     if not isinstance(message, dict):
         return 'non-message'
+    kind = message.get('type')
+    if kind == 'function_call':
+        return 'assistant-tool-call'
+    if kind == 'function_call_output':
+        return 'synthetic-missing-tool-result' if message.get('output') == 'Tool call failed to respond' else 'tool'
     role = message.get('role') or 'unknown'
     content = message.get('content')
     if isinstance(content, str):
@@ -173,8 +178,17 @@ def token_estimator():
         return (lambda obj: (len(canonical(obj)) + 3) // 4), 'JSON chars/4 estimate (NOT actual model tokenization)'
 
 
+def request_protocol(payload):
+    return 'responses' if 'input' in payload else 'chat_completions'
+
+
+def request_items(payload):
+    items = payload.get('input') if request_protocol(payload) == 'responses' else payload.get('messages')
+    return items if isinstance(items, list) else ([items] if isinstance(items, str) else [])
+
+
 def analyze_pair(old, new, estimate):
-    a, b = old.get('messages') or [], new.get('messages') or []
+    a, b = request_items(old), request_items(new)
     common = 0
     for left, right in zip(a, b):
         if left != right:
@@ -182,8 +196,8 @@ def analyze_pair(old, new, estimate):
         common += 1
     prior_tools = old.get('tools') or []
     next_tools = new.get('tools') or []
-    all_options = sorted((set(old) | set(new)) - {'messages', 'tools'})
-    option_changes = [key for key in all_options if key not in ('messages','tools') and old.get(key) != new.get(key)]
+    all_options = sorted((set(old) | set(new)) - {'messages', 'input', 'tools'})
+    option_changes = [key for key in all_options if old.get(key) != new.get(key)]
     hashes_a = [hashlib.sha256(canonical(m).encode()).hexdigest() for m in a]
     hashes_b = [hashlib.sha256(canonical(m).encode()).hexdigest() for m in b]
     edit_ops = []
@@ -197,7 +211,8 @@ def analyze_pair(old, new, estimate):
         if operation == 'replace' and ai < aj and bi < bj:
             edits['fields'] = field_differences(a[ai], b[bi])
         edit_ops.append(edits)
-    return {'common_messages': common, 'old_message_count': len(a),
+    return {'protocol_changed': request_protocol(old) != request_protocol(new),
+        'common_messages': common, 'old_message_count': len(a),
         'old_ending_category': category(a[-1]) if a else None,
         'new_message_count': len(b),
         'common_message_prefix_tokens_approx': estimate(a[:common]),
@@ -207,6 +222,8 @@ def analyze_pair(old, new, estimate):
 
 
 def classify(pair):
+    if pair.get('protocol_changed'):
+        return 'request protocol changed; cache prefixes are not directly comparable'
     if pair['request_option_changes'] or not pair['tools_unchanged']:
         return 'model/tool configuration changed'
     edits = pair['edits']
@@ -231,7 +248,7 @@ def build_report(usage, captures):
     estimate, estimator_name = token_estimator()
     calls = []
     for item, capture in zip(usage, captures):
-        calls.append({**item, 'message_count': len(capture.get('messages') or []),
+        calls.append({**item, 'message_count': len(request_items(capture)), 'protocol': request_protocol(capture),
             'tools_count': len(capture.get('tools') or [])})
     comparisons = []
     for i in range(1, len(usage)):

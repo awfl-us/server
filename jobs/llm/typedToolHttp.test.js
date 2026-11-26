@@ -30,7 +30,8 @@ async function withRouter(responses, action) {
     apiKeyForUser: async () => 'fake-test-key',
     adapters: {openai:{chat: async params => {
       seen.push(params);
-      return {message:responses[Math.min(index++,responses.length-1)],usage};
+      const response = responses[Math.min(index++,responses.length-1)];
+      return response?.failure ? response : {message:response,usage};
     }}},
     recordUsage: async entry => {billed.push(entry);}
   }));
@@ -140,5 +141,16 @@ test('real Jobs still rejects invalid arguments after Scala nil schema normaliza
     assert.match(response.body.reason,/filepath: expected string/);
     assert.equal(billed.length,1);
     assert.equal(seen[0].tools[0].function.parameters.properties.filepath.enum,undefined);
+  });
+});
+
+test('Jobs accounts for terminal provider failure without returning partial tools', async()=>{
+  await withRouter([{failure:'response_not_completed',message:toolMessage(JSON.stringify(valid)),usage}],async ({post,billed})=>{
+    const response=await post(request);
+    assert.equal(response.status,502);
+    assert.equal(response.body.code,'response_not_completed');
+    assert.equal(response.body.message,undefined);
+    assert.equal(billed.length,1);
+    assert.deepEqual(billed[0].usage,usage);
   });
 });

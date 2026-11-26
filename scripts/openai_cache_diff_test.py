@@ -66,6 +66,17 @@ class CacheDiffTests(unittest.TestCase):
         self.assertNotIn('Summary content', rendered)
         self.assertIn('context-intro', rendered)
 
+    def test_responses_input_and_protocol_transition(self):
+        first = {'input': [msg('system', 'fixed'), msg('user', 'request')], 'store': False}
+        second = {'input': first['input'] + [{'type': 'function_call', 'call_id': 'id'},
+            {'type': 'function_call_output', 'call_id': 'id', 'output': 'private'}], 'store': False}
+        pair = mod.analyze_pair(first, second, self.estimate)
+        self.assertEqual(pair['common_messages'], 2)
+        self.assertEqual(pair['new_message_count'], 4)
+        self.assertEqual(mod.classify(pair), 'append-only: cache-friendly')
+        self.assertEqual(mod.classify(mod.analyze_pair({'messages': first['input']}, first, self.estimate)),
+            'request protocol changed; cache prefixes are not directly comparable')
+
     def test_usage_parse_order_and_model_filter(self):
         entries = [
             {'timestamp': '2026-11-18T17:00:02Z', 'jsonPayload': {

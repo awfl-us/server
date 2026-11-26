@@ -1,6 +1,6 @@
 # Agent response streaming — Responses API + PostgreSQL live events
 
-**Status (2026-11-26): Phase 1 pure conversion slice implemented; migration is not enabled.**
+**Status (2026-11-26): Phase 1 gated Responses adapter implemented and locally tested; migration is not enabled.**
 **First milestone: migrate OpenAI to the Responses API, independently of streaming.**
 **Execution priority: memory mode; durable per-effect journaling remains deferred.**
 
@@ -17,7 +17,7 @@
 
 For **every numbered phase**, first inspect the actual main-branch source, current deployment/configuration where relevant, tests, and callers (including dependent repositories). Record the reviewed commit SHAs, file paths, existing contracts, evidence and any deviations/alternatives in that phase's Investigation record. **Commit a revision to this plan before implementing that phase**, replacing provisional suggestions with the architecture that fits the code. Identify exact changes, tests, compatibility concerns, unresolved decisions, rollback and any new dependencies. Do not blindly implement the examples in this document. If investigation reveals a broader change, document why and resolve it before proceeding; avoid parallel competing abstractions. After implementation, update the plan with PR/commit links, commands/results, failures or skips, deployment status and remaining work. A phase is complete only after the evidence is recorded. Keep other repository docs in sync and link to this canonical plan.
 
-Status key: [ ] pending, [x] done. All implementation phases currently pending.
+Status key: [ ] pending, [x] done. Phase 1 in progress; phases 2–8 pending.
 
 ## 1. OpenAI Responses API migration (nonstreaming first)
 
@@ -41,7 +41,15 @@ Reviewed trees: server 1f81db61b50d9f8477033b1f57ec95afd421eaf2; workflow-utils 
 
 **Still to verify before enabling:** installed SDK version; representative real input shapes; live model matrix; deployed configuration; reasoning replay for reasoning-enabled tools; compiled PM/Strider regression and actual usage/cache. No live canary has run. The cloud consumer is initializing; use an isolated checkout to avoid touching shared work.
 
-**Implementation checkpoint:** Added jobs/providers/openaiResponses.js and openaiResponses.test.js as pure, unwired conversion functions. Five fixture cases executed against the same function bodies in a JavaScript isolate (ordered history, tool-only and invalid history, JSON format and strictness, final text/multi-tool usage, and terminal failure handling). Actual Node test execution and SDK verification remain pending; these fixtures are included in the main deployment's pre-deploy regression gate. Only text history is currently supported; non-text input is rejected explicitly pending caller audit. No production routing changes.
+**Implementation checkpoint:** Added jobs/providers/openaiResponses.js and openaiResponses.test.js as pure, unwired conversion functions. Five fixture cases executed against the same function bodies in a JavaScript isolate (ordered history, tool-only and invalid history, JSON format and strictness, final text/multi-tool usage, and terminal failure handling). Actual Node execution passed 5/5 in the isolated server worktree; the fixtures are included in the main deployment pre-deploy regression gate. Only text history is currently supported; non-text input is rejected explicitly pending caller audit. No production routing changes.
+
+### Phase 1 adapter checkpoint — 2026-11-26
+
+- Main conversion commit: 3852a39c68a1aae4e656605623ab9071166bd87e. Installed the existing dependency range in an isolated detached worktree; OpenAI SDK resolved to 4.104.0 with both responses.create and responses.stream present. No dependency upgrade required for this slice.
+- Adapter now selects Responses only when AWFL_OPENAI_RESPONSES_MODELS includes gpt-6.1-terra or gpt-6-sol; empty/unset retains Chat Completions. Both use the existing no-reasoning tool mode. Rollback is removal from this server setting, not an automatic second inference. No production configuration changed. Other models retain the current route pending compatibility investigation.
+- Captures retain exact wire payload; normalized usage and request IDs follow existing logging. Cache diagnostics support both messages and input and explicitly identify protocol transitions. Terminal provider failures retain billed usage and return HTTP 502 without dispatchable tools. Added pre-deploy regression gate on main.
+- Tests: AWFL_DOCUMENT_STORAGE_BACKEND=firestore node --test jobs/providers/openai*.test.js jobs/llm/*.test.js jobs/llm/*.test.mjs — 35 passed, 0 failed, 1 skipped (Scala-generated typed tool schema fixture absent). python3 scripts/openai_cache_diff_test.py — 6 passed. Mock SDK HTTP test verifies /v1/responses, tool call IDs, strict false, store false, and usage. git diff --check passed. Node 20.19.2 in GKE; CI uses Node 22.
+- Remaining: real context shapes, live Terra tool and feedback/JSON canaries, Scala-generated tool schema and compiled Project Manager lifecycle integration, additional model families and cache/usage comparison. No live inference or production migration verified. Phase 1 remains open.
 
 ## 2. Provider streaming and completion normalization
 
@@ -106,7 +114,7 @@ Investigation record: pending.
 
 ## Current checkpoint / next action
 
-Next: run the Node regression gate, inspect real history shapes and SDK support, then wire the adapter behind the disabled-by-default migration flag, update the ledger/capture diagnostic and run canaries. The pure converter is present but not invoked; no database schema, infrastructure or production configuration changed. No live API calls or notification benchmarks yet. Other providers, first-class DSL streams, durable per-delta replay and additional message brokers are out of initial scope unless evidence requires revisiting them.
+Next: inspect real history shapes, run compiled Project Manager and Strider fixtures plus a scoped live Terra canary, verify model compatibility and deployment, then explicitly enable Responses for validated models. No database schema, infrastructure or production configuration changed. No live API calls or notification benchmarks yet. Other providers, first-class DSL streams, durable per-delta replay and additional message brokers are out of initial scope unless evidence requires revisiting them.
 
 ## References
 
