@@ -34,6 +34,12 @@ export function useResponses(model, configured = process.env.AWFL_OPENAI_RESPONS
   return validatedResponsesModels.includes(model) && configured.split(',').map(s => s.trim()).includes(model);
 }
 
+export function supportsResponseStreaming(params) {
+  return useResponses(params.model) &&
+    (!params.response_format || params.response_format.type === 'text') &&
+    (params.tool_choice == null || ['auto','none'].includes(params.tool_choice));
+}
+
 export async function chat(params, { fetch = globalThis.fetch, onDelta } = {}) {
   // Retain native fetch: node-fetch prematurely closes compressed GKE replies.
   const client = new OpenAI({ apiKey: params.apiKey, fetch });
@@ -42,9 +48,7 @@ export async function chat(params, { fetch = globalThis.fetch, onDelta } = {}) {
   const payload = responses ? buildResponsesPayload({ ...params, messages: legacy.messages,
     tools: legacy.tools, tool_choice: legacy.tool_choice, response_format: legacy.response_format },
     { reasoningEffort: legacy.reasoning_effort, temperature: legacy.temperature }) : legacy;
-  const streaming = responses && typeof onDelta === 'function' &&
-    (!payload.text?.format || payload.text.format.type === 'text') &&
-    typeof payload.tool_choice !== 'object' && payload.tool_choice !== 'required';
+  const streaming = typeof onDelta === 'function' && supportsResponseStreaming(params);
   if (streaming) payload.stream = true;
   const capture = captureOpenAiRequest(payload);
   const started = Date.now();

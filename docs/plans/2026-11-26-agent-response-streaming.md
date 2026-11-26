@@ -1,6 +1,6 @@
 # Agent response streaming — Responses API + PostgreSQL live events
 
-**Status (2026-11-26): Phase 1 Terra/Sol default in source; Phase 2 provider streaming live-tested; Phase 3 PostgreSQL transport implemented and benchmarked; production and workflow wiring outstanding.**
+**Status (2026-11-26): Phase 1 Terra/Sol default in source; Phase 2 provider streaming live-tested; Phase 3 PostgreSQL transport benchmarked; Phase 4 Jobs lifecycle implemented; Scala wiring and production verification outstanding.**
 **First milestone: migrate OpenAI to the Responses API, independently of streaming.**
 **Execution priority: memory mode; durable per-effect journaling remains deferred.**
 
@@ -136,6 +136,12 @@ Revised sequence: server slice first, then compile/publish workflow-utils and re
 Router accepts an injected response-stream factory; synchronous callbacks enqueue one event per provider delta, assign contiguous AWFL sequence numbers (provider numbers can skip hidden events), never await transport in model loop. Emit started, delta, provider_finished or failed; provider_finished means validated inference only, never Ista persistence. Router assigns responseId to successful final message (not provider input), including on transport failure so final durable history can reconcile. Persist responseId in helpers/Convo ChatMessage; optional responseId in legacy final event is emitted after Ista succeeds for CLI reconciliation. No extra mandatory HTTP effect for completion. Tool-only response must not create a visible bubble. Side calls never publish or emit legacy content; other background tool/status behavior retained. A missing or failing transport leaves ordinary completion and accounting intact. No snapshot registry in this slice; Phase 5 handles gap recovery and bounded snapshots, attempt fencing, membership and real connection composition.
 
 Test actual Jobs SDK/route with fake bus, visibility/legacy/structured/forced gates, immediate delivery, failure/validation/usage, contiguous sequence and identity preserved by history serialization; compile Scala changes and exercise existing native lifecycle fixture (foreground flags, all side calls false, persisted ID and legacy event correlation). Existing lightweight consumer lacks JVM/sbt; use isolated worktrees and CI source gates, do not publish uncompiled changes or replace deployed artifacts prematurely.
+
+### Phase 4 server checkpoint — 2026-11-26
+
+- Added optional `stream_response` at Jobs LLM route, injected `responseStreamFactory`, and `jobs/llm/responseStream.js` lifecycle. No production factory or routing enabled. Server-owned scope and UUIDs, contiguous sequence, text-only delta publication, provider_finished after validation/accounting, failed on provider/typed validation failures. Transport rejects do not abort inference. Successful message carries responseId; all provider history strips responseId. No extra persistence effect. Snapshot state is still Phase 5 work.
+- Actual SDK/Jobs fixture tests plus provider regressions: 25 passed, 0 failed, 0 skipped. Validates explicit opt-in, exclusions, correlation, failure and accounting; uses mock provider and bus. Production enablement and native workflow persistence tests pending. Phase 3 storage pilot CI succeeded ([run 45836462260](https://github.com/awfl-us/server/actions/runs/45836462260)).
+- Next: workflow-utils source compatibility changes; validate via Scala CI, publish next utility release only after compile succeeds, then update workflow caller/persistence/relay and run compiled gate. No change to existing production Scala artifacts until verification.
 
 ## 5. Session SSE, cross-replica delivery and reconnect
 

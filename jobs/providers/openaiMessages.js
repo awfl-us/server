@@ -10,7 +10,7 @@ export function toOpenAiMessages(messages) {
     if (!message || typeof message !== 'object' || Array.isArray(message)) {
       return message;
     }
-    const { create_time, docId, ...openAiMessage } = message;
+    const { create_time, docId, responseId, ...openAiMessage } = message;
     return openAiMessage;
   });
 }

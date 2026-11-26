@@ -5,6 +5,7 @@ import { decryptString } from '../workflows/crypto.js';
 
 // Provider adapters
 import openaiAdapter from './providers/openai.js';
+import { supportsResponseStreaming } from './providers/openai.js';
 import anthropicAdapter from './providers/anthropic.js';
 import geminiAdapter from './providers/gemini.js';
 import grokAdapter from './providers/grok.js';
@@ -100,7 +101,8 @@ export function createLlmRouter({
   apiKeyForUser = getApiKeyForUser,
   adapters = {openai: openaiAdapter, anthropic: anthropicAdapter,
     gemini: geminiAdapter, grok: grokAdapter, deepseek: deepseekAdapter},
-  recordUsage = incrementUsage
+  recordUsage = incrementUsage,
+  responseStreamFactory = null
 } = {}) {
 const router = express.Router();
 
@@ -155,13 +157,14 @@ router.get('/models', (_req, res) => {
 });
 
 router.post('/chat', async (req, res) => {
+  let liveResponse = null;
   try {
     const userId = await getUserIdFromReq(req);
     if (!userId) {
       return res.status(401).json({ error: 'Unauthorized: missing or invalid user' });
     }
 
-    const { messages, model = 'gpt-4', temperature = 0.7, max_tokens, max_completion_tokens, response_format, tools, tool_choice, sessionId, workflow_name, validate_tool_arguments = false } = req.body || {};
+    const { messages, model = 'gpt-4', temperature = 0.7, max_tokens, max_completion_tokens, response_format, tools, tool_choice, sessionId, workflow_name, validate_tool_arguments = false, stream_response = false } = req.body || {};
 
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: 'Missing or invalid "messages" array in request body.' });
@@ -190,7 +193,7 @@ router.post('/chat', async (req, res) => {
     const params = stripNullsDeep({
       apiKey,
       model,
-      messages,
+      messages: messages.map(m=>{if(!m||typeof m!=='object'||Array.isArray(m))return m;const {responseId,...wire}=m;return wire;}),
       temperature: fixed_temperature(model, temperature),
       max_tokens: resolvedMaxTokens,
       response_format,
@@ -198,7 +201,16 @@ router.post('/chat', async (req, res) => {
       tool_choice
     });
 
-    const result = await (adapters[provider] || adapters.openai).chat(params);
+    if (responseStreamFactory && stream_response === true && provider === 'openai' &&
+        supportsResponseStreaming(params) && typeof sessionId === 'string' && sessionId && req.projectId) {
+      try {
+        liveResponse = await responseStreamFactory({scope:{userId,projectId:req.projectId,sessionId}});
+      } catch {
+        // Live transport is optional; preserve the normal inference path.
+        console.warn('[llm] response stream unavailable');
+      }
+    }
+    const result = await (adapters[provider] || adapters.openai).chat(params, liveResponse ? {onDelta:liveResponse.onDelta} : undefined);
 
     const { message, usage, failure } = result || {};
     const total_cost = provider === 'openai' ? estimateCost(model, usage) : null;
@@ -236,12 +248,14 @@ router.post('/chat', async (req, res) => {
     // Responses can return a billable terminal failure with HTTP 200 upstream.
     // Account for it once, then fail closed without returning partial tools.
     if (failure) {
+      liveResponse?.fail(failure);
       return res.status(502).json({ error: 'LLM response did not complete successfully', code: failure, total_cost });
     }
 
     // Validation happens after inference, so the failed typed completion is
     // still billed and saved in usage accounting before returning HTTP 422.
     if (typedToolError) {
+      liveResponse?.fail('invalid_tool_arguments');
       // Emit only schema field paths/constraint diagnostics, never raw arguments.
       console.warn('[llm] typed tool validation failed', JSON.stringify({
         event: 'awfl_typed_tool_validation_failed',
@@ -252,8 +266,15 @@ router.post('/chat', async (req, res) => {
         total_cost
       });
     }
-    res.status(200).json({ message, usage, total_cost });
+    if(liveResponse && message) {
+      liveResponse.finish(message);
+      res.status(200).json({ message:{...message,responseId:liveResponse.responseId}, usage, total_cost });
+    } else {
+      liveResponse?.fail('empty_response');
+      res.status(200).json({ message, usage, total_cost });
+    }
   } catch (error) {
+    liveResponse?.fail('provider_error');
     // Do not log the provider error object wholesale: it can contain
     // response headers (including cookies). Keep searchable safe fields.
     console.error('[llm] chat failed', JSON.stringify({
