@@ -1,4 +1,4 @@
-// Pure transport conversion; not wired to the live adapter until the migration gate passes.
+// Pure transport conversion shared by the non-streaming and future streaming adapter.
 // AWFL history is authoritative; reasoning-item replay for reasoning-enabled tool loops is a later compatibility gate.
 export function toResponsesInput(messages) {
   if (!Array.isArray(messages)) throw new TypeError('Responses history must be an array');

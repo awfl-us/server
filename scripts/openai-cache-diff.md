@@ -51,3 +51,7 @@ No production config changes are made by the script.
 ## Responses API captures
 
 The diagnostic accepts both Chat Completions `messages` and Responses `input` items. Reported message counts refer to wire items for Responses, including function calls and outputs. Cross-protocol comparisons are explicitly labeled as protocol changes; cache-prefix estimates must not be interpreted as a directly comparable token prefix. The adapter retains normalized usage fields and exact request captures. See `docs/plans/2026-11-26-agent-response-streaming.md` for the migration gate.
+
+### November 26 live protocol comparison
+
+A synthetic 3,668-token Terra input was sent three times per API with an unchanged system prefix and a changing trailing user trial. Both protocols reported 0, 3,654, 3,654 cached input tokens. This verifies within-protocol warm cache accounting; it is not a production cache benchmark and does not prove cross-protocol cache sharing.

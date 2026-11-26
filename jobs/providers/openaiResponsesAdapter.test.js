@@ -2,10 +2,22 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chat, useResponses } from './openai.js';
 
-test('Responses canary is explicitly enabled per supported model', () => {
+test('Responses defaults to validated models and supports explicit rollback', () => {
   assert.equal(useResponses('gpt-6.1-terra', ''), false);
   assert.equal(useResponses('gpt-6.1-terra', 'gpt-6-sol, gpt-6.1-terra'), true);
   assert.equal(useResponses('gpt-5.5', 'gpt-5.5'), false);
+  const previous=process.env.AWFL_OPENAI_RESPONSES_MODELS;
+  try {
+    delete process.env.AWFL_OPENAI_RESPONSES_MODELS;
+    assert.equal(useResponses('gpt-6.1-terra'), true);
+    assert.equal(useResponses('gpt-6-sol'), true);
+    assert.equal(useResponses('gpt-4o-mini'), false);
+    process.env.AWFL_OPENAI_RESPONSES_MODELS='';
+    assert.equal(useResponses('gpt-6.1-terra'), false);
+  } finally {
+    if(previous===undefined) delete process.env.AWFL_OPENAI_RESPONSES_MODELS;
+    else process.env.AWFL_OPENAI_RESPONSES_MODELS=previous;
+  }
 });
 
 test('Responses SDK request and normalization preserve AWFL tool contract', async () => {

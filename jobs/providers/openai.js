@@ -25,11 +25,12 @@ export function buildChatPayload(params) {
   });
 }
 
-// Initially opt in only models whose no-reasoning tool configuration is
-// already supported by AWFL. No fallback retry after a provider request.
-const responsesCanaryModels = new Set(['gpt-6.1-terra', 'gpt-6-sol']);
-export function useResponses(model, configured = process.env.AWFL_OPENAI_RESPONSES_MODELS || '') {
-  return responsesCanaryModels.has(model) && configured.split(',').map(s => s.trim()).includes(model);
+// Validated models use Responses by default on both Cloud Run and native Jobs.
+// An explicitly empty environment override restores Chat Completions.
+// No fallback retry after a provider request.
+const validatedResponsesModels = ['gpt-6.1-terra', 'gpt-6-sol'];
+export function useResponses(model, configured = process.env.AWFL_OPENAI_RESPONSES_MODELS ?? validatedResponsesModels.join(',')) {
+  return validatedResponsesModels.includes(model) && configured.split(',').map(s => s.trim()).includes(model);
 }
 
 export async function chat(params, { fetch = globalThis.fetch } = {}) {

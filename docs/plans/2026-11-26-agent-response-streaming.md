@@ -1,6 +1,6 @@
 # Agent response streaming — Responses API + PostgreSQL live events
 
-**Status (2026-11-26): Phase 1 compiled CI and four live Terra adapter canaries passed; live native integration and cache comparison outstanding.**
+**Status (2026-11-26): Phase 1 Terra/Sol live validation passed; Responses default enabled in source, production deployment verification pending.**
 **First milestone: migrate OpenAI to the Responses API, independently of streaming.**
 **Execution priority: memory mode; durable per-effect journaling remains deferred.**
 
@@ -65,6 +65,15 @@ Reviewed trees: server 1f81db61b50d9f8477033b1f57ec95afd421eaf2; workflow-utils 
 - Four real GPT-6.1 Terra Responses calls passed via actual Jobs router and SDK, with stateless store:false: forced optional-field tool (75 tokens), stateless tool feedback (99), plain text (17), JSON object (30); all 4 usage records present; total 221 tokens, estimated $0.000381. The returned tool call ID was replayed in the next request and the expected violet value returned. Cache counts were zero for these short inputs; not a caching benchmark.
 - Next: reuse IAM-published compiled native workflow artifacts in an isolated replay fixture with real Terra inference and bounded spending, compare synthetic warm prompt caching across protocols, then decide the rollout. Production flag still off. This does not yet validate production native inference or other model families.
 
+### Phase 1 live native and release checkpoint — 2026-11-26
+
+- Live memory-mode PM: downloaded and SHA-256 verified 27 IAM-published active Rust artifacts (root `ad2ce7987be79c1dc5df1ac1f159f8b60bf7c1766b1fdba32f26ad773904776d`). Initial local run failed before inference because the harness omitted `GCP_PROJECT`; corrected to `GCP_PROJECT=awfl-us`, as the existing reconciliation runner does. No provider cost or production changes on that attempt.
+- Corrected run completed in 19,675 ms with 16 actual GPT-6.1 Terra Responses requests, all HTTP 200, no failed lanes, no missing fixture calls, no detached drain error. Foreground READ_FILE and feedback succeeded; typed summaries, topicInfos and collapsed side calls succeeded. Persisted fixture roles: user, assistant, tool, assistant. Answer referenced debug. Estimated cost $0.022208. Used bounded 24-call/1024-output-token/$0.50 conservative budget, in-memory local workflow state, synthetic tool/context callbacks; no real tool actions or production conversation writes. This is not yet an end-to-end production PostgreSQL test.
+- Synthetic cache comparison (three requests per protocol, fixed 3668-token prompt with changed trailing user trial): Chat Completions and Responses both reported 0 cached tokens initially and 3654 on both subsequent requests (~99.6% warm). Total estimated cost $0.0082578. Does not establish production cache rates or cross-protocol cache sharing.
+- GPT-6 Sol passed the same four live adapter canaries as Terra (forced optional-field function, tool feedback, text, JSON; 221 tokens, $0.000762). Total cost of all live calls across this checkpoint and previous checkpoint: $0.0316088 (estimated by existing ledger).
+- Release decision: default Responses for validated `gpt-6.1-terra` and `gpt-6-sol` in the common provider adapter, so Cloud Run and GKE use the same source without duplicating deployment-specific flags. An explicit empty `AWFL_OPENAI_RESPONSES_MODELS` restores legacy behavior; comma-separated subset can select a single validated model. Other models remain on Chat Completions until their compatibility and reasoning replay are verified. No automatic retry through the old API. This is the staged first release, not a blanket migration of all historical model IDs.
+- Final local regression: 44 JS passed, 0 failed, 2 skipped (Scala/compiled artifacts absent); 6 Python passed, 0 failed. Earlier compiled CI 11 passed with no skips. Main push triggers deployment; verify actual serving revisions and production test session before marking initial release complete. Phase 2 investigation may proceed without enabling user-visible streaming.
+
 ## 2. Provider streaming and completion normalization
 
 - [ ] **Investigate and update plan.** Review phase 1 implementation, actual Responses SDK streaming helper/final-response behavior, typed event taxonomy, provider termination and abort semantics, adapter interfaces and runtime HTTP timeouts. Decide whether the SDK can assemble the final response directly instead of maintaining a duplicate custom tool accumulator. Commit revised design before implementation.
@@ -128,7 +137,7 @@ Investigation record: pending.
 
 ## Current checkpoint / next action
 
-Next: run live Terra against the compiled workflow in an isolated fixture, compare synthetic cache behavior and verify production configuration before enabling validated models. No database schema, infrastructure or production configuration changed. Live Terra adapter calls completed; no notification benchmarks yet. Other providers, first-class DSL streams, durable per-delta replay and additional message brokers are out of initial scope unless evidence requires revisiting them.
+Next: verify main CI/CD, serving revisions and scoped production Terra session, then close the initial Terra/Sol release gate and revise Phase 2. Additional model families remain a compatibility follow-up before changing their routing. No database schema, infrastructure or production configuration changed. Live Terra adapter calls completed; no notification benchmarks yet. Other providers, first-class DSL streams, durable per-delta replay and additional message brokers are out of initial scope unless evidence requires revisiting them.
 
 ## References
 
