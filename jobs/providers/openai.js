@@ -3,6 +3,7 @@ import { captureOpenAiRequest, logOpenAiCacheUsage } from './openaiCapture.js';
 import { stripNullsDeep } from './utils.js';
 import { toOpenAiMessages } from './openaiMessages.js';
 import { buildResponsesPayload, normalizeResponsesResult } from './openaiResponses.js';
+import { readResponsesStream } from './openaiResponsesStream.js';
 
 // OpenAI adapter wrapping chat.completions
 // Input: { apiKey, model, messages, temperature, max_tokens, response_format, tools, tool_choice }
@@ -33,7 +34,7 @@ export function useResponses(model, configured = process.env.AWFL_OPENAI_RESPONS
   return validatedResponsesModels.includes(model) && configured.split(',').map(s => s.trim()).includes(model);
 }
 
-export async function chat(params, { fetch = globalThis.fetch } = {}) {
+export async function chat(params, { fetch = globalThis.fetch, onDelta } = {}) {
   // Retain native fetch: node-fetch prematurely closes compressed GKE replies.
   const client = new OpenAI({ apiKey: params.apiKey, fetch });
   const responses = useResponses(params.model);
@@ -41,18 +42,28 @@ export async function chat(params, { fetch = globalThis.fetch } = {}) {
   const payload = responses ? buildResponsesPayload({ ...params, messages: legacy.messages,
     tools: legacy.tools, tool_choice: legacy.tool_choice, response_format: legacy.response_format },
     { reasoningEffort: legacy.reasoning_effort, temperature: legacy.temperature }) : legacy;
+  const streaming = responses && typeof onDelta === 'function' &&
+    (!payload.text?.format || payload.text.format.type === 'text') &&
+    typeof payload.tool_choice !== 'object' && payload.tool_choice !== 'required';
+  if (streaming) payload.stream = true;
   const capture = captureOpenAiRequest(payload);
   const started = Date.now();
-  let resp;
+  let resp, requestId;
   try {
-    resp = responses ? await client.responses.create(payload) : await client.chat.completions.create(payload);
+    if (streaming) {
+      const { data, request_id } = await client.responses.create(payload).withResponse();
+      requestId = request_id;
+      resp = await readResponsesStream(data, onDelta);
+    } else {
+      resp = responses ? await client.responses.create(payload) : await client.chat.completions.create(payload);
+    }
   } catch (error) {
     if (capture) console.error(JSON.stringify({ event: 'openai_context_capture_request_failed', capture_id: capture.id, status: error?.status ?? null }));
     throw error;
   }
   if (responses) {
     const result = normalizeResponsesResult(resp);
-    logOpenAiCacheUsage(capture, { model: resp.model, _request_id: resp._request_id, usage: result.usage }, Date.now() - started);
+    logOpenAiCacheUsage(capture, { model: resp.model, _request_id: requestId ?? resp._request_id, usage: result.usage }, Date.now() - started);
     return { ...result, raw: resp };
   }
   logOpenAiCacheUsage(capture, resp, Date.now() - started);

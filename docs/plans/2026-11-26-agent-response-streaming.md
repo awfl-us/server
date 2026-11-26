@@ -1,6 +1,6 @@
 # Agent response streaming — Responses API + PostgreSQL live events
 
-**Status (2026-11-26): Phase 1 Terra/Sol live validation passed; Responses default enabled in source, production deployment verification pending.**
+**Status (2026-11-26): Phase 1 Terra/Sol default in source; Phase 2 provider streaming implemented and live-tested; production and transport gates outstanding.**
 **First milestone: migrate OpenAI to the Responses API, independently of streaming.**
 **Execution priority: memory mode; durable per-effect journaling remains deferred.**
 
@@ -90,6 +90,13 @@ Revised design:
 - Take the complete Response from the first `response.completed`, `response.failed` or `response.incomplete`; use existing normalization and accounting. Preserve usage on unsuccessful terminal response; an explicit stream error or EOF before terminal is failure, never a successful partial message or dispatchable tool call. No automatic fallback to Chat Completions. Request capture includes actual stream:true and use HTTP request ID from SDK `withResponse`. Propagate provider abort separately; subscriber disconnect must not abort independent inference. Existing native HTTP effects await final response and have configured timeouts (Jobs effects default 30s, max 120s); no changes here, evaluate production long-response timeout in release gate.
 - Tests use actual SDK SSE decoder with fragmented UTF-8, immediate arrival before completion, tool/argument events suppressed, final normalized tool calls and usage, failed/incomplete terminal, truncated stream, throwing/rejecting sink, and nonstream fallback. Run bounded live Terra stream in isolated Jobs adapter, compare text deltas to final output. No browser or PostgreSQL delivery is enabled by this slice. Phase 1 deployment verification remains a gate before exposing user-visible streaming.
 
+### Phase 2 implementation checkpoint — 2026-11-26
+
+- Added internal `onDelta` opt-in and `jobs/providers/openaiResponsesStream.js`; raw SDK SSE async iterator forwards only text deltas immediately, terminal response is the authoritative full message/tool calls/usage. Failed/incomplete terminal returns billed failure through existing normalization; premature EOF fails closed. Synchronous sink exceptions or promise-returning sinks disable delivery without aborting generation. No timers, batching or new tool accumulator. Structured/forced output and legacy models remain nonstreaming. Jobs router is unchanged: nothing supplies a production sink yet.
+- SDK fixture suite 6/6 passed: actual SDK SSE decoding of fragmented UTF-8, delta delivered before terminal, no tool/reasoning text leakage, full final tool and usage, incomplete/failed/EOF, faulty sink, structured fallback. Full regression 50 JS passed, 0 failed, 2 skipped (compiled fixture paths missing locally); 6 Python passed. The prior compiled CI ran 11/11 with no skips.
+- First real Terra streamed text request with 256 output-token cap returned incomplete and HTTP 502 as designed; exact incomplete reason was not recorded. Retried with 1024 cap and shorter text prompt: 52 immediate deltas, first 5657 ms after request start, last 6176 ms, complete 6311 ms; concatenated deltas exactly matched final content. Usage 21 input, 279 output (221 reasoning); no reasoning was delivered. Real streamed auto tool call and subsequent feedback passed with 3 final-answer deltas and exact text equality. Three successful live streaming calls estimated $0.001671; excludes initial incomplete request (cost not captured in the canary output). This is provider-to-Jobs only, not end-to-end browser latency.
+- Next: Phase 3 investigate and revise plan before adding transient PostgreSQL bus/benchmark; connect a bounded synchronous enqueue sink only in later workflow visibility phase. Phase 1 production-serving revision/test-session verification still pending. No streaming enabled in production routes.
+
 ## 3. PostgreSQL transient event bus and performance gate
 
 - [ ] **Investigate and update plan.** Inspect `storage/postgres/storage.js`, connection/pool lifecycle, Cloud SQL proxy/IAM, configured connection cap and database sizing, `workflows/events/{model,index,sse}.js`, scoped event API, and actual API/Jobs service topology (Cloud Run and GKE). Distinguish existing document subscriptions and durable event logs from a new transient path. Review notification transaction/size semantics, reconnect behavior and tenant boundaries. Commit revised transport and benchmark protocol before implementation.
@@ -144,7 +151,7 @@ Investigation record: pending.
 
 ## Current checkpoint / next action
 
-Next: verify main CI/CD, serving revisions and scoped production Terra session, then close the initial Terra/Sol release gate and revise Phase 2. Additional model families remain a compatibility follow-up before changing their routing. No database schema, infrastructure or production configuration changed. Live Terra adapter calls completed; no notification benchmarks yet. Other providers, first-class DSL streams, durable per-delta replay and additional message brokers are out of initial scope unless evidence requires revisiting them.
+Next: verify main CI/CD, serving revisions and scoped production Terra session; investigate and revise Phase 3 PostgreSQL transient bus and benchmark before implementation. Additional model families remain a compatibility follow-up before changing their routing. No database schema, infrastructure or production configuration changed. Live Terra adapter calls completed; no notification benchmarks yet. Other providers, first-class DSL streams, durable per-delta replay and additional message brokers are out of initial scope unless evidence requires revisiting them.
 
 ## References
 
