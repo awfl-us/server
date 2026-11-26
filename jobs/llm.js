@@ -6,6 +6,7 @@ import { decryptString } from '../workflows/crypto.js';
 // Provider adapters
 import openaiAdapter from './providers/openai.js';
 import { supportsResponseStreaming } from './providers/openai.js';
+import { createConfiguredResponseStream } from '../workflows/events/liveResponseService.js';
 import anthropicAdapter from './providers/anthropic.js';
 import geminiAdapter from './providers/gemini.js';
 import grokAdapter from './providers/grok.js';
@@ -293,4 +294,4 @@ router.post('/chat', async (req, res) => {
 return router;
 }
 
-export default createLlmRouter();
+export default createLlmRouter({responseStreamFactory:createConfiguredResponseStream});

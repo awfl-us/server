@@ -3,12 +3,14 @@ import { randomUUID } from 'node:crypto';
 // Internal lifecycle of one provider invocation. The bus is injected; no
 // storage writes, no dependency on the browser, no wait in the delta callback.
 // A terminal provider event is not proof of conversation persistence.
-export function createResponseStream({bus,scope,responseId=randomUUID(),attemptId=randomUUID()}) {
+export function createResponseStream({bus,scope,responseId=randomUUID(),attemptId=randomUUID(),observe=()=>{}}) {
   let sequence=0, ended=false, broken=false;
   function send(type,data={}) {
+    const event={scope,responseId,attemptId,sequence:sequence++,type,data};
+    try {observe(event);} catch {} // Recovery state must not interrupt inference.
     if(broken)return;
     try {
-      Promise.resolve(bus.publish({scope,responseId,attemptId,sequence:sequence++,type,data}))
+      Promise.resolve(bus.publish(event))
         .catch(()=>{broken=true;});
     } catch {broken=true;}
   }

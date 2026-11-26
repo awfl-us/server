@@ -10,6 +10,9 @@ import promptsRoutes from './prompts/index.js'
 import { clientAuth } from './userAuth.js'
 import workflows from './workflows.js'
 import eventsRoutes from './events/index.js'
+import {createLiveResponseRouter} from './events/liveResponseSse.js';
+import {getLiveResponseBus} from './events/liveResponseService.js';
+import {getDocumentStorage} from '../storage/service.js';
 import workspaceRoutes from './workspace/index.js'
 import projectsRoutes from './projects/index.js'
 import { projectIdMiddleware } from './projects/util.js'
@@ -42,6 +45,7 @@ router.use('/projects', projectsRoutes)
 router.use(projectIdMiddleware);
 
 // Events relay under /workflows/events (auth via shared clientAuth + SKIP_AUTH support)
+router.use('/events/responses', createLiveResponseRouter({getBus:getLiveResponseBus,getStorage:getDocumentStorage}));
 router.use('/events', eventsRoutes)
 
 router.use('/context', contextRoutes)
