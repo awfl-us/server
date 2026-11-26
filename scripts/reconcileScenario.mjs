@@ -177,7 +177,7 @@ export function makeReconciliationFixture({ scenario = 'basic', query = 'Read th
 }
 
 export async function runReconciliationScenario({reportPath,scenario='basic', log=()=>{},
-  maxTransitions=120, strictBackground=false, typedToolDef=null, executionMode='durable'}) {
+  maxTransitions=120, strictBackground=false, typedToolDef=null, executionMode='durable', llmTransport=null}) {
   if(!reportPath) throw new Error('--report is required; compile native workflows first');
   const fixture=makeReconciliationFixture({scenario,typedToolDef});
   const input={fund:2,env:{userId:'reconcile-user',projectId:'reconcile-project',
@@ -202,7 +202,11 @@ export async function runReconciliationScenario({reportPath,scenario='basic', lo
   };
   const native=await runLocalProjectManager({reportPath:resolve(reportPath),
     input,identity:{userId:'reconcile-user',projectId:'reconcile-project'},
-    respondHttp:fixture.respond,storageHandler,callbackFixtureHandlers,maxTransitions,log,
+    respondHttp:async request=>{
+      const expected=fixture.respond(request);
+      return llmTransport && request.path==='/llm/chat'
+        ? llmTransport(request.args.body,expected) : expected;
+    },storageHandler,callbackFixtureHandlers,maxTransitions,log,
     drainDetached:true,drainTimeoutMs:20000,executionMode});
   return {scenario,native,strictBackground,requests:fixture.requests,modelRequests:fixture.modelRequests,
     messages:fixture.messages()};

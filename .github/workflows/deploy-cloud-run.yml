@@ -70,6 +70,7 @@ jobs:
           node --test workflows/workspace/storageTokens.test.js
           node --test observability/*.test.js
           node --test jobs/providers/openai*.test.js jobs/llm/*.test.js jobs/llm/*.test.mjs
+          node --test scripts/reconcileResponsesNative.test.mjs scripts/reconcileScenario.test.mjs
           python3 scripts/openai_cache_diff_test.py
 
       - name: Authenticate to Google Cloud (WIF/OIDC)

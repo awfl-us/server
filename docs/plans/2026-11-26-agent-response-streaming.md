@@ -1,6 +1,6 @@
 # Agent response streaming — Responses API + PostgreSQL live events
 
-**Status (2026-11-26): Phase 1 gated Responses adapter implemented and locally tested; migration is not enabled.**
+**Status (2026-11-26): Phase 1 adapter and mock tool-feedback integration tested; compiled CI and live provider gates outstanding.**
 **First milestone: migrate OpenAI to the Responses API, independently of streaming.**
 **Execution priority: memory mode; durable per-effect journaling remains deferred.**
 
@@ -50,6 +50,13 @@ Reviewed trees: server 1f81db61b50d9f8477033b1f57ec95afd421eaf2; workflow-utils 
 - Captures retain exact wire payload; normalized usage and request IDs follow existing logging. Cache diagnostics support both messages and input and explicitly identify protocol transitions. Terminal provider failures retain billed usage and return HTTP 502 without dispatchable tools. Added pre-deploy regression gate on main.
 - Tests: AWFL_DOCUMENT_STORAGE_BACKEND=firestore node --test jobs/providers/openai*.test.js jobs/llm/*.test.js jobs/llm/*.test.mjs — 35 passed, 0 failed, 1 skipped (Scala-generated typed tool schema fixture absent). python3 scripts/openai_cache_diff_test.py — 6 passed. Mock SDK HTTP test verifies /v1/responses, tool call IDs, strict false, store false, and usage. git diff --check passed. Node 20.19.2 in GKE; CI uses Node 22.
 - Remaining: real context shapes, live Terra tool and feedback/JSON canaries, Scala-generated tool schema and compiled Project Manager lifecycle integration, additional model families and cache/usage comparison. No live inference or production migration verified. Phase 1 remains open.
+
+### Phase 1 integration checkpoint — 2026-11-26
+
+- Reviewed the compiled Project Manager lifecycle CI and reconciliation fixtures at server `70d8609`. Extended the existing fixture runner with an optional LLM transport hook, rather than building a second native executor. The new `scripts/reconcileResponsesNative.test.mjs` uses the actual Jobs Express route, installed OpenAI SDK and Responses adapter, with only the external model HTTP response mocked. The adapter accepts an injected fetch for isolated tests; production continues using global fetch.
+- Local targeted run: `AWFL_DOCUMENT_STORAGE_BACKEND=firestore node --test scripts/reconcileResponsesNative.test.mjs scripts/reconcileScenario.test.mjs jobs/providers/openaiResponsesAdapter.test.js` — 11 passed, 0 failed, 1 skipped (compiled closure absent). Verified multiple function calls, feedback replay of each call ID, forced summary tool, JSON mode and one usage record per request. No real model inference.
+- Existing pre-deploy regression gate now includes the new HTTP/SDK tests; compiled Project Manager lifecycle CI also runs the full memory-mode tool/Strider case and is triggered for relevant main changes. This environment has no Scala/Rust/PostgreSQL toolchain or complete compiled closure, so the compiled gate must run in CI. The compiled case still mocks provider HTTP and storage/context fixtures: it is not live model evidence.
+- Live canary remains blocked locally: neither `OPENAI_API_KEY` nor `AWFL_STRIDER_OPENAI_API_KEY` is configured; no OpenAI-named Secret Manager entry was found. The existing Jobs application can use a configured user credential internally; do not extract a credential or change production-wide routing just to exercise a canary. Next investigate an authenticated scoped canary using that path or an explicitly supplied test credential. Production flag stays off until actual model and workflow compatibility is demonstrated.
 
 ## 2. Provider streaming and completion normalization
 
@@ -114,7 +121,7 @@ Investigation record: pending.
 
 ## Current checkpoint / next action
 
-Next: inspect real history shapes, run compiled Project Manager and Strider fixtures plus a scoped live Terra canary, verify model compatibility and deployment, then explicitly enable Responses for validated models. No database schema, infrastructure or production configuration changed. No live API calls or notification benchmarks yet. Other providers, first-class DSL streams, durable per-delta replay and additional message brokers are out of initial scope unless evidence requires revisiting them.
+Next: check compiled Project Manager/Strider CI results, then run a scoped live Terra canary via an authorized test credential or existing Jobs credential path. Verify model compatibility and deployment before enabling Responses for validated models. No database schema, infrastructure or production configuration changed. No live API calls or notification benchmarks yet. Other providers, first-class DSL streams, durable per-delta replay and additional message brokers are out of initial scope unless evidence requires revisiting them.
 
 ## References
 

@@ -32,9 +32,9 @@ export function useResponses(model, configured = process.env.AWFL_OPENAI_RESPONS
   return responsesCanaryModels.has(model) && configured.split(',').map(s => s.trim()).includes(model);
 }
 
-export async function chat(params) {
+export async function chat(params, { fetch = globalThis.fetch } = {}) {
   // Retain native fetch: node-fetch prematurely closes compressed GKE replies.
-  const client = new OpenAI({ apiKey: params.apiKey, fetch: globalThis.fetch });
+  const client = new OpenAI({ apiKey: params.apiKey, fetch });
   const responses = useResponses(params.model);
   const legacy = buildChatPayload(params);
   const payload = responses ? buildResponsesPayload({ ...params, messages: legacy.messages,

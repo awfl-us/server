@@ -1,6 +1,14 @@
 name: Compiled native ProjectManager PostgreSQL lifecycle
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/test-compiled-projectmanager-lifecycle.yml'
+      - 'scripts/reconcileResponsesNative.test.mjs'
+      - 'scripts/reconcileScenario.mjs'
+      - 'jobs/providers/openai*.js'
+      - 'jobs/llm.js'
   pull_request:
     paths:
       - '.github/workflows/test-compiled-projectmanager-lifecycle.yml'
@@ -9,6 +17,10 @@ on:
       - 'scripts/reconcileMemoryTyped422.test.mjs'
       - 'scripts/reconcilePostgresNative.test.mjs'
       - 'scripts/reconcileSessionStatusPostgres.test.mjs'
+      - 'scripts/reconcileResponsesNative.test.mjs'
+      - 'scripts/reconcileScenario.mjs'
+      - 'jobs/providers/openai*.js'
+      - 'jobs/llm.js'
   workflow_dispatch: {}
 
 permissions:
@@ -84,4 +96,5 @@ jobs:
             scripts/reconcileMemoryCallbackConcurrency.test.mjs \
             scripts/reconcileMemoryConcurrency.test.mjs \
             scripts/reconcileMemoryTyped422.test.mjs \
+            scripts/reconcileResponsesNative.test.mjs \
             scripts/reconcileSessionStatusPostgres.test.mjs
