@@ -23,7 +23,7 @@ export async function chat(params) {
   const body = {
     model,
     messages: mapped,
-    temperature,
+    ...(!['claude-sonnet-5-5','claude-opus-5-5'].includes(model) ? { temperature } : {}),
     max_tokens,
     ...(systemText ? { system: systemText } : {})
   };
@@ -49,9 +49,10 @@ export async function chat(params) {
 
   const u = data?.usage;
   const usage = u ? {
-    prompt_tokens: u.input_tokens,
+    prompt_tokens: (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0),
+    prompt_tokens_details: { cached_tokens: u.cache_read_input_tokens || 0 },
     completion_tokens: u.output_tokens,
-    total_tokens: (u.input_tokens || 0) + (u.output_tokens || 0)
+    total_tokens: (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.output_tokens || 0)
   } : null;
 
   return { message, usage, raw: data };

@@ -12,7 +12,7 @@ export function buildChatPayload(params) {
   const { model, messages, temperature, max_tokens, response_format, tools, tool_choice } = params;
   // GPT-6 Sol and GPT-6.1 Terra support Chat Completions function tools
   // with reasoning_effort=none; remove unsupported temperature settings.
-  const isNoReasoningToolModel = model === 'gpt-6-sol' || model === 'gpt-6.1-terra';
+  const isNoReasoningToolModel = ['gpt-6-sol', 'gpt-6.1-terra', 'gpt-6.2-sol', 'gpt-6-luna'].includes(model);
   const hasFunctionTools = Array.isArray(tools) && tools.some(t => t?.type === 'function');
   return stripNullsDeep({
     model,
@@ -29,7 +29,7 @@ export function buildChatPayload(params) {
 // Validated models use Responses by default on both Cloud Run and native Jobs.
 // An explicitly empty environment override restores Chat Completions.
 // No fallback retry after a provider request.
-const validatedResponsesModels = ['gpt-6.1-terra', 'gpt-6-sol'];
+const validatedResponsesModels = ['gpt-6.1-terra', 'gpt-6-sol', 'gpt-6.2-sol', 'gpt-6-luna'];
 export function useResponses(model, configured = process.env.AWFL_OPENAI_RESPONSES_MODELS ?? validatedResponsesModels.join(',')) {
   return validatedResponsesModels.includes(model) && configured.split(',').map(s => s.trim()).includes(model);
 }

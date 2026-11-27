@@ -24,7 +24,7 @@ export async function chat(params) {
   const body = {
     contents,
     generationConfig: {
-      temperature,
+      ...(model !== 'gemini-4-argon' ? { temperature } : {}),
       maxOutputTokens: max_tokens
     },
     ...(systemText ? { systemInstruction: { role: 'system', parts: [{ text: systemText }] } } : {})
@@ -49,7 +49,8 @@ export async function chat(params) {
   const u = data?.usageMetadata;
   const usage = u ? {
     prompt_tokens: u.promptTokenCount,
-    completion_tokens: u.candidatesTokenCount,
+    completion_tokens: (u.candidatesTokenCount || 0) + (u.thoughtsTokenCount || 0),
+    prompt_tokens_details: { cached_tokens: u.cachedContentTokenCount || 0 },
     total_tokens: u.totalTokenCount
   } : null;
 

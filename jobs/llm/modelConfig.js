@@ -1,4 +1,4 @@
-import { OPENCODE_MODELS } from './opencodeModels.js';
+import { OPENCODE_MODELS, canonicalModel } from './opencodeModels.js';
 
 // Model limits shared by the LLM transport and the TopicContext size limiter.
 // maxCompletionTokens is the existing server default, not a promised output size.
@@ -43,7 +43,7 @@ export const MAX_TOKENS = Object.freeze(Object.fromEntries(
 ));
 
 export function resolveMaxTokens(model, fallback = 16384) {
-  return MODEL_CONFIGS[model]?.maxCompletionTokens || fallback;
+  return MODEL_CONFIGS[canonicalModel(model)]?.maxCompletionTokens || fallback;
 }
 
 export const DEFAULT_CONTEXT_MESSAGE_BUDGET_TOKENS = 17000;
@@ -52,7 +52,7 @@ export const DEFAULT_CONTEXT_MESSAGE_BUDGET_TOKENS = 17000;
 export const CONTEXT_INPUT_RESERVE_TOKENS = 32000;
 
 export function resolveContextMessageBudget(model, requestedMaxTokens) {
-  const config = MODEL_CONFIGS[model];
+  const config = MODEL_CONFIGS[canonicalModel(model)];
   const defaultBudget = config?.contextMessageBudgetTokens ??
     DEFAULT_CONTEXT_MESSAGE_BUDGET_TOKENS;
   const requested = Number.isFinite(requestedMaxTokens) && requestedMaxTokens > 0
@@ -69,7 +69,7 @@ export function resolveContextMessageBudget(model, requestedMaxTokens) {
 // It is intentionally stricter than real tokenization; OpenAI validates the
 // exact model-side token count.
 export function checkModelContextWindow(model, body) {
-  const config = MODEL_CONFIGS[model];
+  const config = MODEL_CONFIGS[canonicalModel(model)];
   if (!config?.contextWindowTokens) return { ok: true };
   const output = body.maxCompletionTokens ?? resolveMaxTokens(model);
   if (!Number.isInteger(output) || output < 1 || output > config.maxCompletionTokens) {
