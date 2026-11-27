@@ -5,9 +5,9 @@ credential store. No change to direct-provider routing or default agent models.
 
 ## Configuration
 
-Set the user's paid Console API key via the existing authenticated credential
-route, POST /workflows/creds/opencode with a JSON body containing the key in
-the value field. Never put the key in workflow source or logs. Select an
+In AWFL Web, open Settings → Credentials → OpenCode API key and save
+a paid Console API key. The existing authenticated credential route
+(POST /workflows/creds/opencode) stores the value encrypted per user. Never put the key in workflow source or logs. Select an
 allowlisted model using the opencode/ prefix; the transport removes it before
 calling OpenCode. Both models endpoints advertise the same curated catalog.
 
@@ -40,11 +40,14 @@ is unknown, not zero. Free chat variants are not offered to external clients.
 - [x] Run local regression tests (including mocked tool and stream responses).
   Result: 26/26 targeted tests passed (mock upstream; Node 20 in the local
   consumer). No paid provider call or compiled native E2E yet.
-- [ ] Add OpenCode to web credential/model selection if it is not discovered
-  automatically; verify native workflow consumers accept namespaced IDs.
+- [x] Add OpenCode to web credential and model selection. Web typecheck and
+  24/24 existing tests pass.
+- [ ] Verify native workflow consumers accept namespaced IDs end to end.
 - [ ] Configure a paid user credential and test each model with real text,
   tool calls and tool-result replay, live streaming and cost accounting.
-- [ ] Deploy after validation.
+- [ ] Deploy the opt-in provider and settings via CI, leaving existing model
+  defaults unchanged. A paid user credential is required for real upstream
+  validation; no key is provisioned or shared by this rollout.
 
 References:
 https://opencode.ai/docs/console/models/
