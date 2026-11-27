@@ -44,12 +44,12 @@ export function decodeLiveEvent(payload,key,channel=defaultChannel) {
 // A process uses one FIFO publisher and one lazy dedicated LISTEN connection.
 // This transport is transient: no replay, retry of uncertain writes, or DB rows.
 export class PostgresLiveBus {
-  constructor({publisherPool,listenerPool,key,channel=defaultChannel,maxPending=256,reconnectMs=1000}={}) {
-    if(!publisherPool?.query || !listenerPool?.connect || !/^[a-z][a-z0-9_]{0,62}$/.test(channel) ||
+  constructor({publisherPool,listenerPool,sharedTransport,key,channel=defaultChannel,maxPending=256,reconnectMs=1000}={}) {
+    if((sharedTransport ? (!sharedTransport.publish||!sharedTransport.subscribe||channel!==defaultChannel) : (!publisherPool?.query||!listenerPool?.connect)) || !/^[a-z][a-z0-9_]{0,62}$/.test(channel) ||
       !Number.isSafeInteger(maxPending)||maxPending<1||maxPending>4096 ||
       !Number.isSafeInteger(reconnectMs)||reconnectMs<10) throw new TypeError('Invalid live bus configuration');
     checkKey(key);
-    this.publisherPool=publisherPool;this.listenerPool=listenerPool;this.key=Buffer.from(key);
+    this.publisherPool=publisherPool;this.listenerPool=listenerPool;this.sharedTransport=sharedTransport;this.sharedStop=null;this.sharedReady=false;this.key=Buffer.from(key);
     this.channel=channel;this.maxPending=maxPending;this.reconnectMs=reconnectMs;
     this.pending=0;this.peakPending=0;this.tail=Promise.resolve();
     this.subscribers=new Map();this.client=null;this.connecting=null;this.retry=null;this.closed=false;
@@ -60,7 +60,7 @@ export class PostgresLiveBus {
     let payload;
     try {payload=encodeLiveEvent(event,this.key,this.channel);} catch(e){return Promise.reject(e);}
     this.pending++;this.peakPending=Math.max(this.peakPending,this.pending);
-    const task=this.tail.then(()=>this.publisherPool.query('SELECT pg_notify($1,$2)',[this.channel,payload]));
+    const task=this.tail.then(()=>this.sharedTransport?this.sharedTransport.publish(payload):this.publisherPool.query('SELECT pg_notify($1,$2)',[this.channel,payload]));
     const result=task.finally(()=>{this.pending--;});
     this.tail=result.catch(()=>{});
     return result;
@@ -71,7 +71,7 @@ export class PostgresLiveBus {
     const sub={key,onEvent,onStatus};let group=this.subscribers.get(key);
     if(!group){group=new Set();this.subscribers.set(key,group);}
     group.add(sub);
-    try {await this.#ensure();if(!this.client||this.closed)throw Error('Live listener unavailable');}
+    try {await this.#ensure();if(!(this.sharedTransport?this.sharedReady:this.client)||this.closed)throw Error('Live listener unavailable');}
     catch(e){this.#remove(sub);throw e;}
     this.#call(sub,onStatus,'ready');
     return ()=>this.#remove(sub);
@@ -97,6 +97,7 @@ export class PostgresLiveBus {
     if(group)for(const sub of [...group])this.#call(sub,sub.onEvent,event);
   }
   #idle() {
+    if(this.sharedTransport){this.sharedStop?.();this.sharedStop=null;this.sharedReady=false;return;}
     clearTimeout(this.retry);this.retry=null;
     const client=this.client;this.client=null;
     if(client){try{client.release(true);}catch{}}
@@ -111,7 +112,21 @@ export class PostgresLiveBus {
     this.retry=setTimeout(()=>{this.retry=null;void this.#ensure().then(()=>{if(this.client)this.#status('ready');}).catch(()=>this.#schedule());},this.reconnectMs);
     this.retry.unref?.();
   }
+  async #ensureShared(){
+    if(this.sharedStop)return;
+    if(this.connecting)return this.connecting;
+    this.connecting=(async()=>{
+      let initialized=false;
+      const stop=await this.sharedTransport.subscribe(payload=>this.#notify({channel:this.channel,payload}),status=>{
+        this.sharedReady=status==='ready';if(initialized)this.#status(status);
+      });
+      if(this.closed||!this.subscribers.size){stop();this.sharedReady=false;throw Error('Live listener unavailable');}
+      this.sharedStop=stop;initialized=true;
+    })();
+    try{await this.connecting;}finally{this.connecting=null;}
+  }
   async #ensure() {
+    if(this.sharedTransport)return this.#ensureShared();
     if(this.client)return;
     if(this.connecting)return this.connecting;
     this.connecting=(async()=>{

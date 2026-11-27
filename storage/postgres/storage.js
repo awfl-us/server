@@ -93,13 +93,14 @@ async function select(client,path,lock=false) {
  * application-wide production provider until its conformance suite passes.
  */
 export class PostgresStorage {
-  constructor({pool, ownPool=false, pollIntervalMs=15000}={}) {
+  constructor({pool, ownPool=false, pollIntervalMs=15000, liveNotifications=false}={}) {
     if (!pool?.query || !pool?.connect) throw new TypeError('PostgresStorage requires pg.Pool');
     if (!Number.isInteger(pollIntervalMs) || pollIntervalMs < 50) throw new TypeError('invalid polling interval');
     this.pool=pool; this.ownPool=ownPool; this.pollIntervalMs=pollIntervalMs;
     this.watchers=new Set(); this.eventWatchers=new Set();
     this.listening=null; this.pollTimer=null;
     this.closed=false;
+    this.liveNotifications=liveNotifications;this.liveWatchers=new Set();this.livePending=0;
     assertStorage(this);
   }
   // Only for setup/tests. Production migrations must be explicit and managed.
@@ -393,6 +394,38 @@ export class PostgresStorage {
     }
   }
 
+  // Optional PostgreSQL-only transport, deliberately outside the provider-neutral
+  // document contract. The live channel shares the existing LISTEN socket.
+  async subscribeLiveNotifications(listener,onStatus=()=>{}) {
+    if(!this.liveNotifications||this.closed||typeof listener!=='function'||typeof onStatus!=='function')
+      throw new Error('Live notification transport unavailable');
+    const watcher={listener,onStatus,ready:false};this.liveWatchers.add(watcher);
+    try {
+      await this.#ensureListening();
+      if(!this.listenClient||this.closed)throw new Error('Live notification listener unavailable');
+      this.#liveStatus(watcher,'ready');
+      return ()=>{this.liveWatchers.delete(watcher);this.#stopIfIdle();};
+    } catch(error){this.liveWatchers.delete(watcher);this.#stopIfIdle();throw error;}
+  }
+  #liveStatus(watcher,status){
+    const ready=status==='ready';if(watcher.ready===ready)return;
+    watcher.ready=ready;try{watcher.onStatus(status);}catch{this.liveWatchers.delete(watcher);}
+  }
+  async publishLiveNotification(payload){
+    if(!this.liveNotifications||this.closed||typeof payload!=='string'||Buffer.byteLength(payload)>7900)
+      throw new Error('Live notification transport unavailable');
+    this.livePending++;
+    let client;
+    try{
+      await this.#ensureListening();client=this.listenClient;
+      if(!client||this.closed)throw new Error('Live notification listener unavailable');
+      // No transaction: one immediately committed notification per provider delta.
+      await client.query({text:'SELECT pg_notify($1,$2)',values:['awfl_live_v1',payload],query_timeout:6000});
+    }catch(error){if(client)this.#listenerFailed(client);throw error;}
+    finally{this.livePending--;this.#stopIfIdle();}
+  }
+  #hasListeners(){return this.watchers.size||this.eventWatchers.size||this.liveWatchers.size||this.livePending;}
+
   async #ensureListening() {
     if (this.listening) return this.listening;
     this.listening=(async()=>{
@@ -403,12 +436,17 @@ export class PostgresStorage {
             this.#notifyDocument(message.payload);
           else if(message.channel==='awfl_storage_event')
             this.#notifyStream(message.payload);
+          else if(message.channel==='awfl_live_v1'&&this.liveNotifications)
+            for(const w of [...this.liveWatchers]){try{w.listener(message.payload);}catch{this.liveWatchers.delete(w);}}
         });
         client.on('error',()=>this.#listenerFailed(client));
         client.on('end',()=>this.#listenerFailed(client));
         await client.query('LISTEN awfl_storage_change');
         await client.query('LISTEN awfl_storage_event');
+        if(this.liveNotifications)await client.query('LISTEN awfl_live_v1');
+        if(this.closed)throw new Error('Storage closed');
         this.listenClient=client;
+        for(const w of [...this.liveWatchers])this.#liveStatus(w,'ready');
         // A newly connected LISTEN socket may have missed commits in transit.
         if (this.watchers.size || this.eventWatchers.size) void this.#reconcile();
         if (!this.pollTimer) {
@@ -425,13 +463,14 @@ export class PostgresStorage {
     this.listenClient=null;
     this.listening=null;
     try {client.release(true);} catch {}
-    if ((this.watchers.size || this.eventWatchers.size) && !this.closed) {
+    for(const w of [...this.liveWatchers])this.#liveStatus(w,'gap');
+    if (this.#hasListeners() && !this.closed) {
       const t=setTimeout(()=>{void this.#ensureListening().catch(()=>{});},1000);
       t.unref?.();
     }
   }
   async #reconcile() {
-    if (!this.listenClient && (this.watchers.size || this.eventWatchers.size) && !this.closed)
+    if (!this.listenClient && this.#hasListeners() && !this.closed)
       void this.#ensureListening().catch(()=>{});
     // Low-frequency repair for missed NOTIFY, independent of event subscriptions.
     await Promise.allSettled([
@@ -440,7 +479,7 @@ export class PostgresStorage {
     ]);
   }
   #stopIfIdle() {
-    if (this.watchers.size || this.eventWatchers.size) return;
+    if (this.#hasListeners()) return;
     if (this.pollTimer) clearInterval(this.pollTimer);
     this.pollTimer=null;
     const client=this.listenClient;
@@ -452,7 +491,7 @@ export class PostgresStorage {
   }
   async close() {
     this.closed=true;
-    this.watchers.clear();this.eventWatchers.clear();
+    this.watchers.clear();this.eventWatchers.clear();this.liveWatchers.clear();
     this.#stopIfIdle();
     if (this.ownPool) await this.pool.end();
   }

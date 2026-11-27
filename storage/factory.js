@@ -30,6 +30,7 @@ export function createStorage({
   ownDb = false,
   ownPool = false,
   pollIntervalMs,
+  liveNotifications=false,
 } = {}) {
   const provider = backend ?? selectedStorageBackend(env);
   if (provider === 'firestore') {
@@ -37,7 +38,7 @@ export function createStorage({
   }
   if (provider === 'postgres') {
     return assertStorage(new PostgresStorage({
-      pool: postgresPool, ownPool, pollIntervalMs,
+      pool: postgresPool, ownPool, pollIntervalMs, liveNotifications,
     }));
   }
   throw new TypeError('unsupported storage backend');

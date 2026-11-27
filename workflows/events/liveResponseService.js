@@ -25,6 +25,18 @@ async function build(){
   const {createPostgresConnectionOptions}=await import('../../storage/nativeMemory.js');
   const {default:pg}=await import('pg');
   const key=scryptSync(requireEnvKey(),'awfl-live-events-v1',32);
+  if(process.env.AWFL_LIVE_RESPONSES_TRANSPORT==='shared'){
+    try{
+      const storage=await getDocumentStorage();
+      if(!storage.liveNotifications)throw Error('Shared live transport unavailable');
+      const bus=new PostgresLiveBus({key,sharedTransport:{
+        publish:payload=>storage.publishLiveNotification(payload),
+        subscribe:(listener,onStatus)=>storage.subscribeLiveNotifications(listener,onStatus)
+      }});
+      const snapshots=new ResponseSnapshots({bus});
+      return {bus,snapshots,close:async()=>{await snapshots.close();await bus.close();}};
+    }finally{key.fill(0);}
+  }
   const {options,connector}=await createPostgresConnectionOptions(process.env);
   const make=role=>new pg.Pool({...options,max:1,connectionTimeoutMillis:5000,
     idleTimeoutMillis:10000,statement_timeout:5000,query_timeout:6000,application_name:'awfl_live_'+role});

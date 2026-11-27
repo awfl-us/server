@@ -50,7 +50,7 @@ export async function createNativeMemoryStore({
     } catch(error) {connector?.close();throw error;}
     ownPool=true;
   }
-  const storage=createStorage({backend,firestoreDb:db,postgresPool:pool,ownPool});
+  const storage=createStorage({backend,firestoreDb:db,postgresPool:pool,ownPool,liveNotifications:env.AWFL_LIVE_RESPONSES_ENABLED==='1'&&env.AWFL_LIVE_RESPONSES_TRANSPORT==='shared'});
   const records=new DocumentAtomicRecords({storage,collection:'nativeWorkflowExecutions'});
   return {backend,storage,store:new NativeMemoryExecutionPilotStore({records}),
     close: async () => { try { await storage.close(); } finally { connector?.close(); } },
