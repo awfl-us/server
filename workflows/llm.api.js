@@ -1,4 +1,5 @@
 import express from 'express'
+import { OPENCODE_MODELS, OPENCODE_PROVIDER } from '../jobs/llm/opencodeModels.js'
 
 const router = express.Router()
 
@@ -52,11 +53,13 @@ const MAX_TOKENS = {
   'grok-2-mini': 8192,
   // DeepSeek
   'deepseek-chat': 8192,
-  'deepseek-reasoner': 8192
+  'deepseek-reasoner': 8192,
+  ...Object.fromEntries(Object.entries(OPENCODE_MODELS).map(([name, config]) => [name, config.maxCompletionTokens]))
 }
 
 router.get('/models', (_req, res) => {
   const providers = [
+    OPENCODE_PROVIDER,
     {
       id: 'openai',
       prefixes: ['gpt-', 'chatgpt-', 'o1', 'o3', 'o4', 'gpt-5'],
@@ -87,6 +90,7 @@ router.get('/models', (_req, res) => {
   const inference = {
     default_provider: 'openai',
     rules: [
+      { provider: 'opencode', match: 'opencode/*' },
       { provider: 'anthropic', match: 'claude-*' },
       { provider: 'gemini', match: 'gemini-*' },
       { provider: 'grok', match: 'grok-*' },

@@ -11,6 +11,8 @@ import anthropicAdapter from './providers/anthropic.js';
 import geminiAdapter from './providers/gemini.js';
 import grokAdapter from './providers/grok.js';
 import deepseekAdapter from './providers/deepseek.js';
+import opencodeAdapter, { supportsOpenCodeStreaming } from './providers/opencode.js';
+import { getOpenCodeModel, OPENCODE_PROVIDER } from './llm/opencodeModels.js';
 import { stripNullsDeep } from './providers/utils.js';
 import { incrementUsage } from './llm/usage.js';
 import { calculateOpenAiCost } from './llm/cost.js';
@@ -75,6 +77,7 @@ function estimateCost(model, usage) {
 
 function inferProvider(model = '') {
   const m = (model || '').toLowerCase();
+  if (m.startsWith('opencode/')) return 'opencode';
   if (m.startsWith('claude-')) return 'anthropic';
   if (m.startsWith('gemini-') || m.includes('gemini')) return 'gemini';
   if (m.startsWith('grok-')) return 'grok';
@@ -101,7 +104,7 @@ async function getApiKeyForUser(userId, providerId) {
 export function createLlmRouter({
   apiKeyForUser = getApiKeyForUser,
   adapters = {openai: openaiAdapter, anthropic: anthropicAdapter,
-    gemini: geminiAdapter, grok: grokAdapter, deepseek: deepseekAdapter},
+    gemini: geminiAdapter, grok: grokAdapter, deepseek: deepseekAdapter, opencode: opencodeAdapter},
   recordUsage = incrementUsage,
   responseStreamFactory = null
 } = {}) {
@@ -110,6 +113,7 @@ const router = express.Router();
 // List supported model prefixes and known models
 router.get('/models', (_req, res) => {
   const providers = [
+    OPENCODE_PROVIDER,
     {
       id: 'openai',
       prefixes: ['gpt-', 'chatgpt-', 'o1', 'o3', 'o4', 'gpt-5'],
@@ -140,6 +144,7 @@ router.get('/models', (_req, res) => {
   const inference = {
     default_provider: 'openai',
     rules: [
+      { provider: 'opencode', match: 'opencode/*' },
       { provider: 'anthropic', match: 'claude-*' },
       { provider: 'gemini', match: 'gemini-*' },
       { provider: 'grok', match: 'grok-*' },
@@ -172,6 +177,9 @@ router.post('/chat', async (req, res) => {
     }
 
     const provider = inferProvider(model);
+    if (provider === 'opencode' && !getOpenCodeModel(model)) {
+      return res.status(400).json({ error: 'Unsupported OpenCode model', model });
+    }
     const apiKey = await apiKeyForUser(userId, provider);
     if (!apiKey) {
       return res.status(400).json({
@@ -181,7 +189,7 @@ router.post('/chat', async (req, res) => {
 
     const resolvedMaxTokens = (max_completion_tokens ?? max_tokens) ?? resolveMaxTokens(model);
 
-    if (provider === 'openai') {
+    if (provider === 'openai' || provider === 'opencode') {
       const windowCheck = checkModelContextWindow(model, {
         messages, tools, response_format, tool_choice,
         maxCompletionTokens: resolvedMaxTokens
@@ -202,8 +210,9 @@ router.post('/chat', async (req, res) => {
       tool_choice
     });
 
-    if (responseStreamFactory && stream_response === true && provider === 'openai' &&
-        supportsResponseStreaming(params) && typeof sessionId === 'string' && sessionId && req.projectId) {
+    const canStream = provider === 'openai' ? supportsResponseStreaming(params)
+      : provider === 'opencode' && supportsOpenCodeStreaming(params);
+    if (responseStreamFactory && stream_response === true && canStream && typeof sessionId === 'string' && sessionId && req.projectId) {
       try {
         liveResponse = await responseStreamFactory({scope:{userId,projectId:req.projectId,sessionId}});
       } catch {
@@ -211,10 +220,13 @@ router.post('/chat', async (req, res) => {
         console.warn('[llm] response stream unavailable');
       }
     }
-    const result = await (adapters[provider] || adapters.openai).chat(params, liveResponse ? {onDelta:liveResponse.onDelta} : undefined);
+    const adapter = adapters[provider];
+    if (!adapter) throw new Error('Provider adapter unavailable');
+    const result = await adapter.chat(params, liveResponse ? {onDelta:liveResponse.onDelta} : undefined);
 
     const { message, usage, failure } = result || {};
-    const total_cost = provider === 'openai' ? estimateCost(model, usage) : null;
+    const total_cost = provider === 'openai' ? estimateCost(model, usage)
+      : provider === 'opencode' ? (result?.totalCost ?? null) : null;
 
     // New typed-tool callers may explicitly opt in. Existing agent tool
     // routing and response behavior remain unchanged. Do not return or log

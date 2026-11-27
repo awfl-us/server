@@ -1,3 +1,5 @@
+import { OPENCODE_MODELS } from './opencodeModels.js';
+
 // Model limits shared by the LLM transport and the TopicContext size limiter.
 // maxCompletionTokens is the existing server default, not a promised output size.
 // contextMessageBudgetTokens is an AWFL limit for history *only*; full requests
@@ -32,7 +34,8 @@ export const MODEL_CONFIGS = Object.freeze({
   'grok-2': { maxCompletionTokens: 8192 },
   'grok-2-mini': { maxCompletionTokens: 8192 },
   'deepseek-chat': { maxCompletionTokens: 8192 },
-  'deepseek-reasoner': { maxCompletionTokens: 8192 }
+  'deepseek-reasoner': { maxCompletionTokens: 8192 },
+  ...OPENCODE_MODELS
 });
 
 export const MAX_TOKENS = Object.freeze(Object.fromEntries(
