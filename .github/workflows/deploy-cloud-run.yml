@@ -73,6 +73,7 @@ jobs:
           node --test scripts/reconcileResponsesNative.test.mjs scripts/reconcileScenario.test.mjs
           node --test workflows/events/postgresLiveBus.test.js workflows/events/liveResponseSse.test.js
           python3 scripts/openai_cache_diff_test.py
+          npm run -s test:context -- --runInBand workflows/context/__tests__
 
       - name: Authenticate to Google Cloud (WIF/OIDC)
         uses: google-github-actions/auth@v2

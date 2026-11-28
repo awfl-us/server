@@ -101,3 +101,5 @@ Maintenance notes
 - TopicContext preset pipeline: collapseGroupReplacer -> sizeLimiter -> toolCallBackfill
 - collapseGroupReplacer reads user-scoped paths when ctx.userId is provided; otherwise falls back to legacy non-user-scoped paths
 - toolCallBackfill normalizes ordering (assistant tool_call followed immediately by its tool responses), inserts synthetic replies when missing, and converts orphan tool messages to system role by default
+
+Session timeline: keep persisted transcript reads separate from prompt assembly. `sessionTimeline.js` is mounted only under the authenticated client context router; the reader uses scoped Storage queries and stable IDs. Never run prompt-only filters over transcript records or change TopicContext semantics to suit UI. See `docs/plans/session-timeline.md` and the context README.

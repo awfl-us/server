@@ -3,6 +3,7 @@ import express from 'express';
 import { getFirestore, Timestamp } from 'firebase-admin/firestore';
 import topicContextYojRouter from './context/topicContextYoj.js';
 import collapseIndexerRouter from './context/collapseIndexer.js';
+import { createSessionTimelineRouter } from './context/sessionTimeline.js';
 import { getUserIdFromReq, projectScopedCollectionPath } from './utils.js';
 
 const db = providerDocumentDb(getFirestore);
@@ -11,6 +12,7 @@ const router = express.Router();
 // Reuse the existing TopicContextYoj router under /context
 // This exposes: POST /api/context/topicContextYoj/run
 router.use('/', topicContextYojRouter);
+router.use('/', createSessionTimelineRouter());
 
 // Expose collapse indexer and group state endpoints under /context
 // - POST /api/context/collapse/indexer/run
